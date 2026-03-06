@@ -1,0 +1,64 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="container mt-5 pb-5"> <!-- [Feature] Added pb-5 for bottom padding -->
+    <div class="text-center mb-4">
+        <h1>內容分析器</h1>
+        <p class="lead">輸入網址，讓我們為您分析內容。</p>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <form id="task-form">
+                <div class="mb-3">
+                    <label for="urls" class="form-label">網址 (每行一個)</label>
+                    <textarea class="form-control" id="urls" name="urls" rows="5" required placeholder="https://example.com/article1\nhttps://example.com/article2"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label for="report_title" class="form-label">報告標題</label>
+                    <input type="text" class="form-control" id="report_title" name="report_title" required placeholder="例如：最新 AI 技術分析報告">
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="use_gemini" name="use_gemini">
+                    <label class="form-check-label" for="use_gemini">
+                        啟用 Gemini 輔助分析 (將使用您個人設定的 API Key)
+                    </label>
+                </div>
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary btn-lg">開始分析</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <div id="progress-container" class="mt-5" style="display: none;">
+        <h3>分析進度</h3>
+        <p>任務 ID: <strong id="task-id"></strong></p>
+        
+        <div class="d-flex align-items-center mb-2">
+            <div class="flex-grow-1 me-3">
+                <div class="progress" style="height: 25px;">
+                    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                </div>
+            </div>
+            <!-- [Feature] Stop Button -->
+            <button id="stop-btn" class="btn btn-danger">停止</button>
+        </div>
+        
+        <!-- [Feature] Status Bar -->
+        <div id="status-bar" class="alert alert-info py-2 mb-3" role="alert">
+            準備就緒...
+        </div>
+
+        <div id="logs" class="mt-3 card">
+            <div class="card-header">
+                詳細日誌
+            </div>
+            <ul class="list-group list-group-flush" style="max-height: 300px; overflow-y: auto;">
+                <!-- Log items will be inserted here -->
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+venv
+env
+.env
+README.md
+GEMINI.md
+Content Analyser-CN.md
+sample_code
+devserver.sh
+.idx

@@ -1,0 +1,43 @@
+{% extends "layout.html" %}
+
+{% block title %}User Profile{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-3">
+            <!-- Sidebar -->
+            <div class="list-group">
+                <a href="{{ url_for('main_bp.index') }}" class="list-group-item list-group-item-action">Dashboard</a>
+                <a href="{{ url_for('main_bp.profile') }}" class="list-group-item list-group-item-action active">Profile Settings</a>
+            </div>
+        </div>
+        <div class="col-md-9">
+            <h2>User Profile</h2>
+            <p>Manage your personal settings here.</p>
+            <hr>
+
+            <h4>Your Gemini API Key</h4>
+            <div class="card">
+                <div class="card-body">
+                    <p class="card-text">
+                        Provide your own Gemini API Key to be used for content analysis. 
+                        This key will be stored securely and associated with your account ({{ user.email }}).
+                    </p>
+                    
+                    <form action="{{ url_for('main_bp.profile') }}" method="POST">
+                        <div class="mb-3">
+                            <label for="gemini_api_key" class="form-label">Your Gemini API Key:</label>
+                            <input type="password" class="form-control" id="gemini_api_key" name="gemini_api_key" value="{{ current_key }}" placeholder="Enter your personal API key">
+                            <div class="form-text">The key is stored in Firestore and will be used for all your analysis tasks.</div>
+                        </div>
+                        <!-- [Fix] Enabled the button -->
+                        <button type="submit" class="btn btn-primary">Save Key</button>
+                    </form>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

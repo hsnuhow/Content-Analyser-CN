@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.local
+setup_secret.sh
+setup_secret.sh.local
+
+# Environments & Snapshots
+.venv/
+.idx/
+__pycache__/
+app/__pycache__/
+*.pyc
+
+# IDEs & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build & Logs
+*.log
+/tmp/
+dist/
+build/

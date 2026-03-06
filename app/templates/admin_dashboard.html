@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+
+{% block title %}Admin Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-3">
+            <!-- Sidebar -->
+            <div class="list-group">
+                <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="list-group-item list-group-item-action active">
+                    System Settings
+                </a>
+                <a href="#" class="list-group-item list-group-item-action">Users (Coming Soon)</a>
+            </div>
+        </div>
+        <div class="col-md-9">
+            <h2>Admin Dashboard</h2>
+            <p>Welcome, {{ user.name }} ({{ user.email }})!</p>
+            <hr>
+
+            <h4>Emergency Controls</h4>
+            <div class="card mb-4 border-danger">
+                <div class="card-header bg-danger text-white">
+                    Dangerous Actions
+                </div>
+                <div class="card-body">
+                    <h5 class="card-title">Force Stop All Crawlers</h5>
+                    <p class="card-text">
+                        If a crawler task gets stuck or consumes too much memory, use this button to force kill all Chrome processes on the server.
+                        This will interrupt any ongoing tasks.
+                    </p>
+                    <form action="{{ url_for('admin_bp.force_kill_crawler') }}" method="POST" onsubmit="return confirm('Are you sure? This will kill ALL active crawlers.');">
+                        <button type="submit" class="btn btn-danger">💀 Force Kill Chrome</button>
+                    </form>
+                </div>
+            </div>
+
+            <h4>System Settings</h4>
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Default Gemini API Key</h5>
+                    <p class="card-text">
+                        This is the default API key used by the system when a user has not configured their own key.
+                        <br>
+                        <strong>Status: </strong> 
+                        {% if key_status == 'Configured' %}
+                            <span class="badge bg-success">Configured</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">Not Configured</span>
+                        {% endif %}
+                    </p>
+                    
+                    <form action="{{ url_for('admin_bp.update_secrets') }}" method="POST">
+                        <div class="mb-3">
+                            <label for="gemini_api_key" class="form-label">Update Secret Manager:</label>
+                            <input type="password" class="form-control" id="gemini_api_key" name="key_value" placeholder="Enter new API Key">
+                            <input type="hidden" name="key_name" value="SYSTEM_GEMINI_KEY">
+                            <div class="form-text">The value will be securely stored in Google Secret Manager.</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update System Key</button>
+                    </form>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}
