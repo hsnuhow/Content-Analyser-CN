@@ -58,23 +58,12 @@ def update_secrets():
 @bp.route('/force_kill_crawler', methods=['POST'])
 @admin_required
 def force_kill_crawler():
-    """Emergency Stop: Force kill all chrome processes and reset crawler instance"""
-    try:
-        from .worker import CURRENT_CRAWLER_INSTANCE
-        if CURRENT_CRAWLER_INSTANCE:
-            print("[Admin] Force closing active crawler instance...")
-            try:
-                CURRENT_CRAWLER_INSTANCE.close()
-            except Exception as e:
-                print(f"[Admin] Error closing instance: {e}")
-        
-        # Force Kill System Processes (Linux)
-        print("[Admin] Executing system pkill...")
-        os.system("pkill -9 chrome")
-        os.system("pkill -9 chromedriver")
-        
-        flash('Emergency Stop executed. Chrome processes killed.', 'warning')
-    except Exception as e:
-        flash(f'Error executing Force Kill: {e}', 'danger')
-        
+    """Emergency Stop.
+
+    爬蟲已拆分為獨立的 Cloud Run 服務 (content-crawler)，Chrome 不再於主程式容器內執行，
+    因此這裡不再 pkill chrome。要中止進行中的任務，請於專案頁使用「停止」(stop_task)；
+    要重置爬蟲服務，請於 Cloud Run 重啟 content-crawler 服務。
+    """
+    flash('爬蟲已是獨立服務 (content-crawler)，主程式不再執行 Chrome。'
+          '請改用專案頁的「停止」按鈕中止任務，或於 Cloud Run 重啟爬蟲服務。', 'info')
     return redirect(url_for('admin_bp.admin_dashboard'))
