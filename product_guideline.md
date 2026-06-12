@@ -1,6 +1,6 @@
 # 產品規格文件 — Content Analyser CN
 
-**版本：** 1.0 草稿  
+**版本：** 1.1 草稿  
 **撰寫日期：** 2026-06-12  
 **狀態：** 討論中，尚未進入開發  
 **受眾：** 產品負責人、開發協作者、Claude Code
@@ -319,55 +319,115 @@ report = requests.post(
 
 | 格式 | 說明 | 狀態 |
 |------|------|------|
-| Markdown | 主要格式，結構清晰，可直接閱讀 | 優先實作 |
-| Word (.docx) | 方便寄送、列印 | 待討論 |
-| PDF | 正式文件 | 待討論 |
+| Markdown | 唯一輸出格式，結構清晰，可直接閱讀或轉換 | ✅ 確認 |
 
 ---
 
-## 7. 技術棧（現況）
+## 7. 技術棧
+
+### 7.1 基礎設施
+
+| 項目 | 技術 | 說明 |
+|------|------|------|
+| 平台 | Firebase | 整體系統放在 Firebase 生態系 |
+| 資料庫 | Firestore | 唯一主要資料儲存 |
+| 運算 | Google Cloud Run | 三個服務的容器運行環境 |
+| AI 輔助 | Vertex AI | 視需求使用，技術棧討論時確認 |
+| 金鑰管理 | Google Secret Manager | 系統層級金鑰 |
+
+### 7.2 各服務技術
 
 | 服務 | 語言 | 部署 | 關鍵套件 |
 |------|------|------|---------|
-| content-analyser | Python 3.11 / Flask | Cloud Run 1Gi | Firebase Admin, Authlib, python-docx |
-| content-crawler | Python 3.11 / Flask | Cloud Run 4Gi | Selenium, undetected-chromedriver, google-genai |
-| analysis-pipeline | Python 3.11 / Flask | Cloud Run（待定）| jieba, scikit-learn, LLM SDK（待定）|
+| content-analyser | Python 3.11 / Flask | Cloud Run | Firebase Admin, Authlib |
+| content-crawler | Python 3.11 / Flask | Cloud Run 4Gi | Selenium, undetected-chromedriver |
+| analysis-pipeline | Python 3.11 / Flask | Cloud Run（規格待定）| jieba, scikit-learn, Gemini SDK, Claude SDK |
 
 ---
 
-## 8. 待決定事項
+## 8. 設計決策記錄
 
-以下問題尚未有定案，需要在進入開發前釐清：
+### 8.1 已確認
 
-| # | 問題 | 選項 | 說明 |
+| # | 問題 | 決策 | 說明 |
 |---|------|------|------|
-| 1 | analysis-pipeline 使用哪個 LLM？ | Claude API / Gemini API / 兩者 | 報告範本的語氣接近 Claude 輸出 |
-| 2 | 報告輸出格式？ | Markdown only / + DOCX / + PDF | 目前 Web UI 輸出 DOCX |
-| 3 | 分析任務是同步還是非同步？ | 同步（等待回傳）/ 非同步（Job ID 輪詢）| 分析 20 篇約需 1–3 分鐘 |
-| 4 | API 金鑰儲存在哪裡？ | Firestore（hash）/ Secret Manager | 安全性設計 |
-| 5 | 使用量監控的粒度？ | 按服務 / 按金鑰 / 按使用者 | 影響 Firestore schema |
+| 1 | LLM 選型 | **預設 Gemini，可選 Claude** | 系統不提供 API Key，用戶自備並存於 Firestore。用戶可自選模型 |
+| 2 | 報告輸出格式 | **Markdown** | 唯一輸出格式 |
+| 3 | 分析任務執行方式 | **非同步** | `POST /api/analyse` 回傳 `job_id`，前端輪詢進度 |
+| 4 | 金鑰儲存位置 | **分層管理** | 系統金鑰 → Secret Manager；用戶 LLM API Key → Firestore |
+
+### 8.2 LLM 設計細節
+
+```
+用戶在 Web UI 的「個人設定」中設定：
+  • 偏好的 LLM 提供商（Gemini / Claude）
+  • 使用的模型（例如：gemini-2.0-flash / claude-sonnet-4-5）
+  • 對應的 API Key
+
+分析任務執行時：
+  1. 優先使用用戶自設的 LLM + Key
+  2. 若未設定，提示用戶前往設定後才能使用分析功能
+  3. 系統不提供 fallback LLM Key
+```
+
+### 8.3 LLM API Key 分層設計
+
+系統中有兩個不同用途的 LLM 呼叫，金鑰來源不同：
+
+| 用途 | 執行服務 | 金鑰來源 | 說明 |
+|------|---------|---------|------|
+| 爬蟲 selector 輔助 | content-crawler | Secret Manager（系統提供）| Gemini 幫助識別正文 CSS selector，基礎爬蟲功能 |
+| 內容分析（報告生成）| analysis-pipeline | Firestore（用戶自備）| 核心分析功能，用戶必須自備 Key 才能使用 |
+
+### 8.4 使用量監控
+
+| # | 問題 | 決策 | 說明 |
+|---|------|------|------|
+| 5 | 使用量監控粒度 | **按用戶** | 管理員可查看每位授權用戶的分析次數、爬蟲呼叫次數等使用紀錄 |
+
+**監控資料設計（初稿）：**
+```
+Firestore: users/{email}/usage_log/{log_id}
+  • action: "analyse" | "crawl"
+  • timestamp: datetime
+  • project_id: string（分析任務）
+  • url_count: number（爬蟲呼叫）
+  • llm_provider: "gemini" | "claude"（分析任務）
+  • status: "success" | "failed"
+```
+
+管理員在 Web UI 可查看：
+- 所有用戶的使用摘要（次數、最後使用時間）
+- 單一用戶的詳細使用記錄
 
 ---
 
 ## 9. 開發優先順序（草案，未核准）
 
-> ⚠️ 本節為草案，需要討論確認後才能進入開發
+> ⚠️ 本節為草案，所有設計決策已確認，但尚未進入開發。開發前需取得正式核准。
 
-**第一期：核心分析能力**
-1. 建立 `analysis-pipeline` 服務（最高優先，目前完全缺失）
-2. 確認 LLM 選型與報告格式
+**第一期：核心分析能力（全新建立）**
+1. 建立 `analysis-pipeline` 服務
+   - 非同步任務模型（job_id 輪詢）
+   - TF-IDF + 語意分群（jieba + scikit-learn）
+   - LLM 質性分析（預設 Gemini，支援 Claude）
+   - 標準報告生成（Markdown）
+   - 用戶 API Key 從 Firestore 讀取並轉傳
 
-**第二期：控制平面**
-3. 重構 `content-analyser`：移除爬蟲協調邏輯
-4. 新增 API 金鑰管理介面
-5. 新增白名單使用者管理
-6. 新增服務健康監控
+**第二期：控制平面重構**
+2. 重構 `content-analyser`
+   - 移除全域 CRAWLER_LOCK
+   - 移除爬蟲協調邏輯（Worker 不再直接呼叫 Crawler）
+   - 新增 API 金鑰管理介面（核發 / 撤銷 / 查看使用紀錄）
+   - 新增白名單使用者管理
+   - 新增服務健康監控（Crawler + Pipeline）
+   - 個人設定：LLM 提供商 / 模型 / API Key
 
 **第三期：體驗補全**
-7. 歷史專案列表頁
-8. 修正 export_utils.py（timestamp、排序問題）
-9. 移除全域 CRAWLER_LOCK
+3. 歷史專案列表頁（查看過去所有分析）
+4. 使用量監控（管理員按用戶查看）
+5. 修正現有 Bug（export_utils timestamp、pages 排序）
 
 **第四期：擴展**
-10. YouTube 分析（Gemini API）
-11. 報告 PDF 匯出
+6. YouTube 分析（Gemini API 直接分析影片）
+7. 其他資料來源整合（視需求）
