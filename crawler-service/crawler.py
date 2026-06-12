@@ -177,6 +177,10 @@ class HeadlessCrawler:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--lang=zh-TW")
+        # ⭐️ --accept-lang 直接控制 Accept-Language HTTP header（從啟動即生效，
+        #    套用到第一個導航主請求）。僅 --lang 只設 UI 語言，會讓網站（如維基百科）
+        #    依 IP geo 導向非中文版本。
+        options.add_argument("--accept-lang=zh-TW,zh;q=0.9")
         options.add_argument(f"--user-agent={DEFAULT_UA}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--dns-prefetch-disable")
