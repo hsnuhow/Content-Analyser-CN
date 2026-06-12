@@ -15,16 +15,16 @@ Analysis Pipeline API 入口 (Cloud Run)
   Synthesis LLM → 最終 Markdown 報告
 """
 import os
-import hmac
 import uuid
 import threading
 import functools
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import firestore
 from flask import Flask, request, jsonify
 
 from pipeline import run_analysis, JOBS_COLLECTION
+from auth import is_authorized
 
 SERVICE_VERSION = "1.0.0"
 
@@ -43,22 +43,16 @@ app = Flask(__name__)
 
 ANALYSIS_API_KEY = os.environ.get("ANALYSIS_API_KEY")
 if not ANALYSIS_API_KEY:
-    print("[WARNING] ANALYSIS_API_KEY 未設定，所有 /api 請求將被拒絕 (401)。", flush=True)
-
-
-def _is_authorized(req) -> bool:
-    if not ANALYSIS_API_KEY:
-        return False
-    provided = req.headers.get("X-API-Key", "")
-    return hmac.compare_digest(provided, ANALYSIS_API_KEY)
+    print("[WARNING] ANALYSIS_API_KEY 未設定，僅 api_keys 白名單可通過驗證。", flush=True)
 
 
 def require_api_key(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        if not _is_authorized(request):
+        provided = request.headers.get("X-API-Key", "")
+        if not is_authorized(provided, ANALYSIS_API_KEY, "analyse", db):
             return jsonify({"status": "failed",
-                            "error": "Unauthorized: missing or invalid X-API-Key"}), 401
+                            "error": "Unauthorized: missing or invalid X-API-Key（需 'analyse' 權限）"}), 401
         return f(*args, **kwargs)
     return wrapper
 

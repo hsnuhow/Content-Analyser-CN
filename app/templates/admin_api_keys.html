@@ -1,0 +1,129 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">API 金鑰管理</h2>
+    <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">← 返回控制台</a>
+  </div>
+
+  <p class="text-muted">
+    核發給外部工具（Google Colab、Claude Cowork）的 API 金鑰，用來呼叫爬蟲與分析服務。
+    金鑰明文只在核發當下顯示一次，系統僅儲存其雜湊值。
+  </p>
+
+  {# 剛核發的金鑰：明文一次性顯示 #}
+  {% if new_key %}
+  <div class="alert alert-success">
+    <h5 class="mb-2">🔑 新金鑰「{{ new_key.name }}」</h5>
+    <p class="mb-2 small">權限：{{ new_key.permissions | join(', ') }}　|　<strong class="text-danger">請立即複製，此金鑰不會再次顯示。</strong></p>
+    <div class="input-group">
+      <input type="text" class="form-control font-monospace" value="{{ new_key.raw_key }}" id="newkey" readonly>
+      <button class="btn btn-outline-primary" onclick="navigator.clipboard.writeText(document.getElementById('newkey').value); this.textContent='已複製';">複製</button>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="row g-4">
+    {# 核發新金鑰 #}
+    <div class="col-lg-4">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">核發新金鑰</div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('admin_bp.create_api_key_route') }}">
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">名稱（識別用途）</label>
+              <input type="text" name="name" class="form-control" required
+                     placeholder="例如：Colab - CHANEL 專案">
+            </div>
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">權限</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="permissions" value="crawl" id="p_crawl" checked>
+                <label class="form-check-label" for="p_crawl">crawl（爬蟲服務）</label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="permissions" value="analyse" id="p_analyse" checked>
+                <label class="form-check-label" for="p_analyse">analyse（分析服務）</label>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">核發金鑰</button>
+          </form>
+        </div>
+      </div>
+
+      {# Colab 呼叫範例 #}
+      <div class="card shadow-sm mt-3">
+        <div class="card-header fw-semibold">Colab 呼叫範例</div>
+        <div class="card-body">
+          <pre class="small mb-0" style="white-space:pre-wrap">import requests
+API_KEY = "你的金鑰"
+CRAWLER = "{{ crawler_url or 'https://content-crawler-...run.app' }}"
+ANALYSIS = "{{ analysis_url or 'https://analysis-pipeline-...run.app' }}"
+
+# 非同步爬取
+job = requests.post(f"{CRAWLER}/api/crawl/batch",
+  json={"urls": ["https://..."]},
+  headers={"X-API-Key": API_KEY}).json()
+
+# 輪詢
+requests.get(f"{CRAWLER}/api/crawl/{job['job_id']}",
+  headers={"X-API-Key": API_KEY}).json()</pre>
+        </div>
+      </div>
+    </div>
+
+    {# 金鑰清單 #}
+    <div class="col-lg-8">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">已核發金鑰（{{ keys|length }}）</div>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0 align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>名稱</th><th>前綴</th><th>權限</th><th>狀態</th><th>呼叫次數</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% if keys %}
+              {% for k in keys %}
+              <tr>
+                <td>{{ k.get('name', '-') }}</td>
+                <td class="font-monospace small">{{ k.get('key_prefix', '') }}…</td>
+                <td>
+                  {% for p in k.get('permissions', []) %}
+                  <span class="badge bg-info text-dark">{{ p }}</span>
+                  {% endfor %}
+                </td>
+                <td>
+                  {% if k.get('is_active') %}
+                  <span class="badge bg-success">啟用</span>
+                  {% else %}
+                  <span class="badge bg-secondary">已撤銷</span>
+                  {% endif %}
+                </td>
+                <td>{{ k.get('call_count', 0) }}</td>
+                <td>
+                  {% if k.get('is_active') %}
+                  <form method="POST" action="{{ url_for('admin_bp.revoke_api_key_route', key_id=k.get('key_id')) }}" class="d-inline"
+                        onsubmit="return confirm('確定撤銷此金鑰？使用此金鑰的工具將立即失效。')">
+                    <button class="btn btn-sm btn-outline-danger">撤銷</button>
+                  </form>
+                  {% else %}
+                  <form method="POST" action="{{ url_for('admin_bp.reactivate_api_key_route', key_id=k.get('key_id')) }}" class="d-inline">
+                    <button class="btn btn-sm btn-outline-success">重新啟用</button>
+                  </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+              {% else %}
+              <tr><td colspan="6" class="text-center text-muted py-4">尚未核發任何金鑰。</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

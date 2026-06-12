@@ -49,8 +49,11 @@
           {% else %}
           <p class="text-muted mb-3">目前沒有待審核的用戶。</p>
           {% endif %}
-          <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-outline-primary w-100">
+          <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-outline-primary w-100 mb-2">
             管理用戶白名單
+          </a>
+          <a href="{{ url_for('admin_bp.admin_api_keys') }}" class="btn btn-outline-primary w-100">
+            管理 API 金鑰（Colab / Cowork）
           </a>
         </div>
       </div>

@@ -24,40 +24,86 @@
     {# 左欄：提交分析 + 歷史列表 #}
     <div class="col-lg-8">
 
-      {# 提交分析表單（Owner/Editor） #}
+      {# 步驟一：爬取資料集（Owner/Editor） #}
       {% if role in ('owner', 'editor') %}
       <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">提交新的分析任務</div>
+        <div class="card-header fw-semibold">① 爬取資料集（輸入網址）</div>
         <div class="card-body">
-          {% if not project.llm_config.api_key %}
-          <div class="alert alert-warning mb-3">
-            ⚠️ 尚未設定 LLM API Key，請先在右側「專案設定」中填入。
-          </div>
-          {% endif %}
-          <form method="POST" action="{{ url_for('project_bp.submit_analysis_route', pid=pid) }}">
+          <form method="POST" action="{{ url_for('project_bp.create_dataset', pid=pid) }}">
             <div class="mb-3">
-              <label class="form-label fw-semibold">報告標題</label>
-              <input type="text" name="report_title" class="form-control" required
-                     placeholder="例如：CHANEL 初生光采 × 美白提亮 2026">
+              <label class="form-label fw-semibold">資料集名稱</label>
+              <input type="text" name="name" class="form-control" required
+                     placeholder="例如：CHANEL 初生光采 競品內容">
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold">
-                內容 JSON
-                <span class="text-muted fw-normal small ms-1">
-                  貼入爬蟲回傳的 contents 陣列
-                </span>
+              <label class="form-label fw-semibold">網址清單（每行一個，最多 100）</label>
+              <textarea name="urls" class="form-control" rows="6" required
+                        placeholder="https://example.com/article1&#10;https://example.com/article2"></textarea>
+            </div>
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" name="use_gemini" id="ds_gemini">
+              <label class="form-check-label small" for="ds_gemini">
+                啟用 Gemini 輔助抽取（用 Project 的 Gemini Key，低置信度時協助找正文）
               </label>
-              <textarea name="contents_json" class="form-control font-monospace" rows="8" required
-                        placeholder='[{"url":"https://...","title":"...","text":"...","source_type":"media"}, ...]'></textarea>
-              <div class="form-text">
-                source_type 可填：media / ecommerce / forum / dcard / youtube / direct
-              </div>
             </div>
-            <button type="submit" class="btn btn-primary"
-                    {% if not project.llm_config.api_key %}disabled{% endif %}>
-              提交分析
-            </button>
+            <button type="submit" class="btn btn-primary">開始爬取</button>
           </form>
+        </div>
+      </div>
+
+      {# 資料集列表 #}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header fw-semibold">② 資料集 → 一鍵分析（{{ datasets|length }}）</div>
+        <div class="list-group list-group-flush">
+          {% if datasets %}
+          {% for ds in datasets %}
+          <a href="{{ url_for('project_bp.dataset_detail', pid=pid, did=ds.id) }}"
+             class="list-group-item list-group-item-action">
+            <div class="d-flex justify-content-between align-items-center">
+              <div>
+                <strong>{{ ds.name }}</strong>
+                <div class="text-muted small">
+                  {{ ds.item_count }} 個網址{% if ds.succeeded is defined %} · 成功 {{ ds.succeeded }}{% endif %}
+                </div>
+              </div>
+              <span class="badge bg-{% if ds.status == 'completed' %}success{% elif ds.status == 'failed' %}danger{% elif ds.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
+                {{ ds.status }}
+              </span>
+            </div>
+          </a>
+          {% endfor %}
+          {% else %}
+          <div class="list-group-item text-muted text-center py-4">尚無資料集。先在上方輸入網址爬取。</div>
+          {% endif %}
+        </div>
+      </div>
+
+      {# 進階：直接貼 JSON 提交分析 #}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <a class="text-decoration-none text-dark" data-bs-toggle="collapse" href="#jsonSubmit">
+            ▸ 進階：直接貼內容 JSON 分析（Colab 流程）
+          </a>
+        </div>
+        <div class="collapse" id="jsonSubmit">
+          <div class="card-body">
+            {% if not project.llm_config.api_key %}
+            <div class="alert alert-warning mb-3">⚠️ 尚未設定 LLM API Key，請先在右側「專案設定」填入。</div>
+            {% endif %}
+            <form method="POST" action="{{ url_for('project_bp.submit_analysis_route', pid=pid) }}">
+              <div class="mb-3">
+                <label class="form-label fw-semibold">報告標題</label>
+                <input type="text" name="report_title" class="form-control" required>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-semibold">內容 JSON</label>
+                <textarea name="contents_json" class="form-control font-monospace" rows="6" required
+                          placeholder='[{"url":"...","title":"...","text":"...","source_type":"media"}]'></textarea>
+              </div>
+              <button type="submit" class="btn btn-outline-primary"
+                      {% if not project.llm_config.api_key %}disabled{% endif %}>提交分析</button>
+            </form>
+          </div>
         </div>
       </div>
       {% endif %}

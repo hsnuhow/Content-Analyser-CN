@@ -1,23 +1,72 @@
 # -*- coding: utf-8 -*-
 """
-服務健康檢查客戶端（Phase 0 精簡版）
+爬蟲服務 HTTP 客戶端
 
-Phase 0：移除爬蟲任務呼叫邏輯。
-  主程式不再協調爬蟲，此模組僅保留 health check，
-  供 content-analyser 控制平面監控服務狀態使用。
+content-analyser 透過此模組呼叫 content-crawler：
+  - check_crawler_health()：服務監控
+  - submit_crawl_batch()：提交非同步批次爬取，回傳 job_id
+  - get_crawl_status()：輪詢爬取進度與結果
 
-Phase 3 將新增：
-  - analysis_client.py：呼叫 analysis-pipeline 服務
-  - 兩個服務的健康狀態彙整回傳給管理員介面
+需環境變數：CRAWLER_SERVICE_URL、CRAWLER_API_KEY
 """
 import os
 import requests
 
 DEFAULT_TIMEOUT = 10
+SUBMIT_TIMEOUT = 30
 
 
 def _crawler_url() -> str:
     return os.environ.get("CRAWLER_SERVICE_URL", "").rstrip("/")
+
+
+def _api_key() -> str:
+    return os.environ.get("CRAWLER_API_KEY", "")
+
+
+def _headers() -> dict:
+    return {"X-API-Key": _api_key(), "Content-Type": "application/json"}
+
+
+def submit_crawl_batch(urls: list, use_gemini: bool = False,
+                       gemini_api_key: str = None,
+                       timeout: int = SUBMIT_TIMEOUT) -> dict:
+    """提交非同步批次爬取。回傳 {"job_id": ...} 或 {"error": ...}。"""
+    base = _crawler_url()
+    if not base:
+        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
+    payload = {"urls": urls, "use_gemini": bool(use_gemini)}
+    if gemini_api_key:
+        payload["gemini_api_key"] = gemini_api_key
+    try:
+        resp = requests.post(f"{base}/api/crawl/batch", json=payload,
+                             headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"提交爬取任務逾時（{timeout}s）。"}
+    except Exception as e:
+        return {"error": f"無法連線爬蟲服務：{e}"}
+
+
+def get_crawl_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """查詢非同步爬取任務進度與結果。"""
+    base = _crawler_url()
+    if not base:
+        return {"status": "error", "error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.get(f"{base}/api/crawl/{job_id}",
+                            headers=_headers(), timeout=timeout)
+        if resp.status_code == 404:
+            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
+        if resp.status_code == 401:
+            return {"status": "error", "error": "金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"status": "error", "error": "查詢逾時。"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 def check_crawler_health(timeout: int = DEFAULT_TIMEOUT) -> dict:

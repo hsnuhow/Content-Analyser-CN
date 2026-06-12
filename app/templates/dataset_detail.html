@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.list_projects') }}">我的專案</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.project_detail', pid=pid) }}">{{ project.title }}</a></li>
+      <li class="breadcrumb-item active">{{ dataset.name }}</li>
+    </ol>
+  </nav>
+
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="mb-0">{{ dataset.name }}</h2>
+      <span class="text-muted small">{{ dataset.item_count }} 個網址</span>
+    </div>
+    <span class="badge fs-6 bg-{% if dataset.status == 'completed' %}success{% elif dataset.status == 'failed' %}danger{% elif dataset.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
+      {{ dataset.status }}
+    </span>
+  </div>
+
+  {# 爬取進度（crawling 時）#}
+  {% if dataset.status == 'crawling' %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex justify-content-between mb-2">
+        <span class="fw-semibold">爬取進行中...</span>
+        <span id="pct">{{ dataset.progress }}%</span>
+      </div>
+      <div class="progress mb-3" style="height:20px">
+        <div id="bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+             style="width:{{ dataset.progress }}%"></div>
+      </div>
+      <div id="log" class="text-muted small">{{ dataset.log }}</div>
+    </div>
+  </div>
+  <script>
+  (function poll(){
+    fetch("{{ url_for('project_bp.dataset_status', pid=pid, did=dataset.id) }}")
+      .then(r=>r.json()).then(d=>{
+        document.getElementById('bar').style.width=(d.progress||0)+'%';
+        document.getElementById('pct').textContent=(d.progress||0)+'%';
+        document.getElementById('log').textContent=d.log||'';
+        if(d.status==='completed'||d.status==='failed'){ location.reload(); }
+        else { setTimeout(poll,3000); }
+      }).catch(()=>setTimeout(poll,5000));
+  })();
+  </script>
+  {% endif %}
+
+  {# 一鍵分析（completed 時，Owner/Editor）#}
+  {% if dataset.status == 'completed' and role in ('owner', 'editor') %}
+  <div class="card shadow-sm mb-4 border-primary">
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('project_bp.analyse_dataset', pid=pid, did=dataset.id) }}" class="row g-2 align-items-end">
+        <div class="col-md-8">
+          <label class="form-label fw-semibold mb-1">報告標題</label>
+          <input type="text" name="report_title" class="form-control" value="{{ dataset.name }}">
+        </div>
+        <div class="col-md-4">
+          <button type="submit" class="btn btn-primary w-100"
+                  {% if not project.llm_config.api_key %}disabled title="請先設定 LLM Key"{% endif %}>
+            🚀 將此資料集送去分析
+          </button>
+        </div>
+      </form>
+      {% if not project.llm_config.api_key %}
+      <div class="form-text text-warning mt-2">⚠️ 尚未設定 LLM API Key，請先至專案設定填入。</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# 爬取結果列表 #}
+  {% if dataset.get('items') %}
+  <div class="card shadow-sm">
+    <div class="card-header fw-semibold">爬取結果</div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr><th>狀態</th><th>標題 / 網址</th><th>字數</th></tr>
+        </thead>
+        <tbody>
+          {% for it in dataset['items'] %}
+          <tr>
+            <td>
+              <span class="badge bg-{% if it.status == 'success' %}success{% elif it.status == 'skipped' %}secondary{% else %}danger{% endif %}">
+                {{ it.status }}
+              </span>
+            </td>
+            <td>
+              {% if it.title %}<strong>{{ it.title }}</strong><br>{% endif %}
+              <a href="{{ it.url }}" target="_blank" class="small text-muted">{{ it.url }}</a>
+              {% if it.error %}<div class="small text-danger">{{ it.error }}</div>{% endif %}
+            </td>
+            <td>{{ it.length or '-' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

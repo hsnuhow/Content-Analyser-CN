@@ -18,6 +18,7 @@ from flask import (Blueprint, render_template, session, redirect,
 from .services import (
     get_secret, set_secret, get_admin_email,
     list_all_users, approve_user, reject_user,
+    create_api_key, list_api_keys, revoke_api_key, reactivate_api_key,
 )
 from .crawler_client import check_crawler_health
 from .analysis_client import check_health as check_analysis_health
@@ -107,6 +108,69 @@ def reject_user_route(email):
     else:
         flash(f'操作失敗：{email}', 'danger')
     return redirect(url_for('admin_bp.admin_users'))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# API 金鑰管理（供 Colab / Claude Cowork 呼叫 crawler / analysis）
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/api-keys')
+@admin_required
+def admin_api_keys():
+    keys = list_api_keys()
+    keys.sort(key=lambda k: k.get('created_at') or '', reverse=True)
+    # 服務 URL（供 Colab 呼叫範例顯示）
+    crawler_url = os.environ.get('CRAWLER_SERVICE_URL', '')
+    analysis_url = os.environ.get('ANALYSIS_SERVICE_URL', '')
+    # 若上一動作剛核發金鑰，明文透過 flash 的 session 暫存顯示
+    new_key = session.pop('_new_api_key', None)
+    return render_template('admin_api_keys.html',
+                           user=session.get('user'), keys=keys,
+                           crawler_url=crawler_url, analysis_url=analysis_url,
+                           new_key=new_key)
+
+
+@bp.route('/api-keys/create', methods=['POST'])
+@admin_required
+def create_api_key_route():
+    name = request.form.get('name', '').strip()
+    perms = request.form.getlist('permissions')  # ['crawl', 'analyse']
+    if not name:
+        flash('請填寫金鑰名稱。', 'danger')
+        return redirect(url_for('admin_bp.admin_api_keys'))
+    if not perms:
+        flash('請至少選擇一個權限。', 'danger')
+        return redirect(url_for('admin_bp.admin_api_keys'))
+
+    result = create_api_key(name, perms, get_admin_email())
+    # 明文金鑰只顯示一次，透過 session 暫存帶到下一頁
+    session['_new_api_key'] = {
+        'name': result['name'],
+        'raw_key': result['raw_key'],
+        'permissions': result['permissions'],
+    }
+    flash(f'✅ 已核發金鑰「{name}」，請立即複製（只顯示一次）。', 'success')
+    return redirect(url_for('admin_bp.admin_api_keys'))
+
+
+@bp.route('/api-keys/<key_id>/revoke', methods=['POST'])
+@admin_required
+def revoke_api_key_route(key_id):
+    if revoke_api_key(key_id):
+        flash('已撤銷金鑰。', 'warning')
+    else:
+        flash('撤銷失敗。', 'danger')
+    return redirect(url_for('admin_bp.admin_api_keys'))
+
+
+@bp.route('/api-keys/<key_id>/reactivate', methods=['POST'])
+@admin_required
+def reactivate_api_key_route(key_id):
+    if reactivate_api_key(key_id):
+        flash('已重新啟用金鑰。', 'success')
+    else:
+        flash('操作失敗。', 'danger')
+    return redirect(url_for('admin_bp.admin_api_keys'))
 
 
 # ──────────────────────────────────────────────────────────────────────

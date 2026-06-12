@@ -26,6 +26,7 @@ from io import BytesIO
 
 from .services import db, get_admin_email, ensure_user
 from .analysis_client import submit_analysis, get_job_status
+from .crawler_client import submit_crawl_batch, get_crawl_status
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -176,9 +177,20 @@ def project_detail(pid, project, role):
         .stream()
     )
     analyses = [d.to_dict() | {'id': d.id} for d in analyses_docs]
+
+    # 載入資料集列表
+    datasets_docs = (
+        db.collection('projects').document(pid)
+        .collection('datasets')
+        .order_by('created_at', direction=firestore.Query.DESCENDING)
+        .limit(50)
+        .stream()
+    )
+    datasets = [d.to_dict() | {'id': d.id} for d in datasets_docs]
+
     return render_template('project_detail.html',
                            project=project, pid=pid,
-                           analyses=analyses, role=role)
+                           analyses=analyses, datasets=datasets, role=role)
 
 
 @bp.route('/<pid>/settings', methods=['POST'])
@@ -404,3 +416,179 @@ def download_analysis(pid, aid, project, role):
         download_name=filename,
         mimetype='text/markdown; charset=utf-8',
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 資料集（爬取文件）：輸入 URL → 後端非同步爬取 → 文件 → 一鍵分析
+# Firestore: projects/{pid}/datasets/{did}
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/<pid>/datasets', methods=['POST'])
+@project_access_required(min_role='editor')
+def create_dataset(pid, project, role):
+    """提交 URL 清單，建立資料集並啟動 content-crawler 非同步爬取。"""
+    name = request.form.get('name', '').strip()
+    urls_raw = request.form.get('urls', '').strip()
+    use_gemini = bool(request.form.get('use_gemini'))
+
+    urls = [u.strip() for u in urls_raw.splitlines() if u.strip()]
+    if not name:
+        flash('請填寫資料集名稱。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if not urls:
+        flash('請至少輸入一個網址。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if len(urls) > 100:
+        flash('每個資料集最多 100 個網址。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    # 爬蟲 selector 輔助用 Project 的 LLM Key（若為 gemini）
+    llm_config = project.get('llm_config', {})
+    gemini_key = llm_config.get('api_key') if llm_config.get('provider') == 'gemini' else None
+
+    result = submit_crawl_batch(urls, use_gemini=use_gemini, gemini_api_key=gemini_key)
+    if 'error' in result:
+        flash(f'啟動爬取失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    crawl_job_id = result.get('job_id')
+    ds_ref = db.collection('projects').document(pid).collection('datasets').document()
+    ds_ref.set({
+        'id': ds_ref.id,
+        'name': name,
+        'source_urls': urls,
+        'crawl_job_id': crawl_job_id,
+        'status': 'crawling',
+        'progress': 0,
+        'log': '已提交爬取任務...',
+        'item_count': len(urls),
+        'items': [],
+        'created_by': current_user_email(),
+        'created_at': firestore.SERVER_TIMESTAMP,
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    })
+    flash(f'資料集「{name}」已建立，正在爬取 {len(urls)} 個網址...', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
+
+
+@bp.route('/<pid>/datasets/<did>')
+@project_access_required(min_role='viewer')
+def dataset_detail(pid, did, project, role):
+    doc = (db.collection('projects').document(pid)
+           .collection('datasets').document(did).get())
+    if not doc.exists:
+        abort(404)
+    dataset = doc.to_dict() | {'id': did}
+    return render_template('dataset_detail.html',
+                           project=project, pid=pid, dataset=dataset, role=role)
+
+
+@bp.route('/<pid>/datasets/<did>/status')
+@project_access_required(min_role='viewer')
+def dataset_status(pid, did, project, role):
+    """輪詢爬取進度；完成時把 crawler 結果同步進 dataset.items。"""
+    ds_ref = (db.collection('projects').document(pid)
+              .collection('datasets').document(did))
+    doc = ds_ref.get()
+    if not doc.exists:
+        return jsonify({'error': '找不到此資料集'}), 404
+
+    dataset = doc.to_dict()
+    status = dataset.get('status', 'crawling')
+
+    if status == 'crawling':
+        job_id = dataset.get('crawl_job_id')
+        if job_id:
+            job = get_crawl_status(job_id)
+            jstatus = job.get('status', status)
+            update = {
+                'progress': job.get('progress', dataset.get('progress', 0)),
+                'log': job.get('log', dataset.get('log', '')),
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            }
+            if jstatus == 'completed':
+                results = job.get('results', [])
+                update['items'] = results
+                update['status'] = 'completed'
+                update['item_count'] = len(results)
+                update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
+            elif jstatus == 'failed':
+                update['status'] = 'failed'
+                update['log'] = job.get('log', '爬取失敗')
+            ds_ref.update(update)
+            return jsonify({'status': update.get('status', 'crawling'),
+                            'progress': update['progress'], 'log': update['log']})
+
+    return jsonify({'status': status,
+                    'progress': dataset.get('progress', 0),
+                    'log': dataset.get('log', '')})
+
+
+@bp.route('/<pid>/datasets/<did>/analyse', methods=['POST'])
+@project_access_required(min_role='editor')
+def analyse_dataset(pid, did, project, role):
+    """一鍵：把資料集的成功項目送往 analysis-pipeline。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        abort(404)
+    dataset = ds_doc.to_dict()
+
+    if dataset.get('status') != 'completed':
+        flash('資料集尚未爬取完成，無法分析。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    # 取成功項目，轉成 analysis 的 contents（爬蟲回傳 content 欄位）
+    items = dataset.get('items', [])
+    contents = [
+        {
+            'url': it.get('url', ''),
+            'title': it.get('title', ''),
+            'text': it.get('content', ''),       # analysis 相容 content，但統一帶 text
+            'source_type': 'media',
+        }
+        for it in items if it.get('status') == 'success' and it.get('content')
+    ]
+    if not contents:
+        flash('資料集中沒有可分析的成功項目。', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    llm_config = project.get('llm_config', {})
+    if not llm_config.get('api_key'):
+        flash('尚未設定 LLM API Key，請先至專案設定填入。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    report_title = request.form.get('report_title', '').strip() or dataset.get('name', '分析報告')
+
+    result = submit_analysis(
+        report_title=report_title,
+        contents=contents,
+        llm_provider=llm_config.get('provider', 'gemini'),
+        llm_model=llm_config.get('model', 'gemini-2.0-flash'),
+        llm_api_key=llm_config.get('api_key'),
+    )
+    if 'error' in result:
+        flash(f'提交分析失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    job_id = result.get('job_id')
+    analysis_ref = (db.collection('projects').document(pid)
+                    .collection('analyses').document())
+    analysis_ref.set({
+        'id': analysis_ref.id,
+        'job_id': job_id,
+        'report_title': report_title,
+        'status': 'pending',
+        'progress': 0,
+        'log': '任務已提交，等待分析引擎處理...',
+        'n_articles': len(contents),
+        'llm_provider': llm_config.get('provider', 'gemini'),
+        'llm_model': llm_config.get('model', 'gemini-2.0-flash'),
+        'submitted_by': current_user_email(),
+        'submitted_at': firestore.SERVER_TIMESTAMP,
+        'completed_at': None,
+        'result_markdown': None,
+        'source_dataset': did,
+    })
+    flash(f'已從資料集「{dataset.get("name")}」提交分析（{len(contents)} 篇）。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))

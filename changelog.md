@@ -115,6 +115,33 @@
         2.  從 Git 索引中移除敏感檔案。
         3.  重建 Git 歷史（force push 單一乾淨 commit）以徹底清除過去 Commit 中的金鑰紀錄。✅
 
+## 2026-06-13 (UI 爬取流程 + 非同步爬蟲 + 金鑰管理)
+- **Feature (期A - content-crawler 非同步化)**:
+    - **目的**: 讓爬取成為「後端非同步任務 → 產生文件」，UI 與 Colab 都能用標準 API 呼叫。
+    - **解決方式**:
+        1.  crawler 加入 Firebase Admin（requirements 加 firebase-admin）。
+        2.  新增 `POST /api/crawl/batch`（非同步，最多 100 URL，回傳 job_id）與 `GET /api/crawl/{job_id}`。
+        3.  背景 thread（crawl_job.py）逐一爬取，進度與結果即時寫入 Firestore `crawl_jobs/{job_id}`。
+        4.  保留同步 /api/scrape、/api/scrape/batch 向後相容。版本升至 1.3.0。
+    - **新增檔案**: crawler-service/crawl_job.py、auth.py。
+
+- **Feature (期C - 完整 api_keys 金鑰管理)**:
+    - **目的**: 系統管理員可核發/撤銷供 Colab、Claude Cowork 使用的 API 金鑰。
+    - **解決方式**:
+        1.  `app/services.py` 新增 create/list/revoke/reactivate_api_key；金鑰明文只顯示一次，Firestore 只存 SHA-256 hash。
+        2.  金鑰含 permissions（crawl / analyse），驗證時檢查。
+        3.  crawler 與 analysis 各自的 `auth.is_authorized` 升級：先比對 Secret Manager 系統金鑰，再查 `api_keys` 白名單（hash + is_active + permission），並更新 last_used/call_count。
+        4.  Admin UI：`/admin/api-keys` 核發、列表、撤銷、重新啟用 + Colab 呼叫範例。
+    - **新增檔案**: app/templates/admin_api_keys.html、crawler-service/auth.py、analysis-service/auth.py。
+
+- **Feature (期B - UI 爬取資料集流程)**:
+    - **目的**: Project 內可直接輸入網址 → 後端非同步爬取成「資料集文件」→ 一鍵送分析。
+    - **解決方式**:
+        1.  `app/crawler_client.py` 新增 submit_crawl_batch / get_crawl_status。
+        2.  `app/project_routes.py` 新增 datasets 路由：建立（提交爬取）、輪詢 status（完成時同步 crawler 結果進 dataset.items）、檢視、一鍵 analyse。
+        3.  資料模型：`projects/{pid}/datasets/{did}`（name, source_urls, crawl_job_id, status, items 等）。
+        4.  project_detail 改為三段式（① 爬取資料集 → ② 一鍵分析 → 進階 JSON 摺疊）；新增 dataset_detail.html（進度條 + 結果表 + 一鍵分析）。
+
 ## 2026-06-12 (正式部署 + 品牌命名 InsightOut)
 - **Deploy (生產上線)**:
     - **目的**: 將三服務首次部署至 Google Cloud Run（GCP Project: content-analyser-cn）。

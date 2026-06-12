@@ -163,3 +163,85 @@ def list_all_users() -> list:
     except Exception as e:
         print(f"[Services] list_all_users 失敗: {e}")
         return []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# API 金鑰管理（api_keys collection）
+#
+# 供外部工具（Colab / Claude Cowork）呼叫 content-crawler / analysis-pipeline。
+# 金鑰明文只在核發時顯示一次；Firestore 只存 SHA-256 hash。
+# crawler 與 analysis 服務各自驗證（查同一個 api_keys collection）。
+# ──────────────────────────────────────────────────────────────────────
+import hashlib
+import secrets
+
+API_KEY_PREFIX = "iok"  # InsightOut Key
+VALID_PERMISSIONS = ("crawl", "analyse")
+
+
+def _hash_key(raw_key: str) -> str:
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def create_api_key(name: str, permissions: list, created_by: str) -> dict:
+    """核發新 API 金鑰。回傳 {key_id, raw_key, ...}。
+    raw_key 為明文，只在此回傳一次，不存 Firestore。
+    """
+    perms = [p for p in permissions if p in VALID_PERMISSIONS]
+    if not perms:
+        perms = list(VALID_PERMISSIONS)
+
+    raw_key = f"{API_KEY_PREFIX}_{secrets.token_hex(24)}"
+    key_hash = _hash_key(raw_key)
+    key_prefix = raw_key[:12]  # 顯示用（iok_xxxxxx）
+
+    ref = db.collection('api_keys').document()
+    ref.set({
+        'key_id': ref.id,
+        'name': name,
+        'key_hash': key_hash,
+        'key_prefix': key_prefix,
+        'permissions': perms,
+        'created_by': created_by,
+        'created_at': firestore.SERVER_TIMESTAMP,
+        'last_used_at': None,
+        'is_active': True,
+        'call_count': 0,
+    })
+    return {
+        'key_id': ref.id,
+        'raw_key': raw_key,
+        'name': name,
+        'permissions': perms,
+        'key_prefix': key_prefix,
+    }
+
+
+def list_api_keys() -> list:
+    """列出所有 API 金鑰（不含明文，只有 hash/prefix）。"""
+    try:
+        docs = db.collection('api_keys').stream()
+        return [d.to_dict() for d in docs]
+    except Exception as e:
+        print(f"[Services] list_api_keys 失敗: {e}")
+        return []
+
+
+def revoke_api_key(key_id: str) -> bool:
+    """撤銷金鑰（is_active=False）。"""
+    try:
+        db.collection('api_keys').document(key_id).update({'is_active': False})
+        return True
+    except Exception as e:
+        print(f"[Services] revoke_api_key 失敗 {key_id}: {e}")
+        return False
+
+
+def reactivate_api_key(key_id: str) -> bool:
+    """重新啟用金鑰。"""
+    try:
+        db.collection('api_keys').document(key_id).update({'is_active': True})
+        return True
+    except Exception as e:
+        print(f"[Services] reactivate_api_key 失敗 {key_id}: {e}")
+        return False
