@@ -344,10 +344,14 @@ class HeadlessCrawler:
 
         # ========= ⭐️ [v3.6+] 處理 Fides (GQ/Vogue) - JS API 方案 =========
         try:
-            self._log("[遮罩處理] 正在等待 Fides API (window.Fides.consent) 載入...")
-            WebDriverWait(self.driver, 10).until(
+            # ⭐️ 先快速偵測 Fides 是否存在，沒有就立即跳過（避免對無 CMP 網站
+            #    （如維基百科）空等 10 秒，累積導致 60s 硬限超時）。
+            if not self.driver.execute_script("return !!window.Fides"):
+                raise NoSuchElementException("頁面無 Fides CMP，跳過 Fides 處理")
+            self._log("[遮罩處理] 偵測到 Fides，等待 consent 載入...")
+            WebDriverWait(self.driver, 5).until(
                 lambda d: d.execute_script("return !!window.Fides && typeof window.Fides.consent === 'object'"),
-                "Fides API (window.Fides.consent) 未能在 10 秒內載入"
+                "Fides consent 未能在 5 秒內載入"
             )
             self._log("[遮罩處理] ✓ Fides API 已載入。正在讀取 consent keys...")
 
@@ -1082,7 +1086,7 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
-    def scrape(self, url: str, hard_timeout_sec: int = 60) -> Dict[str, Any]:
+    def scrape(self, url: str, hard_timeout_sec: int = 90) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與重試邏輯（對齊 Colab v3.8）。
 
         Args:
