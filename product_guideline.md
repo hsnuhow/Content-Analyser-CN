@@ -1,6 +1,6 @@
 # 產品規格文件 — Content Analyser CN
 
-**版本：** 1.2 草稿  
+**版本：** 1.3 草稿  
 **撰寫日期：** 2026-06-12  
 **狀態：** 討論中，尚未進入開發  
 **受眾：** 產品負責人、開發協作者、Claude Code
@@ -203,76 +203,134 @@
 
 | 項目 | 說明 |
 |------|------|
-| **職責** | 使用者介面 + 兩個服務的安全性與金鑰管理 |
+| **職責** | 使用者介面 + Project 管理 + 兩個服務的安全性管理 |
 | **不做** | 爬取、分析、任何計算 |
 | **資料儲存** | Firestore |
 
-**三個功能模組：**
+**功能模組：**
 
-**① 使用者管理**
-- Google OAuth 2.0 登入
-- 白名單授權控管（非開放註冊）
-- 管理員可新增/移除授權帳號
-- 個人設定（個人 Gemini API Key 等）
+**① 系統管理員功能**（僅 System Admin）
+- 白名單：新增/移除授權用戶
+- 服務監控：查看 content-crawler 和 analysis-pipeline 健康狀態
+- API 金鑰：核發/撤銷供 Colab / Claude Cowork 使用的金鑰
+- 使用量：按用戶查看分析次數與使用記錄
 
-**② 服務管理**
-- 查看 content-crawler 健康狀態與版本
-- 查看 analysis-pipeline 健康狀態與版本
-- 使用量統計（呼叫次數、成功/失敗率）
+**② Project 管理**（Owner）
+- 建立 Project、設定標題與說明
+- 設定 Project 的 LLM 提供商、模型與 API Key
+- 邀請成員（設定為 Editor 或 Viewer）
+- 移除成員、刪除 Project
 
-**③ API 金鑰管理**
-- 核發新金鑰（設定名稱、說明、可存取的服務範圍）
-- 查看所有有效金鑰清單
-- 查看每把金鑰的使用紀錄
-- 撤銷金鑰
+**③ 分析操作**（Owner + Editor）
+- 在 Project 內提交內容進行分析
+- 查看分析進度（非同步輪詢）
+- 查看所有歷史分析
 
-**④ 專案與報告（使用者功能）**
-- 建立分析專案（輸入內容、提交 analysis-pipeline）
-- 查看所有歷史專案
-- 瀏覽報告內容
-- 下載報告
+**④ 報告閱覽**（Owner + Editor + Viewer）
+- 瀏覽分析報告（Markdown 渲染）
+- 下載報告（.md 檔案）
 
 ---
 
-## 5. 使用者與授權
+## 5. 使用者、授權與 Project 權限
 
 ### 5.1 使用對象
 
-授權的分析小組。目前主要為康泰納仕台灣的行銷與編輯夥伴，但不限於特定組織，以白名單制控管。
+授權的分析小組（白名單制）。目前主要為康泰納仕台灣的行銷與編輯夥伴，但不限於特定組織。
 
-### 5.2 角色定義
+### 5.2 系統管理員設定
 
-| 角色 | 識別方式 | 權限 |
+**管理員 email 不寫死在程式碼中**，改用一次性腳本在首次部署時寫入 Firestore：
+
+```bash
+# setup_admin.sh（執行一次即可，之後加入 .gitignore，不提交進 Git）
+gcloud firestore documents create \
+  "projects/-/databases/-/documents/system/config" \
+  --field-mask admin_email \
+  --fields "admin_email=how.penguin@gmail.com"
+```
+
+系統在執行期間從 `system/config.admin_email` 讀取管理員身份，不依賴任何程式碼常數。
+
+### 5.3 角色層級
+
+系統有兩個層次的角色：
+
+**系統層（System Level）**
+
+| 角色 | 識別方式 | 說明 |
 |------|---------|------|
-| **管理員** | 特定 email | 全部功能，含服務管理、API 金鑰管理、使用者白名單管理 |
-| **授權用戶** | 在白名單中的 email | 建立專案、提交分析、查看報告、下載報告 |
-| **未授權** | 不在白名單 | 登入後看到「等待授權」提示，無法使用任何功能 |
+| **System Admin** | `system/config.admin_email` | 管理整個系統，包含白名單、API 金鑰、服務監控 |
+| **Whitelisted User** | `users/{email}.whitelist_status = "approved"` | 可登入、建立 Project |
+| **Pending User** | `users/{email}.whitelist_status = "pending"` | 已登入但尚未被批准，看到等待頁 |
 
-### 5.3 API 金鑰機制
+**Project 層（Project Level）**
 
-外部工具（Colab、Claude Cowork）使用管理員核發的 API Key 直接呼叫服務：
+| 角色 | 指定方式 | 說明 |
+|------|---------|------|
+| **Owner** | `projects/{id}.owner` | 建立者，全權管理此 Project |
+| **Editor** | `projects/{id}.members.{email} = "editor"` | 可提交分析、看報告、下載 |
+| **Viewer** | `projects/{id}.members.{email} = "viewer"` | 只能看報告、下載 |
+
+### 5.4 權限矩陣
+
+| 功能 | System Admin | Owner | Editor | Viewer | Pending |
+|------|:-----------:|:-----:|:------:|:------:|:-------:|
+| 白名單管理 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| API 金鑰管理 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 服務監控 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 使用量監控 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 建立 Project | ✅ | ✅ | ❌ | ❌ | ❌ |
+| 設定 Project LLM Key | ✅ | ✅ | ❌ | ❌ | ❌ |
+| 邀請/移除成員 | ✅ | ✅ | ❌ | ❌ | ❌ |
+| 提交分析 | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 查看報告 | ✅ | ✅ | ✅ | ✅ | ❌ |
+| 下載報告 | ✅ | ✅ | ✅ | ✅ | ❌ |
+
+### 5.5 LLM Key 歸屬
+
+LLM Key 是 **per-project**，由 Owner 設定，儲存於 `projects/{id}/llm_config.api_key`。
+
+| 使用情境 | LLM Key 來源 |
+|---------|------------|
+| 透過 Web UI 在 Project 內提交分析 | Project 的 LLM Key（Owner 設定）|
+| 直接從 Colab 呼叫 analysis-pipeline | 呼叫時自行帶入（不存在系統裡）|
+
+### 5.6 外部工具 API 金鑰機制
+
+System Admin 在 Web UI 核發 API Key，供 Colab / Claude Cowork 直接呼叫服務：
 
 ```python
-# 使用範例（Colab / Claude Cowork）
+# Colab / Claude Cowork 使用範例
 
 # 爬取文章
 result = requests.post(
     "https://content-crawler-xxx.run.app/api/scrape",
     json={"url": "https://example.com/article"},
-    headers={"X-API-Key": "your-key"}
+    headers={"X-API-Key": "YOUR_API_KEY"}
 ).json()
 
-# 提交分析
-report = requests.post(
+# 提交分析（自帶 LLM Key）
+job = requests.post(
     "https://analysis-pipeline-xxx.run.app/api/analyse",
     json={
         "report_title": "CHANEL 初生光采 × 美白透亮",
+        "llm_provider": "gemini",
+        "llm_model": "gemini-2.0-flash",
+        "llm_api_key": "YOUR_GEMINI_KEY",
         "contents": [
             {"url": "...", "title": "...", "text": "...", "source_type": "media"},
             {"url": "...", "title": "...", "text": "...", "source_type": "dcard"},
         ]
     },
-    headers={"X-API-Key": "your-key"}
+    headers={"X-API-Key": "YOUR_API_KEY"}
+).json()
+# → {"job_id": "abc123"}
+
+# 查詢進度
+status = requests.get(
+    f"https://analysis-pipeline-xxx.run.app/api/analyse/{job['job_id']}",
+    headers={"X-API-Key": "YOUR_API_KEY"}
 ).json()
 ```
 
@@ -359,15 +417,19 @@ report = requests.post(
 ### 8.2 LLM 設計細節
 
 ```
-用戶在 Web UI 的「個人設定」中設定：
-  • 偏好的 LLM 提供商（Gemini / Claude）
-  • 使用的模型（例如：gemini-2.0-flash / claude-sonnet-4-5）
-  • 對應的 API Key
+LLM Key 為 per-project，由 Project Owner 在 Project 設定頁面配置：
+  • 選擇 LLM 提供商（Gemini / Claude）
+  • 選擇模型（例如：gemini-2.0-flash / claude-sonnet-4-5）
+  • 填入對應的 API Key → 儲存至 projects/{id}/llm_config.api_key
 
 分析任務執行時：
-  1. 優先使用用戶自設的 LLM + Key
-  2. 若未設定，提示用戶前往設定後才能使用分析功能
-  3. 系統不提供 fallback LLM Key
+  1. 從 Project 的 llm_config 讀取 LLM 提供商、模型、Key
+  2. 若未設定，Owner 在提交分析前必須先完成設定
+  3. Editor / Viewer 不能修改 LLM 設定
+
+從 Colab / 外部工具直接呼叫時：
+  → 呼叫端自行在 request body 帶入 llm_provider / llm_model / llm_api_key
+  → 系統不提供任何 fallback LLM Key
 ```
 
 ### 8.3 LLM API Key 分層設計
@@ -402,7 +464,145 @@ Firestore: users/{email}/usage_log/{log_id}
 
 ---
 
-## 9. 參考實作
+## 9. Firestore Schema（全新設計）
+
+> ⚠️ 舊有 `users/{email}/projects/` 資料結構**全部廢棄**，不做遷移。以下為全新 schema。
+
+### 頂層 Collections 概覽
+
+```
+Firestore
+├── system/                   系統設定（setup_admin.sh 寫入）
+├── users/                    白名單用戶
+├── projects/                 所有 Project（頂層，支援多人協作）
+└── api_keys/                 外部工具金鑰
+```
+
+---
+
+### `system/config`（單一文件）
+
+由 `setup_admin.sh` 一次性寫入，不由程式碼管理。
+
+```
+system/config
+  admin_email:  string    # 系統管理員 email
+  created_at:   timestamp
+```
+
+---
+
+### `users/{email}`
+
+白名單用戶資料。用戶第一次登入時自動建立（status = pending）。
+
+```
+users/{email}
+  display_name:      string
+  whitelist_status:  string    # "pending" | "approved"
+  added_by:          string    # 批准者 email（admin）
+  approved_at:       timestamp
+  last_login:        timestamp
+
+  usage_log/{log_id}           # 使用量紀錄（管理員按用戶查看）
+    action:        string      # "analyse" | "crawl"
+    project_id:    string
+    analysis_id:   string      # 分析任務（action=analyse 時）
+    url_count:     number      # 爬蟲呼叫筆數（action=crawl 時）
+    llm_provider:  string      # 使用的 LLM（action=analyse 時）
+    status:        string      # "success" | "failed"
+    timestamp:     timestamp
+```
+
+---
+
+### `projects/{project_id}`
+
+Project 為頂層 collection，支援多人協作。
+
+```
+projects/{project_id}
+  title:        string
+  description:  string
+  owner:        string         # email
+  created_at:   timestamp
+  updated_at:   timestamp
+
+  members:      map            # {email: "editor" | "viewer"}
+                               # owner 不在 members 裡，以 owner 欄位識別
+
+  llm_config:   map            # Owner 專屬，Editor/Viewer 不可讀寫
+    provider:   string         # "gemini" | "claude"
+    model:      string         # "gemini-2.0-flash" | "claude-sonnet-4-5" 等
+    api_key:    string         # 明文存 Firestore（與現有 gemini_api_key 慣例一致）
+
+  analyses/{analysis_id}       # 分析任務
+    title:            string
+    status:           string   # "pending" | "running" | "completed" | "failed"
+    progress:         number   # 0–100
+    log:              string   # 最新狀態訊息（前端輪詢顯示）
+    submitted_by:     string   # email
+    submitted_at:     timestamp
+    completed_at:     timestamp
+    llm_provider:     string   # 實際使用的 LLM
+    model:            string
+    input_count:      number   # 輸入素材總數
+    result_markdown:  string   # 完整 Markdown 報告
+
+    inputs/{input_id}          # 每篇輸入素材
+      url:          string
+      title:        string
+      text:         string
+      source_type:  string     # "media" | "ecommerce" | "forum" | "dcard"
+                               # "youtube" | "direct"
+      status:       string     # "success" | "failed" | "skipped"
+      added_at:     timestamp
+```
+
+---
+
+### `api_keys/{key_id}`
+
+System Admin 核發的外部工具金鑰（Colab / Claude Cowork）。
+
+```
+api_keys/{key_id}
+  name:         string    # 識別用途，例如「Colab - CHANEL 專案」
+  description:  string
+  key_hash:     string    # SHA-256 hash，不存明文
+  permissions:  array     # ["crawl"] | ["analyse"] | ["crawl", "analyse"]
+  created_by:   string    # admin email
+  created_at:   timestamp
+  last_used_at: timestamp
+  is_active:    boolean
+  call_count:   number    # 累計呼叫次數
+```
+
+---
+
+### 資料關係圖
+
+```
+system/config ──────────────── 識別 admin
+      │
+users/{email} ──────────────── 白名單用戶
+      │
+      └── usage_log/{id}  ──── 使用量（admin 可查）
+
+projects/{project_id} ──────── 頂層 Project
+      │
+      ├── owner (→ users/)
+      ├── members (→ users/)
+      ├── llm_config (Owner 獨有)
+      └── analyses/{id}
+            └── inputs/{id}
+
+api_keys/{key_id} ──────────── 外部工具金鑰（admin 管理）
+```
+
+---
+
+## 10. 參考實作
 
 ### 9.1 爬蟲核心參考：Colab v3.8
 
