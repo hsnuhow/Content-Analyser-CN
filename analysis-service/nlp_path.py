@@ -64,7 +64,7 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
       per_article:  [{url, title, keywords: [{keyword, weight}]}]
     """
     texts = [
-        f"{c.get('title', '')} {c.get('text', '')}"
+        f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
         for c in contents
     ]
 
@@ -156,7 +156,7 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
 
     # 取前 MAX_EMBED_CHARS 字做向量（控制 API 費用）
     texts = [
-        f"{c.get('title', '')} {c.get('text', '')[:MAX_EMBED_CHARS]}"
+        f"{c.get('title', '')} {(c.get('text') or c.get('content') or '')[:MAX_EMBED_CHARS]}"
         for c in contents
     ]
 

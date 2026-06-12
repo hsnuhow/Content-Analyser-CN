@@ -43,6 +43,20 @@ def create_app():
         client_kwargs={'scope': 'openid email profile'}
     )
 
+    # 全域 context processor：所有 blueprint 的模板都能取得 user / is_admin
+    # （原本註冊在 main_bp，導致 project_bp / admin_bp 頁面 navbar 顯示異常）
+    @app.context_processor
+    def inject_user():
+        from flask import session
+        from .services import get_admin_email
+        user = session.get('user')
+        is_admin = False
+        if user:
+            admin_email = get_admin_email()
+            if admin_email:
+                is_admin = user.get('email', '').lower() == admin_email.lower()
+        return dict(user=user, is_admin=is_admin)
+
     with app.app_context():
         from . import routes
         app.register_blueprint(routes.bp)

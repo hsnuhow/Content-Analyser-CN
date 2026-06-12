@@ -54,17 +54,6 @@ def login_required(f):
     return decorated_function
 
 
-@bp.context_processor
-def inject_user():
-    user = session.get('user')
-    is_admin = False
-    if user:
-        admin_email = get_admin_email()
-        if admin_email:
-            is_admin = user.get('email', '').lower() == admin_email.lower()
-    return dict(user=user, is_admin=is_admin)
-
-
 @bp.route('/debug')
 def debug():
     return jsonify({

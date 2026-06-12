@@ -115,6 +115,33 @@
         2.  從 Git 索引中移除敏感檔案。
         3.  重建 Git 歷史（force push 單一乾淨 commit）以徹底清除過去 Commit 中的金鑰紀錄。✅
 
+## 2026-06-12 (正式部署 + 品牌命名 InsightOut)
+- **Deploy (生產上線)**:
+    - **目的**: 將三服務首次部署至 Google Cloud Run（GCP Project: content-analyser-cn）。
+    - **過程與踩雷**:
+        1.  **Debian trixie 套件問題**: `python:3.11-slim` 已升為 Debian 13，移除 `libgconf-2-4`，導致 crawler 建置失敗。鎖定三服務 base image 為 `python:3.11-slim-bookworm`。
+        2.  **gcloud 旗標衝突**: content-analyser 部署同時用 `--clear-env-vars` 與 `--set-env-vars`，gcloud 不允許並存，移除前者。
+    - **部署結果**: 三服務全部上線，health check 通過。
+        - content-analyser: https://content-analyser-dha6qmuvaq-de.a.run.app
+        - content-crawler: Chrome 149 安裝成功
+        - analysis-pipeline: Firebase 連線正常
+    - **環境設定**:
+        1.  啟用 Vertex AI（aiplatform.googleapis.com）。
+        2.  建立 Secret Manager: CRAWLER_API_KEY、ANALYSIS_API_KEY。
+        3.  管理員 email（how.penguin@gmail.com）寫入 Firestore system/config（REST API PATCH）。
+        4.  OAuth 重新導向 URI 加入兩個 .run.app callback + insightout.annexix.cc callback。
+    - **端到端驗證**: Google OAuth 登入實測通過，管理員直接進入專案頁。
+- **Branding (產品命名)**:
+    - **目的**: 確立正式產品名與網址。
+    - **解決方式**: 命名為 **InsightOut**（insight + inside-out），正式網址 insightout.annexix.cc。
+        更新 layout/login 模板品牌、product_guideline.md v1.5、刪除舊 index.html、清空舊 app.js。
+- **Domain (網域，進行中)**:
+    - annexix.cc 已透過 Google Search Console + Cloudflare 一鍵授權完成網域驗證。
+    - Cloud Run domain mapping 已建立（要求 CNAME: insightout → ghs.googlehosted.com）。
+    - **待辦**: Cloudflare CNAME 記錄尚未加（Cloudflare dashboard 自動化受限），加完等 SSL 憑證配發後 insightout.annexix.cc 生效。
+- **Known Issue**:
+    - 登入後 navbar 右上角仍顯示「登入」而非用戶帳號（context_processor / 模板顯示邏輯問題，不影響功能，待修）。
+
 ## 2026-06-12 (Phase 2 + Phase 3 + Phase 4)
 - **Feature (Phase 2 - analysis-pipeline)**:
     - **目的**: 建立全新的獨立分析引擎，實現雙路平行 + Synthesis 架構。

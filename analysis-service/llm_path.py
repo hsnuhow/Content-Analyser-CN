@@ -30,7 +30,7 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient) -> List[Dict]:
     articles_block = ""
     for i, c in enumerate(batch, 1):
         title = c.get("title", "無標題")
-        text = c.get("text", "")[:MAX_TEXT_FOR_INTENT]
+        text = (c.get("text") or c.get("content") or "")[:MAX_TEXT_FOR_INTENT]
         src = c.get("source_type", "未知來源")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n內容：{text}\n"
 
@@ -112,7 +112,7 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient) -> str:
     articles_block = ""
     for i, c in enumerate(analysis_set, 1):
         title = c.get("title", "無標題")
-        text = c.get("text", "")[:MAX_TEXT_FOR_QUAL]
+        text = (c.get("text") or c.get("content") or "")[:MAX_TEXT_FOR_QUAL]
         src = c.get("source_type", "未知")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n{text}\n"
 

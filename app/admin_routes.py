@@ -113,7 +113,7 @@ def reject_user_route(email):
 # Secret Manager 管理（原有功能保留）
 # ──────────────────────────────────────────────────────────────────────
 
-ALLOWED_SECRETS = ['SYSTEM_GEMINI_KEY', 'CRAWLER_API_KEY', 'ANALYSIS_API_KEY']
+ALLOWED_SECRETS = ['GENAI_API_KEY', 'CRAWLER_API_KEY', 'ANALYSIS_API_KEY']
 
 
 @bp.route('/update_secrets', methods=['POST'])

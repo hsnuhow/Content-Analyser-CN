@@ -91,7 +91,7 @@ gcloud run deploy $ANALYSIS_SERVICE \
   --cpu 1 \
   --timeout 600 \
   --concurrency 2 \
-  --clear-env-vars \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
   --set-secrets "ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
 
 ANALYSIS_URL=$(gcloud run services describe $ANALYSIS_SERVICE \
