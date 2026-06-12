@@ -18,7 +18,7 @@
    每次只處理明確範圍內的問題。避免順手重構、擴張功能或改動未授權模組。
 
 4. **高度模組化**  
-   系統拆分為清楚邊界的模組與服務。兩個 Cloud Run 服務（`content-analyser`、`content-crawler`）之間**只透過 HTTP API 溝通**，不得共用程式碼或直接呼叫對方的內部函式。
+   系統拆分為清楚邊界的模組與服務。三個 Cloud Run 服務（`content-analyser`、`content-crawler`、`analysis-pipeline`）之間**只透過 HTTP API 溝通**，不得共用程式碼或直接呼叫對方的內部函式。
 
 5. **API 邊界優先**  
    主程式只能透過 `app/crawler_client.py` 呼叫爬蟲服務。不得在主程式中直接 `import crawler`。
@@ -146,7 +146,7 @@
 | `核准執行` | 一次性操作（腳本、指令）|
 | `核准回復` | 回退到舊版本 |
 | `核准部署` | 正式部署（等同「核准部署：正式」）|
-| `核准部署：正式` | 部署兩個 Cloud Run 服務至生產環境 |
+| `核准部署：正式` | 部署三個 Cloud Run 服務至生產環境 |
 | `核准部署：單一服務` | 只部署指定的單一服務 |
 | `核准推送` | git push |
 
@@ -378,7 +378,7 @@ echo "✅ 全部通過"
 gcloud secrets list --format="table(name)"
 ```
 
-### 6.3 部署兩個服務（完整）
+### 6.3 部署三個服務（完整）
 
 ```bash
 # 設定 GCP Project（首次或切換時）
@@ -415,9 +415,14 @@ gcloud run deploy content-analyser \
   --image gcr.io/$PROJECT_ID/content-analyser \
   --platform managed --region $REGION \
   --memory 1Gi --cpu 1 --timeout 300 \
-  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL" \
-  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest"
+  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL,ANALYSIS_SERVICE_URL=$ANALYSIS_URL" \
+  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest,ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
+
+# （重新部署分析服務時，務必加 GOOGLE_CLOUD_PROJECT 供 Vertex AI 語意分群）
+# gcloud run deploy analysis-pipeline ... --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" --set-secrets "ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
 ```
+
+> ⚠️ 提醒：`ANALYSIS_URL` 需先取得（`gcloud run services describe analysis-pipeline --region $REGION --format 'value(status.url)'`）。content-analyser 必須同時注入 `CRAWLER_SERVICE_URL` 與 `ANALYSIS_SERVICE_URL`，否則分析功能會斷線。
 
 ### 6.5 部署後驗證
 

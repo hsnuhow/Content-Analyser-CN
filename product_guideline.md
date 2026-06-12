@@ -155,7 +155,7 @@
 |------|------|
 | **職責** | 接收 URL，回傳乾淨的文字內容 |
 | **輸入** | 單一 URL 或 URL 清單（最多 20 個） |
-| **輸出** | `{url, title, text, status}` |
+| **輸出** | `{status, url, title, content, length}`（主文在 `content` 欄位）|
 | **技術** | Headless Chrome + undetected-chromedriver + Gemini 輔助選取器 |
 | **不做** | 分析、儲存結果、認識使用者 |
 | **呼叫方** | Colab、Claude Cowork、任何持有金鑰的工具 |
@@ -173,7 +173,7 @@
 | 項目 | 說明 |
 |------|------|
 | **職責** | 接收已收集好的內容，輸出結構化分析報告 |
-| **輸入** | `{report_title, contents: [{url, title, text, source_type}], llm_provider, llm_model, llm_api_key}` |
+| **輸入** | `{report_title, contents: [{url, title, text, source_type}], llm_provider, llm_model, llm_api_key}`（每篇主文欄位 `text`，亦相容 crawler 的 `content`）|
 | **輸出** | 結構化 Markdown 報告（含搜尋意圖分析）|
 | **不做** | 爬取網頁、認識使用者、知道內容從哪裡來 |
 | **呼叫方** | Colab、Claude Cowork、Web UI、任何持有金鑰的工具 |
@@ -611,8 +611,13 @@ Firestore
 ├── system/                   系統設定（setup_admin.sh 寫入）
 ├── users/                    白名單用戶
 ├── projects/                 所有 Project（頂層，支援多人協作）
-└── api_keys/                 外部工具金鑰
+├── analysis_jobs/            analysis-pipeline 自管的非同步任務狀態
+└── api_keys/                 外部工具金鑰（規格，尚未實作）
 ```
+
+> 實作狀態（2026-06-12）：`system`、`users`（基本欄位）、`projects`、`analyses`、
+> `analysis_jobs` 已實作。`users/.../usage_log`、`api_keys`、`analyses/.../inputs`
+> 為規格中的未來功能，尚未實作（見第 10 節開發優先順序）。
 
 ---
 
@@ -634,20 +639,18 @@ system/config
 
 ```
 users/{email}
+  email:             string
   display_name:      string
-  whitelist_status:  string    # "pending" | "approved"
+  picture:           string
+  whitelist_status:  string    # "pending" | "approved" | "rejected"
   added_by:          string    # 批准者 email（admin）
   approved_at:       timestamp
   last_login:        timestamp
+  created_at:        timestamp
 
+  # ── 以下為未來功能，尚未實作 ──
   usage_log/{log_id}           # 使用量紀錄（管理員按用戶查看）
-    action:        string      # "analyse" | "crawl"
-    project_id:    string
-    analysis_id:   string      # 分析任務（action=analyse 時）
-    url_count:     number      # 爬蟲呼叫筆數（action=crawl 時）
-    llm_provider:  string      # 使用的 LLM（action=analyse 時）
-    status:        string      # "success" | "failed"
-    timestamp:     timestamp
+    action / project_id / analysis_id / url_count / llm_provider / status / timestamp
 ```
 
 ---
@@ -672,27 +675,46 @@ projects/{project_id}
     model:      string         # "gemini-2.0-flash" | "claude-sonnet-4-5" 等
     api_key:    string         # 明文存 Firestore（與現有 gemini_api_key 慣例一致）
 
-  analyses/{analysis_id}       # 分析任務
-    title:            string
+  analyses/{analysis_id}       # 分析任務（對應 analysis_jobs 的 job_id）
+    report_title:     string
+    job_id:           string   # analysis-pipeline 的 job_id
     status:           string   # "pending" | "running" | "completed" | "failed"
     progress:         number   # 0–100
     log:              string   # 最新狀態訊息（前端輪詢顯示）
+    n_articles:       number   # 輸入素材總數
+    llm_provider:     string   # 實際使用的 LLM
+    llm_model:        string
     submitted_by:     string   # email
     submitted_at:     timestamp
     completed_at:     timestamp
-    llm_provider:     string   # 實際使用的 LLM
-    model:            string
-    input_count:      number   # 輸入素材總數
     result_markdown:  string   # 完整 Markdown 報告
 
-    inputs/{input_id}          # 每篇輸入素材
-      url:          string
-      title:        string
-      text:         string
-      source_type:  string     # "media" | "ecommerce" | "forum" | "dcard"
-                               # "youtube" | "direct"
-      status:       string     # "success" | "failed" | "skipped"
-      added_at:     timestamp
+    # 註：輸入內容（contents）只送往 analysis-pipeline，不落地為 inputs 子集合。
+```
+
+---
+
+### `analysis_jobs/{job_id}`
+
+由 analysis-pipeline 服務自管的非同步任務狀態（content-analyser 透過 job_id 輪詢）。
+
+```
+analysis_jobs/{job_id}
+  job_id / status / progress / log
+  report_title / n_articles / llm_provider / llm_model
+  result_markdown:  string
+  created_at / updated_at / completed_at
+```
+
+---
+
+### `api_keys/{key_id}`（規格，尚未實作）
+
+外部工具金鑰管理。目前 Colab/Cowork 直接使用 Secret Manager 的 CRAWLER_API_KEY / ANALYSIS_API_KEY，尚未實作 per-key 核發介面。
+
+```
+api_keys/{key_id}
+  name / key_hash / permissions / created_by / is_active / call_count
 ```
 
 ---
