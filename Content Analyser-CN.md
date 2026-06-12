@@ -35,6 +35,24 @@
 
 ## 3. 系統架構 (System Architecture)
 
+### 3.0 服務拆分：獨立爬蟲 (Independent Crawler Service) [Update 2026.06]
+爬蟲已自主程式拆分為一個**完全獨立、透過 API 操作的 Cloud Run 服務**，部署為兩個服務：
+
+1.  **`content-analyser`（Web 應用）**：Flask + OAuth + Firestore，負責登入、任務管理、報表匯出。不再內嵌爬蟲，也不再安裝 Chrome。
+2.  **`content-crawler`（獨立爬蟲服務）**：位於 `crawler-service/`，提供受金鑰保護的 HTTP API，內部以無頭瀏覽器（undetected-chromedriver）爬取內容。爬取核心嚴格對齊已驗證的 Colab v3.8。
+
+**互動方式**：
+*   主程式 `app/worker.py` 透過 `app/crawler_client.py` 以 HTTP `POST /api/scrape` 呼叫爬蟲服務。
+*   每個請求都必須帶上 `X-API-Key`（與 Secret Manager 中的 `CRAWLER_API_KEY` 一致），不符回 401。
+*   主程式以環境變數 `CRAWLER_SERVICE_URL` 取得爬蟲服務位址。
+
+**爬蟲 API**：
+*   `GET  /health`：健康檢查（不需金鑰）。
+*   `POST /api/scrape`：同步爬取單一網址，body `{url, use_gemini, gemini_api_key?}`，回傳 `{status,title,content,length,error}`。
+
+**新增 Secret**：`CRAWLER_API_KEY`（爬蟲 API 存取金鑰）。
+
+
 ### 3.1 身分驗證與授權 (Authentication & Authorization) [Update 2025.12]
 全站採用 Google OAuth 2.0 強制登入機制，區分兩種角色：
 
