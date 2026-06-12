@@ -22,13 +22,14 @@ echo "設定 GCP Project..."
 gcloud config set project "$PROJECT_ID"
 
 echo "寫入管理員 email 至 Firestore system/config..."
-gcloud firestore documents create \
-  "projects/${PROJECT_ID}/databases/(default)/documents/system/config" \
-  --fields="admin_email=${ADMIN_EMAIL}" \
-  2>/dev/null || \
-gcloud firestore documents update \
-  "projects/${PROJECT_ID}/databases/(default)/documents/system/config" \
-  --fields="admin_email=${ADMIN_EMAIL}"
+# 使用 Firestore REST API（PATCH 為 upsert：不存在則建立，存在則更新）
+TOKEN=$(gcloud auth print-access-token)
+curl -s -X PATCH \
+  "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/system/config?updateMask.fieldPaths=admin_email" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "{\"fields\":{\"admin_email\":{\"stringValue\":\"${ADMIN_EMAIL}\"}}}"
 
+echo ""
 echo "✅ 完成。管理員設定為：${ADMIN_EMAIL}"
 echo "   系統將從 Firestore system/config.admin_email 讀取此設定。"
