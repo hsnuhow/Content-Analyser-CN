@@ -29,7 +29,7 @@ def _scrape_one(url: str, use_gemini: bool, gemini_api_key: str) -> dict:
     try:
         if use_gemini and gemini_api_key:
             crawler.configure_genai(gemini_api_key)
-        return crawler.scrape(url, hard_timeout_sec=90)
+        return crawler.scrape(url, hard_timeout_sec=150)
     except UnsupportedSiteError as e:
         return {"status": "skipped", "url": url, "error": str(e)}
     except Exception as e:

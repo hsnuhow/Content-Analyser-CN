@@ -342,9 +342,12 @@ class HeadlessCrawler:
             except TimeoutException:
                 pass
 
-            if ot_done:
-                self._log("[遮罩處理] ✓ OneTrust 處理完成。")
-                return
+            # ⭐️ 偵測到 OneTrust 即視為已處理並 return：成功關閉最好；
+            #    即使未完全關閉，CMP 容器也會在抽取前由 _remove_cmp_containers 移除。
+            #    不再往下跑 Fides 偵測（10s）與通用後備（多輪 sleep），避免浪費時間
+            #    導致大頁面超時（OneTrust 與 Fides 互斥，有 OneTrust 就不會有 Fides）。
+            self._log(f"[遮罩處理] OneTrust 處理結束（ot_done={ot_done}），跳過後續後備。")
+            return
 
         # ========= ⭐️ [v3.6+] 處理 Fides (GQ/Vogue) - JS API 方案 =========
         try:
@@ -1090,7 +1093,7 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
-    def scrape(self, url: str, hard_timeout_sec: int = 90) -> Dict[str, Any]:
+    def scrape(self, url: str, hard_timeout_sec: int = 150) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與重試邏輯（對齊 Colab v3.8）。
 
         Args:
