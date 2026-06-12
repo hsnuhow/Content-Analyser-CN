@@ -1,6 +1,6 @@
 # 產品規格文件 — Content Analyser CN
 
-**版本：** 1.1 草稿  
+**版本：** 1.2 草稿  
 **撰寫日期：** 2026-06-12  
 **狀態：** 討論中，尚未進入開發  
 **受眾：** 產品負責人、開發協作者、Claude Code
@@ -402,7 +402,42 @@ Firestore: users/{email}/usage_log/{log_id}
 
 ---
 
-## 9. 開發優先順序（草案，未核准）
+## 9. 參考實作
+
+### 9.1 爬蟲核心參考：Colab v3.8
+
+**檔案**：`~/Desktop/seo_新開發_帶ui介面爬蟲_可輸入多網址.py`  
+**版本**：v3.8（2026-06-10）  
+**狀態**：已在 Colab 環境驗證可正確突破遮罩的權威實作
+
+此 Colab 腳本是 `content-crawler` 爬蟲核心邏輯的**基準真相（ground truth）**。開發或修改爬蟲時，以此版本為優先參考。
+
+#### 現有 `crawler-service` 已對齊的部分
+- OneTrust：`OneTrust.AllowAll()` JS API → 按鈕點擊 fallback
+- Fides：`window.Fides.updateConsent()` JS API
+- 抽取前移除全部 CMP 容器（OneTrust / Fides）
+- `options.page_load_strategy = "eager"`（移除已廢棄的 `desired_capabilities`）
+- LLM selector 輔助改用 `google-genai`（`genai.Client`）
+
+#### Colab v3.8 有、現有服務待對齊或評估的部分
+
+| 項目 | Colab v3.8 | 現有服務 | 建議 |
+|------|-----------|---------|------|
+| `_open()` 重試機制 | 最多 2 次，含逾時偵測 | 無 | 應加入 |
+| 每頁硬性時限 | 60 秒 | 無 | 應加入 |
+| 頁面載入逾時 | 25 秒 | 15 秒 | 應調整 |
+| Chrome binary 尋找 | 多路徑 fallback | 較簡單 | 評估是否需要 |
+| 內容過短 fallback | 補入 `og:description` | 無 | 應加入 |
+| Dcard 直接跳過 | `UnsupportedSiteError` | 無此判斷 | 應加入 |
+
+#### 現有服務獨有的 Cloud Run 加值（不在 Colab 版）
+- `_is_listing_page()`：偵測列表頁並跳過，避免誤抓
+- `/api/scrape/batch`：批次端點
+- Firestore log callback：即時回報爬取進度
+
+---
+
+## 10. 開發優先順序（草案，未核准）
 
 > ⚠️ 本節為草案，所有設計決策已確認，但尚未進入開發。開發前需取得正式核准。
 
