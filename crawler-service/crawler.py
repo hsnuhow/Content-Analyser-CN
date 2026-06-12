@@ -1091,7 +1091,9 @@ class HeadlessCrawler:
 
         Args:
             url: 目標網址
-            hard_timeout_sec: 每頁硬性時限（秒），預設 60s
+            hard_timeout_sec: 每頁硬性時限（秒）。僅計算「爬取」階段，
+                          不含 driver 冷啟動（undetected-chromedriver 在 Cloud Run
+                          初始化可能達 40–50 秒，不應算進單頁時限）。
         """
         self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
 
@@ -1104,10 +1106,11 @@ class HeadlessCrawler:
                 "error": "Skipped: Dcard 需要登入，請改用 Claude Cowork Chrome MCP 手動蒐集。"
             }
 
-        deadline = time.time() + hard_timeout_sec
-
         if self.driver is None:
             self._init_driver()
+
+        # ⭐️ deadline 在 driver 初始化「之後」才開始計時，避免冷啟動吃掉時限。
+        deadline = time.time() + hard_timeout_sec
 
         try:
             # ⭐️ [Phase 1] 使用 _open() 重試邏輯（對齊 Colab v3.8）
