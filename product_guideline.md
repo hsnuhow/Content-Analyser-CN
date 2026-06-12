@@ -1,9 +1,12 @@
-# 產品規格文件 — Content Analyser CN
+# 產品規格文件 — InsightOut
 
-**版本：** 1.4 草稿  
+**產品名稱：** InsightOut  
+**正式網址：** https://insightout.annexix.cc  
+**版本：** 1.5 草稿  
 **撰寫日期：** 2026-06-12  
-**狀態：** 討論中，尚未進入開發  
-**受眾：** 產品負責人、開發協作者、Claude Code
+**狀態：** 規格已定，進入部署階段  
+**受眾：** 產品負責人、開發協作者、Claude Code  
+**GCP Project：** content-analyser-cn（技術代號）
 
 ---
 
@@ -11,7 +14,9 @@
 
 ### 1.1 這是什麼
 
-**Content Analyser CN** 是一個**內容策略分析平台**，服務對象為授權的行銷與編輯團隊。
+**InsightOut** 是一個**內容策略分析平台**，服務對象為授權的行銷與編輯團隊。
+
+> 名稱寓意：把藏在內容裡的洞察（insight）翻出來（inside-out），讓行銷與編輯看見「市場已驗證的有效方向」。
 
 核心問題只有一個：
 

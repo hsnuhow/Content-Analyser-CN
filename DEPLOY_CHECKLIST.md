@@ -1,12 +1,34 @@
-# 部署前準備清單 — Content Analyser CN
+# 部署前準備清單 — InsightOut
 
-**版本：** 1.0  
-**適用：** 首次部署三服務至 Google Cloud Run  
-**預估時間：** 約 60–90 分鐘（含 GCP 設定）
+**產品：** InsightOut（insightout.annexix.cc）  
+**GCP Project：** content-analyser-cn  
+**版本：** 1.1  
+**適用：** 首次部署三服務至 Google Cloud Run
 
 ---
 
-## 總覽：你需要準備的東西
+## 🔍 環境調查結果（2026-06-12）
+
+以下為實機調查 `content-analyser-cn` 的現況：
+
+| # | 項目 | 狀態 |
+|---|------|------|
+| 1 | GCP Project `content-analyser-cn` | ✅ 已存在 |
+| 2 | Firestore（asia-east1, Native）| ✅ 已就緒 |
+| 3 | IAM 權限（含 aiplatform.user, datastore.user, secretmanager.secretAccessor）| ✅ 已齊全 |
+| 4 | Vertex AI（aiplatform）API | ✅ 已啟用（本次補上）|
+| 5 | OAuth 憑證（Client ID/Secret）| ✅ 已在 Secret Manager |
+| 6 | Secret: CRAWLER_API_KEY | ✅ 已建立（本次補上）|
+| 7 | Secret: ANALYSIS_API_KEY | ✅ 已建立（本次補上）|
+| 8 | Cloud Run 三服務 | ⬜ 待部署 |
+| 9 | OAuth 重新導向 URI | ⬜ 待部署後補正 |
+| 10 | 自訂網域 insightout.annexix.cc | ⬜ 待部署後設定 |
+
+**結論：環境已全部就緒，可直接執行 `bash deploy.sh`。**
+
+---
+
+## 總覽：完整準備項目（參考）
 
 | # | 項目 | 從哪裡取得 | 必要性 |
 |---|------|-----------|--------|
@@ -318,3 +340,49 @@ echo "Web App: $WEB_URL"
 | 語意分群失敗（報告仍生成）| Vertex AI 權限不足 | Step 6 的 aiplatform.user |
 | health 顯示 api_key_configured: false | Secret 未注入 | 檢查 deploy.sh 的 --set-secrets |
 | 爬蟲 401 | CRAWLER_API_KEY 不一致 | 確認兩服務用同一把 secret |
+
+---
+
+## Step 10：綁定自訂網域 insightout.annexix.cc（部署後）
+
+讓 Web UI 使用 `insightout.annexix.cc` 而非預設的 `.run.app` 網址。
+
+### 10.1 建立 Cloud Run Domain Mapping
+
+```bash
+gcloud beta run domain-mappings create \
+  --service content-analyser \
+  --domain insightout.annexix.cc \
+  --region asia-east1 \
+  --project content-analyser-cn
+```
+
+執行後會輸出一筆 DNS 記錄（通常是 CNAME 指向 `ghs.googlehosted.com`）。
+
+### 10.2 在 annexix.cc 的 DNS 加入記錄
+
+到你的網域商（管理 annexix.cc 的地方）新增：
+
+```
+類型: CNAME
+名稱: insightout
+值:   ghs.googlehosted.com.   ← 以 Step 10.1 實際輸出為準
+TTL:  3600
+```
+
+### 10.3 等待憑證生效
+
+```bash
+# 查詢 domain mapping 狀態（憑證自動配發，約 15 分鐘–數小時）
+gcloud beta run domain-mappings describe \
+  --domain insightout.annexix.cc \
+  --region asia-east1 \
+  --project content-analyser-cn
+```
+
+### 10.4 更新 OAuth 重新導向 URI
+
+網域生效後，把正式網址也加入 OAuth：
+```
+https://insightout.annexix.cc/callback
+```
