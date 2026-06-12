@@ -233,10 +233,26 @@ class HeadlessCrawler:
             pass
 
     def _open(self, url: str, max_retries: int = 2):
-        """打開網頁，含重試邏輯（對齊 Colab v3.8 _open()）。
-        最多重試 max_retries 次，遇到逾時或連線錯誤時重試。
-        成功後自動注入 locale spoofing JS。
+        """打開網頁，採「載入逾時容忍」策略。
+
+        核心：eager 策略下，page_load_timeout 觸發多半是次要資源
+        （廣告、追蹤腳本、圖片）尚未載完，而主文 DOM 早已就緒。
+        因此逾時時不判失敗、不重試，而是 window.stop() 停止載入、
+        直接用「當前已載入的 DOM」繼續，內容是否足夠交由抽取階段的
+        長度判斷決定。
+        僅「真正的網路連線錯誤」（connection refused/aborted 等）才重試。
         """
+        def _stop_and_accept(reason: str):
+            self._log(f"[載入] ⚠️ {reason} → window.stop()，使用已載入內容繼續")
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                pass
+            try:
+                self._apply_locale_spoofing_js()
+            except Exception:
+                pass
+
         for attempt in range(1, max_retries + 1):
             try:
                 self._log(f"[載入] 正在打開網頁 (嘗試 {attempt}/{max_retries}): {url}")
@@ -245,13 +261,17 @@ class HeadlessCrawler:
                 self._log("[載入] ✓ 網頁已成功載入")
                 return
             except TimeoutException:
-                self._log(f"[載入] ⚠️ 頁面載入逾時 (嘗試 {attempt}/{max_retries})")
-                if attempt == max_retries:
-                    raise TimeoutError(f"頁面載入逾時，已重試 {max_retries} 次: {url}")
-                time.sleep(1)
+                # 載入逾時容忍：用已載入的 DOM，不重試、不失敗。
+                _stop_and_accept("頁面載入逾時")
+                return
             except Exception as e:
                 error_msg = str(e).lower()
-                if any(kw in error_msg for kw in ['timeout', 'timed out', 'connection aborted', 'connection refused']):
+                net_err = any(kw in error_msg for kw in [
+                    'connection aborted', 'connection refused', 'connection reset',
+                    'err_connection', 'err_network', 'err_name_not_resolved',
+                    'unreachable', 'dns'
+                ])
+                if net_err:
                     self._log(f"[載入] ⚠️ 網路連線錯誤 (嘗試 {attempt}/{max_retries}): {e}")
                     if attempt == max_retries:
                         raise TimeoutError(f"網路連線錯誤，已重試 {max_retries} 次: {url}")
@@ -260,6 +280,10 @@ class HeadlessCrawler:
                     except Exception:
                         pass
                     time.sleep(1)
+                elif any(kw in error_msg for kw in ['timeout', 'timed out']):
+                    # 其他形式的逾時也容忍（用已載入 DOM）。
+                    _stop_and_accept("載入逾時")
+                    return
                 else:
                     raise
 
@@ -1095,14 +1119,17 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
-    def scrape(self, url: str, hard_timeout_sec: int = 150) -> Dict[str, Any]:
-        """爬取單一網址，含硬性時限與重試邏輯（對齊 Colab v3.8）。
+    def scrape(self, url: str, hard_timeout_sec: int = 150,
+               keep_driver: bool = False) -> Dict[str, Any]:
+        """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
 
         Args:
             url: 目標網址
             hard_timeout_sec: 每頁硬性時限（秒）。僅計算「爬取」階段，
                           不含 driver 冷啟動（undetected-chromedriver 在 Cloud Run
                           初始化可能達 40–50 秒，不應算進單頁時限）。
+            keep_driver: True 時不在結束時 quit driver（供批次重用，省冷啟動）。
+                          driver 若 crash 仍會被關閉，下次自動重新初始化。
         """
         self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
 
@@ -1172,18 +1199,29 @@ class HeadlessCrawler:
         except TimeoutError as e:
             self._log(f"[Crawler] 硬性時限超過: {e}")
             return {"status": "failed", "url": url, "error": str(e)}
+        except WebDriverException as e:
+            # driver 崩潰（invalid session / chrome crash）：強制關閉，
+            # 讓下次 scrape 重新初始化（即使 keep_driver=True）。
+            self._log(f"[Crawler] WebDriver 崩潰，將重啟 driver: {e}")
+            self._force_close_driver()
+            return {"status": "failed", "url": url, "error": f"WebDriver crash: {e}"}
         except Exception as e:
             self._log(f"[Crawler] CRITICAL ERROR during scrape for {url}: {e}")
             traceback.print_exc()
             return {"status": "failed", "url": url, "error": str(e)}
         finally:
             self._log(f"====== Finished scrape for: {url} ======")
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
-                self.driver = None
+            # 批次重用時保留 driver（省冷啟動）；非重用則關閉。
+            if self.driver and not keep_driver:
+                self._force_close_driver()
+
+    def _force_close_driver(self):
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
 
     def close(self):
         if self.driver:

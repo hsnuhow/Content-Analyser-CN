@@ -7,7 +7,12 @@
 
 ## 🔴 高優先
 
-### O-1. undetected-chromedriver 冷啟動 48 秒，且批次每篇重複初始化
+### O-1. undetected-chromedriver 冷啟動 48 秒，且批次每篇重複初始化　（部分完成 2026-06-13：批次已重用 driver）
+
+> ✅ 已實作「批次內重用 driver」（crawl_job 單一 crawler + scrape keep_driver=True），
+> 省去每篇 48s 冷啟動。剩餘可選優化：指定 UC version_main 避免每次 patch、
+> 或評估 selenium-stealth 加速首次啟動。以下為原始記錄。
+
 
 - **問題**：`content-crawler` 每次 `scrape()` 都 `new HeadlessCrawler()` → `_init_driver()`，
   undetected-chromedriver 在 Cloud Run 初始化約 **40–50 秒**（patch chromedriver、版本檢查）。

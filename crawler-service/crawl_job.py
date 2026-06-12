@@ -24,25 +24,29 @@ def _update_job(db, job_id: str, **fields):
         print(f"[CrawlJob] Firestore update 失敗: {e}", flush=True)
 
 
-def _scrape_one(url: str, use_gemini: bool, gemini_api_key: str) -> dict:
-    crawler = HeadlessCrawler()
-    try:
-        if use_gemini and gemini_api_key:
-            crawler.configure_genai(gemini_api_key)
-        return crawler.scrape(url, hard_timeout_sec=150)
-    except UnsupportedSiteError as e:
-        return {"status": "skipped", "url": url, "error": str(e)}
-    except Exception as e:
-        return {"status": "failed", "url": url, "error": str(e)}
-    finally:
-        crawler.close()
-
-
 def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                     gemini_api_key: str, db) -> None:
-    """背景執行：逐一爬取 urls，結果寫入 crawl_jobs/{job_id}。"""
+    """背景執行：逐一爬取 urls，結果寫入 crawl_jobs/{job_id}。
+
+    批次內重用同一個 HeadlessCrawler（driver），省去每篇的冷啟動
+    （undetected-chromedriver 初始化約 40–50 秒）。driver 若 crash，
+    scrape() 內會自動關閉，下一篇會重新初始化。
+    """
     def _log(msg):
         print(f"[CrawlJob {job_id[:8]}] {msg}", flush=True)
+
+    crawler = HeadlessCrawler()
+    if use_gemini and gemini_api_key:
+        crawler.configure_genai(gemini_api_key)
+
+    def _scrape_one(url: str) -> dict:
+        try:
+            # keep_driver=True：批次重用，不在每篇結束時 quit driver。
+            return crawler.scrape(url, hard_timeout_sec=150, keep_driver=True)
+        except UnsupportedSiteError as e:
+            return {"status": "skipped", "url": url, "error": str(e)}
+        except Exception as e:
+            return {"status": "failed", "url": url, "error": str(e)}
 
     try:
         total = len(urls)
@@ -58,7 +62,7 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                 results.append({"status": "failed", "url": url, "error": "Invalid URL"})
             else:
                 _log(f"({i+1}/{total}) {url}")
-                results.append(_scrape_one(url, use_gemini, gemini_api_key))
+                results.append(_scrape_one(url))
 
             prog = 2 + int((i + 1) / total * 95)
             last = results[-1]
@@ -90,3 +94,9 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
         _log(f"CRITICAL ERROR: {e}")
         traceback.print_exc()
         _update_job(db, job_id, status="failed", log=f"系統錯誤: {e}")
+    finally:
+        # 批次結束統一關閉重用的 driver。
+        try:
+            crawler.close()
+        except Exception:
+            pass
