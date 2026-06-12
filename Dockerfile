@@ -1,7 +1,8 @@
 # 主程式（Web 應用）容器映像檔
 # [Note] 爬蟲已拆分為獨立服務 (crawler-service)，主程式不再執行 Chrome，
 #        因此本映像檔不需安裝 Chrome / ChromeDriver，可大幅縮小體積與建置時間。
-FROM python:3.11-slim
+# 鎖定 Debian 12 (bookworm) 確保各服務 base image 一致。
+FROM python:3.11-slim-bookworm
 
 # 設定環境變數
 ENV PYTHONDONTWRITEBYTECODE=1

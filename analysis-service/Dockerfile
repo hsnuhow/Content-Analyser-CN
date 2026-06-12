@@ -1,7 +1,7 @@
 # Analysis Pipeline 容器映像檔
 # 不包含 Chrome / Selenium（爬蟲已獨立）
 # 主要相依：jieba、scikit-learn、Vertex AI（google-genai）、Anthropic
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1

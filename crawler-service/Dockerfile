@@ -1,6 +1,7 @@
 # 獨立爬蟲服務 (content-crawler) 的容器映像檔
-# 使用輕量級的 Python 3.11 基礎映像檔
-FROM python:3.11-slim
+# 鎖定 Debian 12 (bookworm)：trixie 已移除 libgconf-2-4 且部分套件改名（t64），
+# 固定 bookworm 確保 Chrome 系統相依套件名稱穩定。
+FROM python:3.11-slim-bookworm
 
 # 設定環境變數
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -21,7 +22,6 @@ RUN apt-get update && apt-get install -y \
     jq \
     libglib2.0-0 \
     libnss3 \
-    libgconf-2-4 \
     libfontconfig1 \
     libxi6 \
     libxcursor1 \
