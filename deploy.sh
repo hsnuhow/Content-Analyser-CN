@@ -1,52 +1,66 @@
 #!/bin/bash
 set -e
 
-# 取得目前的 GCP Project ID
-PROJECT_ID=$(gcloud config get-value project)
+# =====================================================================
+# deploy.sh — 三個 Cloud Run 服務完整部署腳本
+#
+# 部署順序：
+#   1. content-crawler    (爬蟲微服務，4Gi Chrome 環境)
+#   2. analysis-pipeline  (分析引擎，2Gi NLP + Vertex AI)
+#   3. content-analyser   (Web UI + 控制平面，1Gi 輕量)
+#
+# 前置需求：Secret Manager 中必須已建立以下 secrets：
+#   CRAWLER_API_KEY   - 爬蟲服務存取金鑰 (openssl rand -hex 32)
+#   ANALYSIS_API_KEY  - 分析服務存取金鑰 (openssl rand -hex 32)
+#   GENAI_API_KEY     - Gemini API Key（爬蟲 selector 輔助用）
+#   GOOGLE_CLIENT_ID  - Google OAuth Client ID
+#   GOOGLE_CLIENT_SECRET - Google OAuth Client Secret
+#   FLASK_SECRET_KEY  - Flask Session 加密金鑰
+#
+# 首次部署後，請執行：
+#   bash setup_admin.sh  (設定管理員 email)
+# =====================================================================
 
+PROJECT_ID=$(gcloud config get-value project)
 if [ -z "$PROJECT_ID" ]; then
-  echo "Error: Could not determine GCP Project ID."
-  echo "Please run 'gcloud init' or 'gcloud config set project YOUR_PROJECT_ID' first."
+  echo "Error: 無法取得 GCP Project ID。請先執行 'gcloud config set project YOUR_PROJECT_ID'。"
   exit 1
 fi
 
-# 主程式（Web 應用）服務
 SERVICE_NAME="content-analyser"
-# 獨立爬蟲服務
-CRAWLER_SERVICE_NAME="content-crawler"
+CRAWLER_SERVICE="content-crawler"
+ANALYSIS_SERVICE="analysis-pipeline"
 REGION="asia-east1"
 
 echo "========================================================"
-echo "Deploying to Google Cloud Run (Web App + Independent Crawler)"
-echo "Project        : $PROJECT_ID"
-echo "Web Service    : $SERVICE_NAME"
-echo "Crawler Service: $CRAWLER_SERVICE_NAME"
-echo "Region         : $REGION"
+echo "Content Analyser CN — 完整部署（三個 Cloud Run 服務）"
+echo "Project          : $PROJECT_ID"
+echo "Region           : $REGION"
+echo "Web Service      : $SERVICE_NAME"
+echo "Crawler Service  : $CRAWLER_SERVICE"
+echo "Analysis Service : $ANALYSIS_SERVICE"
 echo "========================================================"
 echo ""
-echo "[前置需求] 請先在 Secret Manager 建立以下 secret："
-echo "  - CRAWLER_API_KEY  (爬蟲 API 存取金鑰，例如: openssl rand -hex 32)"
-echo "  - GENAI_API_KEY    (Gemini 金鑰，供低置信度 LLM 輔助)"
-echo "  - GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / FLASK_SECRET_KEY (主程式用)"
+echo "[前置需求] 請確認 Secret Manager 已建立以下 secrets："
+echo "  CRAWLER_API_KEY / ANALYSIS_API_KEY / GENAI_API_KEY"
+echo "  GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / FLASK_SECRET_KEY"
 echo ""
 
-read -p "Do you want to continue? (y/N) " confirm
+read -p "是否繼續部署？(y/N) " confirm
 if [[ $confirm != [yY] && $confirm != [yY][eE][sS] ]]; then
-  echo "Deployment cancelled."
+  echo "部署已取消。"
   exit 0
 fi
 
 # ========================================================
-# 1) 部署獨立爬蟲服務 (content-crawler)
+# 1) 部署 content-crawler（爬蟲微服務）
 # ========================================================
 echo ""
-echo ">>> [1/2] Building & deploying crawler service..."
-gcloud builds submit crawler-service --tag gcr.io/$PROJECT_ID/$CRAWLER_SERVICE_NAME
+echo ">>> [1/3] 建立並部署 content-crawler..."
+gcloud builds submit crawler-service --tag gcr.io/$PROJECT_ID/$CRAWLER_SERVICE
 
-# 爬蟲為重資源任務：較高記憶體與 CPU、較長 timeout。
-# 受應用層 X-API-Key 保護，故維持 allow-unauthenticated（由主程式以金鑰呼叫）。
-gcloud run deploy $CRAWLER_SERVICE_NAME \
-  --image gcr.io/$PROJECT_ID/$CRAWLER_SERVICE_NAME \
+gcloud run deploy $CRAWLER_SERVICE \
+  --image gcr.io/$PROJECT_ID/$CRAWLER_SERVICE \
   --platform managed \
   --region $REGION \
   --allow-unauthenticated \
@@ -57,16 +71,38 @@ gcloud run deploy $CRAWLER_SERVICE_NAME \
   --clear-env-vars \
   --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest"
 
-# 取得爬蟲服務 URL，稍後注入主程式
-CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE_NAME \
+CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE \
   --region $REGION --platform managed --format 'value(status.url)')
-echo ">>> Crawler service URL: $CRAWLER_URL"
+echo ">>> content-crawler URL: $CRAWLER_URL"
 
 # ========================================================
-# 2) 部署主程式 (content-analyser)，並注入爬蟲服務位址與金鑰
+# 2) 部署 analysis-pipeline（分析引擎）
 # ========================================================
 echo ""
-echo ">>> [2/2] Building & deploying web app..."
+echo ">>> [2/3] 建立並部署 analysis-pipeline..."
+gcloud builds submit analysis-service --tag gcr.io/$PROJECT_ID/$ANALYSIS_SERVICE
+
+gcloud run deploy $ANALYSIS_SERVICE \
+  --image gcr.io/$PROJECT_ID/$ANALYSIS_SERVICE \
+  --platform managed \
+  --region $REGION \
+  --allow-unauthenticated \
+  --memory 2Gi \
+  --cpu 1 \
+  --timeout 600 \
+  --concurrency 2 \
+  --clear-env-vars \
+  --set-secrets "ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
+
+ANALYSIS_URL=$(gcloud run services describe $ANALYSIS_SERVICE \
+  --region $REGION --platform managed --format 'value(status.url)')
+echo ">>> analysis-pipeline URL: $ANALYSIS_URL"
+
+# ========================================================
+# 3) 部署 content-analyser（Web UI + 控制平面）
+# ========================================================
+echo ""
+echo ">>> [3/3] 建立並部署 content-analyser..."
 gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME
 
 gcloud run deploy $SERVICE_NAME \
@@ -78,11 +114,20 @@ gcloud run deploy $SERVICE_NAME \
   --cpu 1 \
   --timeout 300 \
   --clear-env-vars \
-  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL" \
-  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest"
+  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL,ANALYSIS_SERVICE_URL=$ANALYSIS_URL" \
+  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest,ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
 
+WEB_URL=$(gcloud run services describe $SERVICE_NAME \
+  --region $REGION --platform managed --format 'value(status.url)')
+
+echo ""
 echo "========================================================"
-echo "Deployment Complete!"
-echo "Web App URL is shown above. Crawler URL: $CRAWLER_URL"
-echo "IMPORTANT: Add the Web App URL + /callback to your Google OAuth Authorized Redirect URIs."
+echo "部署完成！"
+echo "Web App          : $WEB_URL"
+echo "Crawler          : $CRAWLER_URL"
+echo "Analysis Pipeline: $ANALYSIS_URL"
+echo ""
+echo "後續步驟："
+echo "  1. 將 $WEB_URL/callback 加入 Google OAuth 的授權重新導向 URI"
+echo "  2. 執行 bash setup_admin.sh 設定管理員帳號"
 echo "========================================================"
