@@ -23,9 +23,9 @@ import subprocess
 
 from flask import Flask, request, jsonify
 
-from crawler import HeadlessCrawler
+from crawler import HeadlessCrawler, UnsupportedSiteError
 
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.2.0"
 
 app = Flask(__name__)
 
@@ -76,13 +76,16 @@ def health():
     }), 200
 
 
-def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str) -> dict:
+def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
+                hard_timeout_sec: int = 60) -> dict:
     """建立爬蟲實例、執行爬取、確保釋放資源，回傳標準化結果 dict。"""
     crawler = HeadlessCrawler()
     try:
         if use_gemini and gemini_api_key:
             crawler.configure_genai(gemini_api_key)
-        return crawler.scrape(url)
+        return crawler.scrape(url, hard_timeout_sec=hard_timeout_sec)
+    except UnsupportedSiteError as e:
+        return {"status": "skipped", "url": url, "error": str(e)}
     except Exception as e:
         return {"status": "failed", "url": url, "error": str(e)}
     finally:
@@ -102,8 +105,9 @@ def scrape():
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
+    hard_timeout_sec = int(data.get("hard_timeout_sec", 60))
 
-    result = _run_scrape(url, use_gemini, gemini_api_key)
+    result = _run_scrape(url, use_gemini, gemini_api_key, hard_timeout_sec)
     http_status = 200 if result.get("status") in ("success", "skipped") else 500
     return jsonify(result), http_status
 

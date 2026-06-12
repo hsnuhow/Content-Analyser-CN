@@ -121,6 +121,13 @@ CMP_REMOVE_SELECTORS = [
 HEURISTIC_CONF_THRESHOLD = 0.55
 
 
+class UnsupportedSiteError(Exception):
+    """爬取不支援的網站時拋出（如需登入、強反爬蟲）。
+    呼叫端應視為 status='skipped'，不算爬取失敗。
+    """
+    pass
+
+
 class HeadlessCrawler:
     def __init__(self, log_callback: Optional[Callable[[str], None]] = None):
         self.driver = None  # 型別為 uc.Chrome
@@ -218,6 +225,60 @@ class HeadlessCrawler:
             self.driver.execute_script(js_patch)
         except Exception:
             pass
+
+    def _open(self, url: str, max_retries: int = 2):
+        """打開網頁，含重試邏輯（對齊 Colab v3.8 _open()）。
+        最多重試 max_retries 次，遇到逾時或連線錯誤時重試。
+        成功後自動注入 locale spoofing JS。
+        """
+        for attempt in range(1, max_retries + 1):
+            try:
+                self._log(f"[載入] 正在打開網頁 (嘗試 {attempt}/{max_retries}): {url}")
+                self.driver.get(url)
+                self._apply_locale_spoofing_js()
+                self._log("[載入] ✓ 網頁已成功載入")
+                return
+            except TimeoutException:
+                self._log(f"[載入] ⚠️ 頁面載入逾時 (嘗試 {attempt}/{max_retries})")
+                if attempt == max_retries:
+                    raise TimeoutError(f"頁面載入逾時，已重試 {max_retries} 次: {url}")
+                time.sleep(1)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if any(kw in error_msg for kw in ['timeout', 'timed out', 'connection aborted', 'connection refused']):
+                    self._log(f"[載入] ⚠️ 網路連線錯誤 (嘗試 {attempt}/{max_retries}): {e}")
+                    if attempt == max_retries:
+                        raise TimeoutError(f"網路連線錯誤，已重試 {max_retries} 次: {url}")
+                    try:
+                        self.driver.execute_script("window.stop();")
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                else:
+                    raise
+
+    def _apply_meta_fallback(self, content: str, html: str) -> str:
+        """主文過短（< 200 字）時，補入 og:description / meta description 作為導語。
+        對齊 Colab v3.8 _extract_main_text 末段邏輯。
+        """
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            meta_desc = None
+            # 優先 og:description
+            ogd = soup.find('meta', attrs={'property': 'og:description'})
+            if ogd and ogd.get('content'):
+                meta_desc = ogd['content'].strip()
+            # 次選 name=description
+            if not meta_desc:
+                m = soup.find('meta', attrs={'name': 'description'})
+                if m and m.get('content'):
+                    meta_desc = m['content'].strip()
+            if meta_desc and meta_desc not in content:
+                self._log(f"[Fallback] 主文過短（{len(content)} 字），補入 meta description")
+                return meta_desc + "\n\n" + content
+        except Exception:
+            pass
+        return content
 
     def _clear_overlays_and_click_cta(self, rounds: int = 3):
         """遮罩處理：對齊 Colab v3.8。
@@ -1021,27 +1082,54 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
-    def scrape(self, url: str) -> Dict[str, Any]:
-        self._log(f"====== Starting scrape for: {url} ======")
+    def scrape(self, url: str, hard_timeout_sec: int = 60) -> Dict[str, Any]:
+        """爬取單一網址，含硬性時限與重試邏輯（對齊 Colab v3.8）。
+
+        Args:
+            url: 目標網址
+            hard_timeout_sec: 每頁硬性時限（秒），預設 60s
+        """
+        self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
+
+        # ⭐️ [Phase 1] Dcard 直接跳過（需要登入，改用 Chrome MCP 手動蒐集）
+        if "dcard.tw" in url.lower():
+            self._log("[Crawler] Dcard URL detected - skipping (requires login).")
+            return {
+                "status": "skipped",
+                "url": url,
+                "error": "Skipped: Dcard 需要登入，請改用 Claude Cowork Chrome MCP 手動蒐集。"
+            }
+
+        deadline = time.time() + hard_timeout_sec
+
         if self.driver is None:
             self._init_driver()
 
         try:
-            self.driver.get(url)
-            self._apply_locale_spoofing_js()
+            # ⭐️ [Phase 1] 使用 _open() 重試邏輯（對齊 Colab v3.8）
+            self._open(url)
             self._wait_for_content_load()
+
+            if time.time() > deadline:
+                raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（載入階段後）")
 
             # 遮罩處理（OneTrust → Fides → 通用後備），對齊 Colab v3.8
             self._clear_overlays_and_click_cta()
 
+            if time.time() > deadline:
+                raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（遮罩處理後）")
+
             initial_source = self.driver.page_source
             initial_soup = BeautifulSoup(initial_source, 'html.parser')
             if self._is_listing_page(initial_soup):
-                self._log(f"[Execution Strategy] Detected a listing page. Skipping to avoid incorrect extraction.")
+                self._log("[Execution Strategy] Detected a listing page. Skipping.")
                 return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
             self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
             self._scroll_and_wait_for_full_load()
+
+            if time.time() > deadline:
+                raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（滾動階段後）")
 
             if 'marieclaire.com' in url.lower():
                 self._wait_for_marieclaire_content()
@@ -1055,9 +1143,19 @@ class HeadlessCrawler:
             self._log(f"[Extraction] Page loaded. Title: '{title}'. Starting main content analysis.")
 
             content = self._extract_main_text(final_source, url)
+
+            # ⭐️ [Phase 1] 主文過短時補入 meta description（對齊 Colab v3.8）
+            if len(content or '') < 200:
+                content = self._apply_meta_fallback(content or '', final_source)
+
             if not content:
                 return {"status": "failed", "url": url, "error": "Extracted content is empty after full analysis."}
+
             return {"status": "success", "url": url, "title": title, "content": content, "length": len(content)}
+
+        except TimeoutError as e:
+            self._log(f"[Crawler] 硬性時限超過: {e}")
+            return {"status": "failed", "url": url, "error": str(e)}
         except Exception as e:
             self._log(f"[Crawler] CRITICAL ERROR during scrape for {url}: {e}")
             traceback.print_exc()

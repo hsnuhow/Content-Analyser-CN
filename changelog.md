@@ -115,6 +115,31 @@
         2.  從 Git 索引中移除敏感檔案。
         3.  重建 Git 歷史（force push 單一乾淨 commit）以徹底清除過去 Commit 中的金鑰紀錄。✅
 
+## 2026-06-12 (Phase 0 + Phase 1)
+- **Chore (Phase 0 - 清理地基)**:
+    - **目的**: 移除所有架構錯誤的舊設計，為新架構打好基礎。
+    - **解決方式**:
+        1.  移除 `CRAWLER_LOCK`（全域鎖在微服務架構無意義）與 `analysis_pipeline()`（主程式不再協調爬蟲）。
+        2.  移除 hardcode `ADMIN_EMAIL`，改為 `get_admin_email()` 從 Firestore `system/config` 讀取。
+        3.  刪除 `app/export_utils.py`（輸出改為 Markdown）。
+        4.  精簡 `app/crawler_client.py` 為 health check only。
+        5.  `requirements.txt` 移除 `beautifulsoup4`、`lxml`、`python-docx`。
+        6.  修正 `devserver.sh` shebang 與 PORT 預設值。
+        7.  新增 `setup_admin.sh.example` 與 `app/services.py` 的 `get_admin_email()`。
+        8.  `/submit_task`、`/task_status`、`/stop_task`、`/download_project` 改為 503 stub。
+    - **修改的程式函式**: `analysis_pipeline`, `CRAWLER_LOCK` in `app/worker.py`（移除）；`get_admin_email` in `app/services.py`（新增）；`admin_required` in `app/admin_routes.py`；全部路由 in `app/routes.py`。
+
+- **Feature (Phase 1 - 爬蟲補強，對齊 Colab v3.8)**:
+    - **目的**: 補強 `content-crawler` 的穩健性，對齊已驗證的 Colab v3.8 實作。
+    - **解決方式**:
+        1.  **新增 `UnsupportedSiteError`**: 不支援的網站（如 Dcard）直接拋出，呼叫端視為 `status=skipped`。
+        2.  **Dcard 跳過**: `scrape()` 開頭偵測 `dcard.tw`，直接回傳 skipped（需登入，改用 Chrome MCP）。
+        3.  **新增 `_open()` 重試邏輯**: 最多 2 次重試，含逾時偵測與 `window.stop()` 重置（對齊 Colab）。
+        4.  **每頁硬性時限**: `scrape()` 加入 `hard_timeout_sec=60` 參數，在載入、遮罩、滾動後各做 deadline 檢查。
+        5.  **新增 `_apply_meta_fallback()`**: 主文 < 200 字時補入 `og:description` / `meta[name=description]`（對齊 Colab）。
+        6.  **`crawler-service/app.py` 版本升級為 1.2.0**：`/api/scrape` 支援呼叫端自訂 `hard_timeout_sec`。
+    - **修改的程式函式**: `scrape`, `_open`, `_apply_meta_fallback`, `UnsupportedSiteError` in `crawler-service/crawler.py`；`_run_scrape`, `/api/scrape` in `crawler-service/app.py`。
+
 ## 2026-06-12 (Crawler Microservice)
 - **Refactor (Architecture)**:
     - **目的**: 將爬蟲從主程式內嵌架構，拆分為完全獨立的 Cloud Run 微服務（`content-crawler`），使其可被任何外部系統（Colab、Claude Cowork 等）呼叫。
