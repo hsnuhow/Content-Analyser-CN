@@ -1,8 +1,9 @@
-# Secrets
+# Secrets & Setup Scripts（含敏感資訊，不提交）
 .env
 .env.local
 setup_secret.sh
 setup_secret.sh.local
+setup_admin.sh
 
 # Environments & Snapshots
 .venv/

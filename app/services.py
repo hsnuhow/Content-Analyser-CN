@@ -38,7 +38,7 @@ def set_secret(secret_id, payload, project_id=None):
     """更新 Secret 的輔助函式"""
     if not project_id:
         project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    
+
     client = secretmanager.SecretManagerServiceClient()
     parent = f"projects/{project_id}/secrets/{secret_id}"
 
@@ -52,3 +52,18 @@ def set_secret(secret_id, payload, project_id=None):
     except Exception as e:
         print(f"[SecretManager] Failed to update {secret_id}: {e}")
         return False
+
+
+def get_admin_email():
+    """從 Firestore system/config 讀取管理員 email。
+
+    管理員身份不寫死在程式碼中，由 setup_admin.sh 一次性寫入。
+    若尚未設定，回傳 None。
+    """
+    try:
+        doc = db.collection('system').document('config').get()
+        if doc.exists:
+            return doc.to_dict().get('admin_email')
+    except Exception as e:
+        print(f"[Services] 無法讀取 admin_email: {e}")
+    return None

@@ -1,0 +1,34 @@
+#!/bin/bash
+# setup_admin.sh.example
+#
+# 首次部署初始化腳本（範本）
+# 複製此檔案為 setup_admin.sh，填入正確的值後執行一次。
+# setup_admin.sh 已加入 .gitignore，不會被提交。
+#
+# 功能：將管理員 email 寫入 Firestore system/config.admin_email
+# 系統在執行期間從此處讀取管理員身份，不寫死在程式碼中。
+#
+# 使用方式：
+#   cp setup_admin.sh.example setup_admin.sh
+#   # 編輯 setup_admin.sh，填入正確的 PROJECT_ID 和 ADMIN_EMAIL
+#   bash setup_admin.sh
+
+set -e
+
+PROJECT_ID="your-gcp-project-id"    # ← 填入你的 GCP Project ID
+ADMIN_EMAIL="admin@example.com"      # ← 填入管理員的 Google 帳號 email
+
+echo "設定 GCP Project..."
+gcloud config set project "$PROJECT_ID"
+
+echo "寫入管理員 email 至 Firestore system/config..."
+gcloud firestore documents create \
+  "projects/${PROJECT_ID}/databases/(default)/documents/system/config" \
+  --fields="admin_email=${ADMIN_EMAIL}" \
+  2>/dev/null || \
+gcloud firestore documents update \
+  "projects/${PROJECT_ID}/databases/(default)/documents/system/config" \
+  --fields="admin_email=${ADMIN_EMAIL}"
+
+echo "✅ 完成。管理員設定為：${ADMIN_EMAIL}"
+echo "   系統將從 Firestore system/config.admin_email 讀取此設定。"
