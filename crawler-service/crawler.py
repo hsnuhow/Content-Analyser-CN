@@ -215,11 +215,11 @@ class HeadlessCrawler:
         except Exception as e:
             self._log(f"[INIT] CDP 設定略過: {e}")
 
-        # 頁面載入逾時放寬：Cloud Run 跨國爬取國際媒體站（如美國 Hearst/Condé）
-        # eager 載入也可能 25–40 秒，25s 太緊會在 _open 連續逾時。
-        self.driver.set_page_load_timeout(50)
-        self.driver.set_script_timeout(20)
-        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面50s，腳本20s）")
+        # none 策略下 driver.get 仍受 page_load_timeout 影響而阻塞；設短（15s）
+        # 讓它快返回，改由 _open 的主動 poll（readyState + 內文穩定）控制等待。
+        self.driver.set_page_load_timeout(15)
+        self.driver.set_script_timeout(15)
+        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面15s，腳本15s）")
         return self.driver
 
     def _apply_locale_spoofing_js(self):
@@ -235,37 +235,59 @@ class HeadlessCrawler:
         except Exception:
             pass
 
-    def _open(self, url: str, max_load_wait: int = 30, max_retries: int = 2):
-        """打開網頁，採「none 策略 + 主動 poll readyState」可控載入。
+    def _open(self, url: str, max_load_wait: int = 45, max_retries: int = 2):
+        """打開網頁，採「none 策略 + 主動等待（readyState + 內文穩定）」。
 
-        page_load_strategy="none" 下 driver.get() 立即返回（不等載入）。
-        我們主動 poll document.readyState：
-          - 達 'interactive'（HTML 解析完、DOM 可用）或 'complete' → 再緩衝 2 秒
-            讓主要內容渲染，然後 window.stop() 停止後續資源載入。
-          - 最多等 max_load_wait 秒（預設 30s），超過就直接 stop 用當下 DOM。
-        這繞過 undetected-chromedriver 不理會 set_page_load_timeout 的問題，
-        且避免在重型站等滿 DOMContentLoaded（可達 90 秒）。
+        page_load_strategy="none"，driver.get() 受短 page_load_timeout 限制快返回。
+        然後分兩階段主動等待：
+          階段1：poll document.readyState 達 interactive/complete（HTML 已解析）。
+          階段2：poll document.body.innerText 長度，等它「渲染穩定」
+                 （連續多次不再明顯成長）——針對 client-side render 的頁面
+                 （如 GQ 等 Next.js 專題頁），文字靠 JS 填入，需等渲染完才抽取。
+        達穩定或超過 max_load_wait（45s）即 window.stop() 用當前 DOM。
         僅「真正的網路連線錯誤」才重試。
         """
         for attempt in range(1, max_retries + 1):
             try:
                 self._log(f"[載入] 開啟網頁 (嘗試 {attempt}/{max_retries}): {url}")
-                self.driver.get(url)  # none 策略：立即返回
+                try:
+                    self.driver.get(url)
+                except TimeoutException:
+                    # none 策略 + 短 page_load_timeout：get 逾時但頁面仍在載入，繼續等。
+                    pass
 
                 start = time.time()
-                reached = False
+
+                # 階段1：等 DOM 可用
                 while time.time() - start < max_load_wait:
                     try:
                         state = self.driver.execute_script("return document.readyState")
                     except Exception:
                         state = None
                     if state in ("interactive", "complete"):
-                        reached = True
                         break
                     time.sleep(0.5)
 
-                # 緩衝讓主要內容渲染，然後停止後續資源載入
-                time.sleep(2)
+                # 階段2：等內文渲染穩定（針對 JS 動態渲染的頁面）
+                last_len = -1
+                stable = 0
+                while time.time() - start < max_load_wait:
+                    try:
+                        cur_len = int(self.driver.execute_script(
+                            "return (document.body && document.body.innerText) ? document.body.innerText.length : 0"
+                        ) or 0)
+                    except Exception:
+                        cur_len = last_len
+                    # 內文已有一定量且相較上次成長 < 3% → 視為穩定
+                    if cur_len > 300 and last_len > 0 and cur_len <= last_len * 1.03:
+                        stable += 1
+                        if stable >= 2:
+                            break
+                    else:
+                        stable = 0
+                    last_len = cur_len
+                    time.sleep(1)
+
                 try:
                     self.driver.execute_script("window.stop();")
                 except Exception:
@@ -273,8 +295,7 @@ class HeadlessCrawler:
                 self._apply_locale_spoofing_js()
 
                 waited = int(time.time() - start)
-                self._log(f"[載入] ✓ readyState={'interactive+' if reached else 'timeout'}，"
-                          f"等待 {waited}s 後停止，使用當前 DOM")
+                self._log(f"[載入] ✓ 內文長度 {last_len}，等待 {waited}s 後停止，使用當前 DOM")
                 return
 
             except Exception as e:
