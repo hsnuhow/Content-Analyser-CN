@@ -212,9 +212,11 @@ class HeadlessCrawler:
         except Exception as e:
             self._log(f"[INIT] CDP 設定略過: {e}")
 
-        self.driver.set_page_load_timeout(25)
-        self.driver.set_script_timeout(15)
-        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面25s，腳本15s）")
+        # 頁面載入逾時放寬：Cloud Run 跨國爬取國際媒體站（如美國 Hearst/Condé）
+        # eager 載入也可能 25–40 秒，25s 太緊會在 _open 連續逾時。
+        self.driver.set_page_load_timeout(50)
+        self.driver.set_script_timeout(20)
+        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面50s，腳本20s）")
         return self.driver
 
     def _apply_locale_spoofing_js(self):
