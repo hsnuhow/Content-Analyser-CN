@@ -19,7 +19,7 @@ import os
 from functools import wraps
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
 from firebase_admin import firestore
-from .services import db, get_admin_email, ensure_user, update_last_login
+from .services import db, get_admin_email, ensure_user, update_last_login, get_user
 from . import oauth
 
 bp = Blueprint('main_bp', __name__)
@@ -34,7 +34,6 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if 'user' not in session:
             if is_dev_env():
-                # Dev 模式：以管理員身份自動登入（從 Firestore 讀取，未設定則用預設）
                 admin_email = get_admin_email() or os.environ.get('DEV_LOGIN_EMAIL', 'dev@localhost')
                 print(f"[Debug] login_required: Dev 自動登入 {admin_email}")
                 session['user'] = {
@@ -42,8 +41,15 @@ def login_required(f):
                     'email': admin_email,
                     'picture': 'https://via.placeholder.com/150'
                 }
+                session['whitelist_status'] = 'approved'
                 return f(*args, **kwargs)
             return redirect(url_for('main_bp.auth'))
+
+        # 若 session 沒有 whitelist_status，從 Firestore 補查
+        if 'whitelist_status' not in session:
+            email = session['user'].get('email', '')
+            session['whitelist_status'] = ensure_user(email)
+
         return f(*args, **kwargs)
     return decorated_function
 

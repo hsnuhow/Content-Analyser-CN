@@ -1,6 +1,6 @@
 # CLAUDE.md — Content Analyser CN
 
-**Version:** 2.0  
+**Version:** 3.0  
 **Scope:** 本專案的全部開發、測試、部署規範。適用於 Claude Code 與所有開發協作者。  
 **Primary Rule:** 安全、可回溯、先計畫後執行。Safety, traceability, and plan-before-action come first.
 
@@ -261,11 +261,13 @@ git diff --stat
 
 ```bash
 # 主程式
-python3 -m py_compile app/routes.py app/worker.py app/crawler_client.py \
-    app/services.py app/admin_routes.py app/export_utils.py main.py
+python3 -m py_compile app/*.py main.py
 
 # 爬蟲服務
 python3 -m py_compile crawler-service/app.py crawler-service/crawler.py
+
+# 分析服務
+python3 -m py_compile analysis-service/*.py
 
 # Shell scripts
 bash -n deploy.sh
@@ -352,9 +354,9 @@ git diff HEAD~1 -- Dockerfile crawler-service/Dockerfile requirements.txt crawle
 ### 6.1 語法驗證（強制，deploy 前執行）
 
 ```bash
-python3 -m py_compile app/routes.py app/worker.py app/crawler_client.py \
-    app/services.py app/admin_routes.py app/export_utils.py main.py && \
+python3 -m py_compile app/*.py main.py && \
 python3 -m py_compile crawler-service/app.py crawler-service/crawler.py && \
+python3 -m py_compile analysis-service/*.py && \
 bash -n deploy.sh && \
 echo "✅ 全部通過"
 ```
@@ -607,278 +609,231 @@ gcloud secrets versions access ...
 
 ---
 
----
 
 # 附錄 A：專案架構
 
 ## 概覽
 
-**給康泰用的內容爬蟲與 AI 分析平台。**
+**給康泰用的內容策略分析平台。**
 
-將文章 URL 貼入後，系統自動爬取全文並輸出 Word 報告（.docx）。採用兩個獨立的 Google Cloud Run 服務，以 HTTP API 互相溝通。
+使用者自行蒐集內容（爬蟲 / Chrome MCP / 直接貼上），送入分析引擎，產出含「用戶搜尋情境分析」的 Markdown 洞察報告。採用**三個獨立的 Google Cloud Run 服務**，以 HTTP API 溝通。
+
+完整產品規格見 `product_guideline.md`，本附錄為快速索引。
 
 - **GitHub**: https://github.com/hsnuhow/Content-Analyser-CN
-- **管理員 Email**: how.penguin@gmail.com
+- **管理員**: 由 `system/config.admin_email`（Firestore）決定，不寫死在程式碼
 
-## 服務架構圖
+## 三服務架構圖
 
 ```
-使用者（瀏覽器）
-      │ Google OAuth 2.0
-      ▼
-┌──────────────────────────────────────────────┐
-│  content-analyser（Cloud Run，1Gi）          │
-│  Flask Web UI + Firestore + OAuth            │
-│                                              │
-│  app/__init__.py      App Factory            │
-│  app/routes.py        主路由（任務管理）     │
-│  app/admin_routes.py  /admin 管理介面        │
-│  app/worker.py        背景分析 Pipeline      │
-│  app/crawler_client.py  爬蟲 HTTP 客戶端     │
-│  app/export_utils.py  .docx 報告匯出        │
-│  app/services.py      Firebase/Secret 初始化 │
-│  app/templates/       Jinja2 模板            │
-│  app/static/          CSS / JS              │
-└──────────────────────────────────────────────┘
-      │ HTTP POST /api/scrape
-      │ Header: X-API-Key: CRAWLER_API_KEY
-      ▼
-┌──────────────────────────────────────────────┐
-│  content-crawler（Cloud Run，4Gi）           │
-│  獨立爬蟲微服務，Chrome + Selenium          │
-│                                              │
-│  crawler-service/app.py     API 入口         │
-│  crawler-service/crawler.py 爬蟲核心         │
-│  crawler-service/Dockerfile Chrome 安裝      │
-└──────────────────────────────────────────────┘
-      │ 低置信度時
-      ▼
-  Gemini API（google-genai）
-      │
-      ▼
-  Firestore（任務狀態、使用者設定、爬取結果）
+CLIENT：Web UI / Google Colab / Claude Cowork
+            │ OAuth（Web）或 X-API-Key（外部工具）
+            ▼
+┌────────────────────────────────────────────────┐
+│  content-analyser（Cloud Run，1Gi）            │
+│  控制平面 + Web UI                              │
+│  認證白名單 / Project 管理 / 服務監控 / 金鑰   │
+└───────┬──────────────────────────┬─────────────┘
+        │ HTTP X-API-Key           │ HTTP X-API-Key
+        ▼                          ▼
+┌──────────────────┐    ┌──────────────────────────┐
+│ content-crawler  │    │ analysis-pipeline        │
+│ （4Gi，Chrome）  │    │ （2Gi，NLP + Vertex AI） │
+│ 爬取 → 純文字    │    │ 內容 → Markdown 報告     │
+└──────────────────┘    └──────────────────────────┘
+                                   │
+                          Vertex AI Embedding（系統）
+                          + 用戶 LLM Key（Gemini/Claude）
+                                   │
+                                   ▼
+                          Firestore（任務、Project、報告）
 ```
 
 ## 目錄結構
 
 ```
 Content-Analyser-CN/
-├── main.py                    Flask 入口
-├── requirements.txt           主程式相依（無 Chrome/Selenium）
-├── Dockerfile                 主程式容器（輕量，無 Chrome）
-├── deploy.sh                  兩服務部署腳本
-├── devserver.sh               本地開發啟動腳本
-├── CLAUDE.md                  本文件
-├── changelog.md               變更記錄
-├── app/
-│   ├── __init__.py            App Factory + OAuth 初始化
-│   ├── routes.py              主路由（/、/submit_task、/task_status 等）
-│   ├── admin_routes.py        /admin 路由（僅管理員）
-│   ├── worker.py              背景 Pipeline（threading）
-│   ├── crawler_client.py      爬蟲服務 HTTP 客戶端
-│   ├── export_utils.py        .docx 報告生成
-│   ├── services.py            Firebase Admin + Secret Manager 初始化
-│   ├── templates/             Jinja2 HTML 模板
-│   └── static/                CSS / JS
-└── crawler-service/
-    ├── app.py                 爬蟲 Flask API 入口
-    ├── crawler.py             HeadlessCrawler 核心邏輯
-    ├── requirements.txt       爬蟲服務相依（含 Chrome/Selenium）
-    ├── Dockerfile             含 Chrome 安裝的容器
-    └── README.md              爬蟲服務獨立說明
+├── main.py / requirements.txt / Dockerfile     主程式（無 Chrome）
+├── deploy.sh                                    三服務部署腳本
+├── setup_admin.sh.example                       管理員初始化範本
+├── CLAUDE.md / product_guideline.md / development_plan.md / changelog.md
+├── app/                            content-analyser（控制平面）
+│   ├── __init__.py                 App Factory + OAuth + Blueprint 註冊
+│   ├── routes.py                   主路由 + 白名單流程（/pending）
+│   ├── project_routes.py           Project CRUD + 分析提交/查看/下載
+│   ├── admin_routes.py             /admin：用戶管理、服務監控、金鑰
+│   ├── services.py                 Firebase / Secret / 用戶管理函式
+│   ├── crawler_client.py           爬蟲服務 health check 客戶端
+│   ├── analysis_client.py          分析服務 HTTP 客戶端
+│   ├── worker.py                   （Phase 0 已清空，預留）
+│   ├── templates/                  Jinja2 模板
+│   └── static/                     CSS / JS
+├── crawler-service/                content-crawler（獨立）
+│   ├── app.py / crawler.py / Dockerfile / requirements.txt / README.md
+└── analysis-service/               analysis-pipeline（獨立）
+    ├── app.py                      API 入口（非同步 job）
+    ├── pipeline.py                 主協調器（雙路平行 → Synthesis）
+    ├── nlp_path.py                 Path 1：TF-IDF + Vertex AI 分群
+    ├── llm_path.py                 Path 2：搜尋意圖 + 質化分析
+    ├── synthesis.py                Synthesis LLM
+    ├── report.py                   Markdown 報告組裝
+    ├── llm_client.py               Gemini / Claude 統一介面
+    └── Dockerfile / requirements.txt
 ```
 
 ## 角色與權限
 
-| 角色 | 識別 | 可存取路由 |
-|------|------|-----------|
-| Admin | `how.penguin@gmail.com` | 全部，含 `/admin` |
-| User | 其他 Google 帳號 | `/`、`/profile`、任務相關路由 |
+兩層角色，詳見 `product_guideline.md` 第 5 節。
 
-## API Key 使用順序（爬蟲任務）
+**系統層**：System Admin（`system/config.admin_email`）/ Whitelisted User / Pending User
+**Project 層**：Owner / Editor / Viewer
 
-1. 使用者個人 Gemini Key（Firestore `users/{email}.gemini_api_key`）
-2. 系統預設 Key（`GENAI_API_KEY` 環境變數）
-3. 若均無，純啟發式爬取（不呼叫 Gemini）
+## LLM Key 分層
+
+| 用途 | 服務 | Key 來源 |
+|------|------|---------|
+| 爬蟲 selector 輔助 | content-crawler | Secret Manager（系統，不公開）|
+| 內容分析 | analysis-pipeline | 用戶自備（per-project，存 Firestore）|
+| 語意向量 | analysis-pipeline | GCP Service Account（系統，Vertex AI）|
 
 ---
 
-# 附錄 B：爬蟲服務 API
+# 附錄 B：服務 API
 
-**服務名稱**: `content-crawler`  
-**Base URL**: `CRAWLER_SERVICE_URL`（部署後由 `gcloud run services describe` 取得）  
-**驗證**: 所有 `/api/*` 端點需 Header `X-API-Key: <CRAWLER_API_KEY>`
+完整 API 規格見 `product_guideline.md` 第 4.2 節與附錄。以下為快速索引。
 
-## GET /health
+## content-crawler（X-API-Key 保護）
 
-健康檢查，不需 API Key，供 Cloud Run 探活與外部監控。
+| 端點 | 說明 |
+|------|------|
+| `GET /health` | 探活（無需金鑰）|
+| `POST /api/scrape` | 爬取單一 URL，支援 `hard_timeout_sec` |
+| `POST /api/scrape/batch` | 批次（最多 20）|
 
-**Response**:
+回傳：`{status: success/skipped/failed, url, title, content, length}`
+
+## analysis-pipeline（X-API-Key 保護）
+
+| 端點 | 說明 |
+|------|------|
+| `GET /health` | 探活（無需金鑰）|
+| `POST /api/analyse` | 提交分析（非同步），回傳 `{job_id}` |
+| `GET /api/analyse/{job_id}` | 查詢進度與結果 |
+
+`POST /api/analyse` body：
 ```json
 {
-  "status": "ok",
-  "service": "content-crawler",
-  "version": "1.1.0",
-  "chrome": "Google Chrome 122.0.6261.94",
-  "api_key_configured": true
+  "report_title": "...",
+  "contents": [{"url","title","text","source_type"}],
+  "llm_provider": "gemini|claude",
+  "llm_model": "gemini-2.0-flash",
+  "llm_api_key": "..."
 }
 ```
 
-## POST /api/scrape
-
-爬取單一 URL，同步執行。
-
-**Request**:
-```json
-{
-  "url": "https://example.com/article",
-  "use_gemini": false,
-  "gemini_api_key": "AIza..."
-}
-```
-
-| 欄位 | 型別 | 必填 | 說明 |
-|------|------|------|------|
-| `url` | string | ✅ | 必須以 http:// 或 https:// 開頭 |
-| `use_gemini` | bool | 否 | 預設 false |
-| `gemini_api_key` | string | 否 | 不傳則使用服務預設 Key |
-
-**Response**:
-
-| status | 說明 | HTTP |
-|--------|------|------|
-| `success` | 爬取成功 | 200 |
-| `skipped` | 偵測為列表頁，略過 | 200 |
-| `failed` | 爬取失敗 | 500 |
-
-```json
-// 成功
-{"status": "success", "url": "...", "title": "...", "content": "...", "length": 1234}
-
-// 略過
-{"status": "skipped", "url": "...", "error": "Skipped: URL is an article list/category page."}
-
-// 失敗
-{"status": "failed", "url": "...", "error": "..."}
-```
-
-## POST /api/scrape/batch
-
-批次爬取多個 URL，依序同步執行，最多 20 個。
-
-**Request**:
-```json
-{
-  "urls": ["https://...", "https://..."],
-  "use_gemini": false,
-  "gemini_api_key": "AIza..."
-}
-```
-
-**Response**:
-```json
-{
-  "results": [<result>, ...],
-  "total": 2,
-  "succeeded": 1,
-  "failed": 1
-}
-```
-
-## 從 Colab / 外部系統呼叫
+## 從 Colab / 外部工具呼叫
 
 ```python
 import requests
 
-CRAWLER_URL = "https://content-crawler-xxxxx.run.app"
-API_KEY = "your-crawler-api-key"
+# 1. 爬取
+crawled = requests.post(
+    "https://content-crawler-xxx.run.app/api/scrape",
+    json={"url": "https://example.com/article"},
+    headers={"X-API-Key": CRAWLER_KEY}, timeout=300).json()
 
-# 單一 URL
-result = requests.post(
-    f"{CRAWLER_URL}/api/scrape",
-    json={"url": "https://example.com/article", "use_gemini": True},
-    headers={"X-API-Key": API_KEY},
-    timeout=300
-).json()
+# 2. 分析（自帶 LLM Key）
+job = requests.post(
+    "https://analysis-pipeline-xxx.run.app/api/analyse",
+    json={"report_title": "...", "contents": [...],
+          "llm_provider": "gemini", "llm_model": "gemini-2.0-flash",
+          "llm_api_key": GEMINI_KEY},
+    headers={"X-API-Key": ANALYSIS_KEY}, timeout=30).json()
 
-# 批次
-batch = requests.post(
-    f"{CRAWLER_URL}/api/scrape/batch",
-    json={"urls": ["https://...", "https://..."]},
-    headers={"X-API-Key": API_KEY},
-    timeout=1500
-).json()
+# 3. 輪詢
+status = requests.get(
+    f"https://analysis-pipeline-xxx.run.app/api/analyse/{job['job_id']}",
+    headers={"X-API-Key": ANALYSIS_KEY}).json()
 ```
 
 ---
 
 # 附錄 C：Firestore Schema
 
-```
-users/{email}
-  ├── gemini_api_key: string        使用者個人 Gemini API Key
-  ├── updated_at: timestamp
-  └── projects/{project_id}         Auto-ID，由 Firestore 產生
-        ├── status: string          "pending" | "completed" | "failed" | "cancelled"
-        ├── progress: number        0–100
-        ├── log: string             最新狀態訊息（供前端顯示）
-        ├── report_title: string    使用者填寫的報告名稱
-        ├── input_urls: [string]    使用者輸入的 URL 清單
-        ├── use_gemini: bool        是否啟用 Gemini 輔助
-        ├── created_at: timestamp
-        ├── updated_at: timestamp
-        └── pages/{auto_id}         每個 URL 的爬取結果
-              ├── url: string
-              ├── status: string    "success" | "failed" | "skipped"
-              ├── title: string     文章標題（成功時）
-              ├── content: string   爬取的主文（成功時）
-              ├── length: number    主文字元數（成功時）
-              ├── error: string     錯誤訊息（失敗時）
-              └── crawled_at: timestamp
-```
+> 完整 schema 見 `product_guideline.md` 第 9 節。舊 `users/{email}/projects/` 已廢棄。
 
-**注意**：`pages` 子集合目前沒有排序保證，匯出 .docx 時需要依 `crawled_at` 排序。
+```
+system/config
+  admin_email: string             setup_admin.sh 寫入
+
+users/{email}
+  display_name / picture: string
+  whitelist_status: string        "pending" | "approved" | "rejected"
+  added_by / approved_at / last_login
+  usage_log/{id}                  使用量（按用戶）
+
+projects/{project_id}             頂層，多人協作
+  title / description / owner: string
+  members: map                    {email: "editor"|"viewer"}
+  llm_config: map                 {provider, model, api_key}（Owner 設定）
+  analyses/{analysis_id}
+    report_title / status / progress / log
+    job_id                        對應 analysis-pipeline 的 job
+    n_articles / llm_provider / llm_model
+    submitted_by / submitted_at / completed_at
+    result_markdown: string
+
+api_keys/{key_id}                 外部工具金鑰（Admin 管理）
+  name / key_hash / permissions / is_active / call_count
+
+# analysis-pipeline 自管（獨立）：
+analysis_jobs/{job_id}            非同步任務狀態
+  status / progress / log / result_markdown
+```
 
 ---
 
 # 附錄 D：環境變數
 
-## content-analyser（主程式）
+## content-analyser
 
 | 變數 | 來源 | 說明 |
 |------|------|------|
-| `SECRET_KEY` | Secret Manager: `FLASK_SECRET_KEY` | Flask Session 加密金鑰 |
-| `GOOGLE_CLIENT_ID` | Secret Manager | Google OAuth Client ID |
-| `GOOGLE_CLIENT_SECRET` | Secret Manager | Google OAuth Client Secret |
-| `CRAWLER_SERVICE_URL` | deploy.sh 自動注入 | 爬蟲服務 Cloud Run URL |
-| `CRAWLER_API_KEY` | Secret Manager | 呼叫爬蟲服務的 API Key |
-| `GENAI_API_KEY` | Secret Manager | 系統預設 Gemini Key |
-| `FLASK_DEBUG` | 本地 `.env` 僅 | `1` = Dev 模式，自動登入 Admin |
+| `SECRET_KEY` | Secret Manager: FLASK_SECRET_KEY | Flask Session |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Secret Manager | OAuth |
+| `GOOGLE_CLOUD_PROJECT` | Cloud Run 自動 | Firestore |
+| `CRAWLER_SERVICE_URL` | deploy.sh 注入 | 爬蟲服務 URL |
+| `CRAWLER_API_KEY` | Secret Manager | 呼叫爬蟲金鑰 |
+| `ANALYSIS_SERVICE_URL` | deploy.sh 注入 | 分析服務 URL |
+| `ANALYSIS_API_KEY` | Secret Manager | 呼叫分析金鑰 |
+| `GENAI_API_KEY` | Secret Manager | 爬蟲 selector 輔助 |
+| `FLASK_DEBUG` | 本地 `.env` | `1` = Dev 自動登入 |
 
-## content-crawler（爬蟲服務）
+## content-crawler
 
-| 變數 | 來源 | 說明 |
-|------|------|------|
-| `CRAWLER_API_KEY` | Secret Manager | API 驗證金鑰 |
-| `GENAI_API_KEY` | Secret Manager | Gemini API Key |
-| `CHROME_BIN` | Dockerfile ENV | 固定 `/usr/bin/google-chrome` |
-| `CHROMEDRIVER_PATH` | Dockerfile ENV | 固定 `/usr/bin/chromedriver` |
+| 變數 | 說明 |
+|------|------|
+| `CRAWLER_API_KEY` | API 驗證金鑰 |
+| `GENAI_API_KEY` | Gemini（selector 輔助）|
+| `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 |
 
-## Secret Manager 金鑰操作
+## analysis-pipeline
+
+| 變數 | 說明 |
+|------|------|
+| `ANALYSIS_API_KEY` | API 驗證金鑰 |
+| `GOOGLE_CLOUD_PROJECT` | Vertex AI Embedding + Firestore |
+
+## Secret Manager 操作
 
 ```bash
-# 產生強金鑰（CRAWLER_API_KEY 用）
-openssl rand -hex 32
-
-# 建立 secret（首次）
-echo -n "your-value" | gcloud secrets create CRAWLER_API_KEY --data-file=-
-
-# 更新 secret（後續）
-echo -n "new-value" | gcloud secrets versions add CRAWLER_API_KEY --data-file=-
-
-# 確認 secrets 存在（不讀取值）
-gcloud secrets list --format="table(name)"
+openssl rand -hex 32                              # 產生金鑰
+echo -n "value" | gcloud secrets create NAME --data-file=-       # 首次
+echo -n "value" | gcloud secrets versions add NAME --data-file=- # 更新
+gcloud secrets list --format="table(name)"        # 確認（不讀值）
 ```
+
+必要 secrets：`FLASK_SECRET_KEY`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`CRAWLER_API_KEY`、`ANALYSIS_API_KEY`、`GENAI_API_KEY`
 
 ---
 
@@ -887,51 +842,37 @@ gcloud secrets list --format="table(name)"
 ## 本地開發
 
 ```bash
-# 建立虛擬環境（首次）
-python3 -m venv .venv
-
-# 啟動虛擬環境
-source .venv/bin/activate
-
-# 安裝主程式相依
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env    # 填入實際值
+FLASK_DEBUG=1 python main.py
+```
 
-# 啟動主程式（Dev 模式，自動登入 how.penguin@gmail.com）
-FLASK_DEBUG=1 GOOGLE_CLOUD_PROJECT=your-project-id python main.py
+## 語法檢查（全部三服務）
 
-# 語法檢查（全部）
-python3 -m py_compile app/routes.py app/worker.py app/crawler_client.py \
-    app/services.py app/admin_routes.py app/export_utils.py main.py \
-    crawler-service/app.py crawler-service/crawler.py && \
+```bash
+python3 -m py_compile app/*.py main.py && \
+python3 -m py_compile crawler-service/app.py crawler-service/crawler.py && \
+python3 -m py_compile analysis-service/*.py && \
 bash -n deploy.sh && echo "✅ 全部通過"
 ```
 
-## Git 操作
+## 首次部署
 
 ```bash
-# 查看狀態
-git status && git log --oneline -5
-
-# 建立 feature branch
-git checkout -b feature/your-feature-name
-
-# 建立 snapshot tag
-git tag -a snapshot-YYYYMMDD-描述 -m "snapshot: 說明"
-
-# 查看所有 tags
-git tag -l --sort=-version:refname | head -10
+gcloud config set project YOUR_PROJECT_ID
+# 確認所有 Secret Manager secrets 已建立
+bash deploy.sh                       # 部署三個服務
+cp setup_admin.sh.example setup_admin.sh   # 填入 admin email
+bash setup_admin.sh                  # 設定管理員
+# 將 Web URL + /callback 加入 OAuth 授權重新導向 URI
 ```
 
 ## Cloud Run 查詢
 
 ```bash
-# 列出所有服務
 gcloud run services list --platform managed --region asia-east1
-
-# 查看服務詳情（含 URL）
-gcloud run services describe content-crawler --region asia-east1 --format "value(status.url)"
-
-# 查看 logs
-gcloud run services logs read content-analyser --region asia-east1 --limit 50
-gcloud run services logs read content-crawler  --region asia-east1 --limit 50
+gcloud run services logs read content-analyser  --region asia-east1 --limit 50
+gcloud run services logs read content-crawler   --region asia-east1 --limit 50
+gcloud run services logs read analysis-pipeline --region asia-east1 --limit 50
 ```

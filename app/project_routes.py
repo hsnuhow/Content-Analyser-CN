@@ -24,7 +24,7 @@ from flask import (Blueprint, render_template, request, jsonify,
 from firebase_admin import firestore
 from io import BytesIO
 
-from .services import db, get_admin_email
+from .services import db, get_admin_email, ensure_user
 from .analysis_client import submit_analysis, get_job_status
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
@@ -65,8 +65,17 @@ def login_required(f):
     def decorated(*args, **kwargs):
         if 'user' not in session:
             return redirect(url_for('main_bp.auth'))
-        if session.get('whitelist_status') == 'pending':
+
+        # 若 session 沒有 whitelist_status（舊 session 或第一次），
+        # 從 Firestore 補查確保白名單狀態正確。
+        if 'whitelist_status' not in session:
+            email = session['user'].get('email', '')
+            status = ensure_user(email)
+            session['whitelist_status'] = status
+
+        if session.get('whitelist_status') != 'approved':
             return redirect(url_for('main_bp.pending'))
+
         return f(*args, **kwargs)
     return decorated
 

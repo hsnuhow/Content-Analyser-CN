@@ -115,6 +115,38 @@
         2.  從 Git 索引中移除敏感檔案。
         3.  重建 Git 歷史（force push 單一乾淨 commit）以徹底清除過去 Commit 中的金鑰紀錄。✅
 
+## 2026-06-12 (Phase 2 + Phase 3 + Phase 4)
+- **Feature (Phase 2 - analysis-pipeline)**:
+    - **目的**: 建立全新的獨立分析引擎，實現雙路平行 + Synthesis 架構。
+    - **解決方式**:
+        1.  **新增 `analysis-service/`**: 獨立 Cloud Run 服務。
+        2.  **Path 1（nlp_path.py）**: TF-IDF（jieba + scikit-learn）+ Vertex AI text-multilingual-embedding-002 語意向量 + KMeans 分群。
+        3.  **Path 2（llm_path.py）**: 逐批搜尋意圖萃取 + 跨文章六面向質化分析。
+        4.  **Synthesis（synthesis.py）**: 整合兩路輸出，生成摘要、搜尋情境分析、可操作建議。
+        5.  **報告組裝（report.py）**: TF-IDF 表格與語意群組由程式生成，LLM 負責詮釋章節。
+        6.  **LLM 抽象層（llm_client.py）**: 統一 Gemini / Claude 呼叫介面。
+        7.  **非同步 API**: `POST /api/analyse` 回傳 job_id，`GET /api/analyse/{job_id}` 輪詢，任務狀態存 Firestore `analysis_jobs/{job_id}`。
+    - **修改的程式函式**: 新增 `run_analysis`(pipeline.py), `run`(nlp_path/llm_path/synthesis), `assemble`(report.py), `LLMClient`(llm_client.py)。
+
+- **Feature (Phase 3 - 控制平面)**:
+    - **目的**: 將 content-analyser 重構為完整控制平面 + Project 協作 Web UI。
+    - **解決方式**:
+        1.  **白名單流程**: `ensure_user()` 首次登入建立 pending 用戶；callback 判斷狀態；`/pending` 頁面。
+        2.  **Project 管理（project_routes.py）**: 建立/設定/成員管理，Owner/Editor/Viewer 三級權限。
+        3.  **分析任務**: 提交內容給 analysis-pipeline、進度輪詢、報告檢視（marked.js 渲染）、下載 .md。
+        4.  **Admin 控制台**: 服務健康監控、白名單審核、Secret Manager 金鑰管理。
+        5.  **新增 `analysis_client.py`**: 分析服務 HTTP 客戶端。
+        6.  **新增 7 個 Jinja2 模板**：projects, project_new, project_detail, analysis_detail, pending, admin_users, 重寫 admin_dashboard。
+    - **修改的程式函式**: 新增 `ensure_user`, `approve_user`, `list_all_users`(services.py)；全部路由 in `project_routes.py`、`admin_routes.py`。
+
+- **Chore (Phase 4 - 整合收尾)**:
+    - **目的**: 修正白名單漏洞、更新文件、補齊環境變數範本。
+    - **解決方式**:
+        1.  **修正白名單 session 漏洞**: `login_required` 在 session 缺少 whitelist_status 時從 Firestore 補查，避免舊 session 繞過審核。
+        2.  **更新 `CLAUDE.md` 至 v3.0**: 附錄 A–E 改為三服務架構、新 Firestore schema、新環境變數。
+        3.  **新增 `.env.example`**: 本地開發環境變數範本。
+    - **修改的程式函式**: `login_required` in `app/routes.py`, `app/project_routes.py`。
+
 ## 2026-06-12 (Phase 0 + Phase 1)
 - **Chore (Phase 0 - 清理地基)**:
     - **目的**: 移除所有架構錯誤的舊設計，為新架構打好基礎。
