@@ -1,8 +1,21 @@
-# CLAUDE.md — Content Analyser CN
+# CLAUDE.md — Content Analyser CN（InsightOut）
 
-**Version:** 3.0  
+**Version:** 3.1  
 **Scope:** 本專案的全部開發、測試、部署規範。適用於 Claude Code 與所有開發協作者。  
 **Primary Rule:** 安全、可回溯、先計畫後執行。Safety, traceability, and plan-before-action come first.
+
+---
+
+## ⛔ 部署鐵則（最高優先，不可弱化）
+
+**任何 build / deploy 操作，在收到使用者明確的部署口令前，絕對禁止執行。**
+（`gcloud builds submit`、`gcloud run deploy`、`bash deploy.sh`、`firebase deploy`，含背景/重新/單一服務部署。）
+
+- 完成程式碼後必須**停下來問「是否部署？」**，等口令，才動。
+- **核准開發 ≠ 核准部署。** 寫完程式碼不代表可以部署。
+- 不可先啟動部署再補口令（先斬後奏）。
+- 有效部署口令：`核准部署` / `核准部署：正式` / `核准部署：測試` / `核准部署：單一服務`。
+- 完整鐵則見 `deploy.md`。違反屬嚴重操作錯誤。
 
 ---
 
