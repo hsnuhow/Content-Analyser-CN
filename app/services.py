@@ -15,11 +15,33 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # Initialize Secret Manager
+def _resolve_project_id() -> str | None:
+    """多來源解析 GCP Project ID，不只依賴環境變數。
+    Cloud Run 未必注入 GOOGLE_CLOUD_PROJECT，故再退回 firebase app /
+    application default credentials 取得，避免 set_secret 出現 projects/None。
+    """
+    pid = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if pid:
+        return pid
+    try:
+        pid = firebase_admin.get_app().project_id
+        if pid:
+            return pid
+    except Exception:
+        pass
+    try:
+        import google.auth
+        _, pid = google.auth.default()
+        return pid
+    except Exception:
+        return None
+
+
 def get_secret(secret_id, project_id=None):
     """從 Secret Manager 讀取 Secret 的輔助函式"""
     if not project_id:
-        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
-    
+        project_id = _resolve_project_id()
+
     if not project_id:
         print("[SecretManager] Project ID not found.")
         return None
@@ -37,7 +59,11 @@ def get_secret(secret_id, project_id=None):
 def set_secret(secret_id, payload, project_id=None):
     """更新 Secret 的輔助函式"""
     if not project_id:
-        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        project_id = _resolve_project_id()
+
+    if not project_id:
+        print("[SecretManager] Project ID not found（無法更新 secret）。")
+        return False
 
     client = secretmanager.SecretManagerServiceClient()
     parent = f"projects/{project_id}/secrets/{secret_id}"
