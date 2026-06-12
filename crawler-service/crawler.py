@@ -185,9 +185,12 @@ class HeadlessCrawler:
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--dns-prefetch-disable")
 
-        # ⭐️ [v3.7/v3.8 修正] Selenium 4 已移除 desired_capabilities 參數，
-        #    傳入會丟出 TypeError。pageLoadStrategy 改為直接設定在 options 上。
-        options.page_load_strategy = "eager"
+        # ⭐️ page_load_strategy = "none"：driver.get() 立即返回，不等任何載入完成。
+        #    改由 _open() 主動 poll document.readyState 控制等待時間（最多 N 秒），
+        #    達 interactive（HTML/主文 DOM 已就緒）即 window.stop()。
+        #    原因：eager 仍會等 DOMContentLoaded，重型站（ELLE 等）可達 90 秒；
+        #    且 undetected-chromedriver 不理會 set_page_load_timeout，無法靠它中斷。
+        options.page_load_strategy = "none"
 
         uc_params = {
             "options": options,
@@ -232,38 +235,48 @@ class HeadlessCrawler:
         except Exception:
             pass
 
-    def _open(self, url: str, max_retries: int = 2):
-        """打開網頁，採「載入逾時容忍」策略。
+    def _open(self, url: str, max_load_wait: int = 30, max_retries: int = 2):
+        """打開網頁，採「none 策略 + 主動 poll readyState」可控載入。
 
-        核心：eager 策略下，page_load_timeout 觸發多半是次要資源
-        （廣告、追蹤腳本、圖片）尚未載完，而主文 DOM 早已就緒。
-        因此逾時時不判失敗、不重試，而是 window.stop() 停止載入、
-        直接用「當前已載入的 DOM」繼續，內容是否足夠交由抽取階段的
-        長度判斷決定。
-        僅「真正的網路連線錯誤」（connection refused/aborted 等）才重試。
+        page_load_strategy="none" 下 driver.get() 立即返回（不等載入）。
+        我們主動 poll document.readyState：
+          - 達 'interactive'（HTML 解析完、DOM 可用）或 'complete' → 再緩衝 2 秒
+            讓主要內容渲染，然後 window.stop() 停止後續資源載入。
+          - 最多等 max_load_wait 秒（預設 30s），超過就直接 stop 用當下 DOM。
+        這繞過 undetected-chromedriver 不理會 set_page_load_timeout 的問題，
+        且避免在重型站等滿 DOMContentLoaded（可達 90 秒）。
+        僅「真正的網路連線錯誤」才重試。
         """
-        def _stop_and_accept(reason: str):
-            self._log(f"[載入] ⚠️ {reason} → window.stop()，使用已載入內容繼續")
-            try:
-                self.driver.execute_script("window.stop();")
-            except Exception:
-                pass
-            try:
-                self._apply_locale_spoofing_js()
-            except Exception:
-                pass
-
         for attempt in range(1, max_retries + 1):
             try:
-                self._log(f"[載入] 正在打開網頁 (嘗試 {attempt}/{max_retries}): {url}")
-                self.driver.get(url)
+                self._log(f"[載入] 開啟網頁 (嘗試 {attempt}/{max_retries}): {url}")
+                self.driver.get(url)  # none 策略：立即返回
+
+                start = time.time()
+                reached = False
+                while time.time() - start < max_load_wait:
+                    try:
+                        state = self.driver.execute_script("return document.readyState")
+                    except Exception:
+                        state = None
+                    if state in ("interactive", "complete"):
+                        reached = True
+                        break
+                    time.sleep(0.5)
+
+                # 緩衝讓主要內容渲染，然後停止後續資源載入
+                time.sleep(2)
+                try:
+                    self.driver.execute_script("window.stop();")
+                except Exception:
+                    pass
                 self._apply_locale_spoofing_js()
-                self._log("[載入] ✓ 網頁已成功載入")
+
+                waited = int(time.time() - start)
+                self._log(f"[載入] ✓ readyState={'interactive+' if reached else 'timeout'}，"
+                          f"等待 {waited}s 後停止，使用當前 DOM")
                 return
-            except TimeoutException:
-                # 載入逾時容忍：用已載入的 DOM，不重試、不失敗。
-                _stop_and_accept("頁面載入逾時")
-                return
+
             except Exception as e:
                 error_msg = str(e).lower()
                 net_err = any(kw in error_msg for kw in [
@@ -271,19 +284,16 @@ class HeadlessCrawler:
                     'err_connection', 'err_network', 'err_name_not_resolved',
                     'unreachable', 'dns'
                 ])
-                if net_err:
-                    self._log(f"[載入] ⚠️ 網路連線錯誤 (嘗試 {attempt}/{max_retries}): {e}")
-                    if attempt == max_retries:
-                        raise TimeoutError(f"網路連線錯誤，已重試 {max_retries} 次: {url}")
+                if net_err and attempt < max_retries:
+                    self._log(f"[載入] ⚠️ 網路連線錯誤 (嘗試 {attempt}/{max_retries})，重試: {e}")
                     try:
                         self.driver.execute_script("window.stop();")
                     except Exception:
                         pass
                     time.sleep(1)
-                elif any(kw in error_msg for kw in ['timeout', 'timed out']):
-                    # 其他形式的逾時也容忍（用已載入 DOM）。
-                    _stop_and_accept("載入逾時")
-                    return
+                    continue
+                elif net_err:
+                    raise TimeoutError(f"網路連線錯誤，已重試 {max_retries} 次: {url}")
                 else:
                     raise
 
