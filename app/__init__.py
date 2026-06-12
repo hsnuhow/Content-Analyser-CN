@@ -31,8 +31,6 @@ def create_app():
         app.config['SESSION_COOKIE_SECURE'] = True
         app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     
-    # In-memory dictionary to store task status (Will be replaced by Firestore later)
-    
     # Initialize OAuth
     oauth.init_app(app)
     
@@ -46,12 +44,13 @@ def create_app():
     )
 
     with app.app_context():
-        # Import routes
         from . import routes
         app.register_blueprint(routes.bp)
-        
-        # Admin routes
+
         from . import admin_routes
         app.register_blueprint(admin_routes.bp)
+
+        from . import project_routes
+        app.register_blueprint(project_routes.bp)
 
     return app

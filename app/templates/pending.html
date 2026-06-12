@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-md-6 text-center">
+      <div class="card shadow-sm p-5">
+        <div class="mb-4" style="font-size:3rem;">⏳</div>
+        <h3 class="mb-3">等待授權</h3>
+        <p class="text-muted mb-4">
+          您的帳號（<strong>{{ user.email }}</strong>）已登入，<br>
+          正在等待管理員批准存取權限。<br><br>
+          請聯繫系統管理員，獲批後即可使用完整功能。
+        </p>
+        <a href="{{ url_for('main_bp.logout') }}" class="btn btn-outline-secondary">
+          登出
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

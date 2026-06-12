@@ -1,69 +1,92 @@
 {% extends "layout.html" %}
-
-{% block title %}Admin Dashboard{% endblock %}
-
 {% block content %}
-<div class="container mt-4">
-    <div class="row">
-        <div class="col-md-3">
-            <!-- Sidebar -->
-            <div class="list-group">
-                <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="list-group-item list-group-item-action active">
-                    System Settings
-                </a>
-                <a href="#" class="list-group-item list-group-item-action">Users (Coming Soon)</a>
+<div class="container py-4">
+  <h2 class="mb-4">系統管理控制台</h2>
+
+  <div class="row g-4">
+
+    {# 服務健康狀態 #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header fw-semibold">服務健康狀態</div>
+        <div class="card-body">
+          {% for label, health in [('content-crawler', crawler_health), ('analysis-pipeline', analysis_health)] %}
+          <div class="d-flex justify-content-between align-items-center mb-3 pb-3 border-bottom">
+            <div>
+              <strong>{{ label }}</strong>
+              {% if health.get('version') %}
+              <div class="text-muted small">v{{ health.get('version') }}</div>
+              {% endif %}
+              {% if health.get('chrome') and health.get('chrome') != 'unavailable' %}
+              <div class="text-muted small">{{ health.get('chrome') }}</div>
+              {% endif %}
+              {% if health.get('error') %}
+              <div class="text-danger small">{{ health.get('error') }}</div>
+              {% endif %}
             </div>
+            <span class="badge bg-{% if health.get('status') == 'ok' %}success{% elif health.get('status') == 'unreachable' %}warning text-dark{% else %}danger{% endif %} fs-6">
+              {{ health.get('status', 'unknown') }}
+            </span>
+          </div>
+          {% endfor %}
+          <small class="text-muted">頁面載入時即時查詢服務狀態。</small>
         </div>
-        <div class="col-md-9">
-            <h2>Admin Dashboard</h2>
-            <p>Welcome, {{ user.name }} ({{ user.email }})!</p>
-            <hr>
-
-            <h4>Emergency Controls</h4>
-            <div class="card mb-4 border-danger">
-                <div class="card-header bg-danger text-white">
-                    Dangerous Actions
-                </div>
-                <div class="card-body">
-                    <h5 class="card-title">Force Stop All Crawlers</h5>
-                    <p class="card-text">
-                        If a crawler task gets stuck or consumes too much memory, use this button to force kill all Chrome processes on the server.
-                        This will interrupt any ongoing tasks.
-                    </p>
-                    <form action="{{ url_for('admin_bp.force_kill_crawler') }}" method="POST" onsubmit="return confirm('Are you sure? This will kill ALL active crawlers.');">
-                        <button type="submit" class="btn btn-danger">💀 Force Kill Chrome</button>
-                    </form>
-                </div>
-            </div>
-
-            <h4>System Settings</h4>
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Default Gemini API Key</h5>
-                    <p class="card-text">
-                        This is the default API key used by the system when a user has not configured their own key.
-                        <br>
-                        <strong>Status: </strong> 
-                        {% if key_status == 'Configured' %}
-                            <span class="badge bg-success">Configured</span>
-                        {% else %}
-                            <span class="badge bg-warning text-dark">Not Configured</span>
-                        {% endif %}
-                    </p>
-                    
-                    <form action="{{ url_for('admin_bp.update_secrets') }}" method="POST">
-                        <div class="mb-3">
-                            <label for="gemini_api_key" class="form-label">Update Secret Manager:</label>
-                            <input type="password" class="form-control" id="gemini_api_key" name="key_value" placeholder="Enter new API Key">
-                            <input type="hidden" name="key_name" value="SYSTEM_GEMINI_KEY">
-                            <div class="form-text">The value will be securely stored in Google Secret Manager.</div>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Update System Key</button>
-                    </form>
-                </div>
-            </div>
-
-        </div>
+      </div>
     </div>
+
+    {# 待審核用戶 #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header fw-semibold d-flex justify-content-between">
+          <span>待審核用戶</span>
+          <span class="badge bg-{% if pending_count > 0 %}warning text-dark{% else %}secondary{% endif %}">
+            {{ pending_count }}
+          </span>
+        </div>
+        <div class="card-body">
+          {% if pending_count > 0 %}
+          <p class="text-warning mb-3">⚠️ 有 {{ pending_count }} 位用戶正在等待審核。</p>
+          {% else %}
+          <p class="text-muted mb-3">目前沒有待審核的用戶。</p>
+          {% endif %}
+          <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-outline-primary w-100">
+            管理用戶白名單
+          </a>
+        </div>
+      </div>
+    </div>
+
+    {# Secret Manager 金鑰管理 #}
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Secret Manager 金鑰管理</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            透過此介面更新 Secret Manager 中的系統金鑰。更新後需重啟對應 Cloud Run 服務才能生效。
+          </p>
+          <form method="POST" action="{{ url_for('admin_bp.update_secrets') }}" class="row g-2">
+            <div class="col-md-3">
+              <select name="key_name" class="form-select">
+                <option value="SYSTEM_GEMINI_KEY">SYSTEM_GEMINI_KEY（爬蟲 selector 輔助）</option>
+                <option value="CRAWLER_API_KEY">CRAWLER_API_KEY（爬蟲服務存取金鑰）</option>
+                <option value="ANALYSIS_API_KEY">ANALYSIS_API_KEY（分析服務存取金鑰）</option>
+              </select>
+            </div>
+            <div class="col-md-7">
+              <input type="password" name="key_value" class="form-control" required
+                     placeholder="新的金鑰值（留空不更新）">
+            </div>
+            <div class="col-md-2">
+              <button type="submit" class="btn btn-warning w-100"
+                      onclick="return confirm('確定更新此金鑰？此操作不可還原。')">
+                更新金鑰
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+  </div>
 </div>
 {% endblock %}

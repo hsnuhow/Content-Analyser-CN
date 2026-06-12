@@ -15,31 +15,42 @@
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNavDropdown">
+                <ul class="navbar-nav me-auto">
+                    {% if user %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('project_bp.list_projects') }}">我的專案</a>
+                    </li>
+                    {% endif %}
+                </ul>
                 <ul class="navbar-nav ms-auto">
                     {% if user %}
                         <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="navbarDropdownMenuLink" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                                <img src="{{ user.picture }}" alt="{{ user.name }}" class="rounded-circle me-2" width="30" height="30">
-                                <div>
+                            <a class="nav-link dropdown-toggle d-flex align-items-center" href="#"
+                               role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                {% if user.picture %}
+                                <img src="{{ user.picture }}" alt="{{ user.name }}"
+                                     class="rounded-circle me-2" width="30" height="30">
+                                {% endif %}
+                                <span>
                                     {{ user.email }}
                                     {% if is_admin %}
-                                        <span class="badge bg-danger ms-1" style="font-size: 0.7em;">Admin</span>
+                                    <span class="badge bg-danger ms-1" style="font-size:0.7em">Admin</span>
                                     {% endif %}
-                                </div>
+                                </span>
                             </a>
-                            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarDropdownMenuLink">
-                                <li><a class="dropdown-item" href="{{ url_for('main_bp.profile') }}">Profile</a></li>
+                            <ul class="dropdown-menu dropdown-menu-end">
                                 {% if is_admin %}
-                                    <li><hr class="dropdown-divider"></li>
-                                    <li><a class="dropdown-item" href="{{ url_for('admin_bp.admin_dashboard') }}">Admin Panel</a></li>
-                                {% endif %}
+                                <li><a class="dropdown-item" href="{{ url_for('admin_bp.admin_dashboard') }}">
+                                    🛠 管理控制台
+                                </a></li>
                                 <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="{{ url_for('main_bp.logout') }}">Logout</a></li>
+                                {% endif %}
+                                <li><a class="dropdown-item" href="{{ url_for('main_bp.logout') }}">登出</a></li>
                             </ul>
                         </li>
                     {% else %}
                         <li class="nav-item">
-                            <a class="nav-link" href="{{ url_for('main_bp.auth') }}">Login</a>
+                            <a class="nav-link" href="{{ url_for('main_bp.auth') }}">登入</a>
                         </li>
                     {% endif %}
                 </ul>

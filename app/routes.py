@@ -17,9 +17,9 @@ Phase 3 將重建：
 """
 import os
 from functools import wraps
-from flask import Blueprint, render_template, request, jsonify, current_app, session, redirect, url_for, flash
+from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
 from firebase_admin import firestore
-from .services import db, get_admin_email
+from .services import db, get_admin_email, ensure_user, update_last_login
 from . import oauth
 
 bp = Blueprint('main_bp', __name__)
@@ -72,7 +72,19 @@ def debug():
 @bp.route('/')
 @login_required
 def index():
-    return render_template('index.html')
+    """首頁：重定向到 Projects 列表。"""
+    return redirect(url_for('project_bp.list_projects'))
+
+
+@bp.route('/pending')
+def pending():
+    """等待管理員授權的頁面。"""
+    user = session.get('user')
+    if not user:
+        return redirect(url_for('main_bp.auth'))
+    if session.get('whitelist_status') == 'approved':
+        return redirect(url_for('project_bp.list_projects'))
+    return render_template('pending.html', user=user)
 
 
 @bp.route('/profile', methods=['GET', 'POST'])
@@ -139,8 +151,22 @@ def dev_login():
 def callback():
     try:
         token = oauth.google.authorize_access_token()
-        session['user'] = token['userinfo']
-        return redirect('/')
+        userinfo = token['userinfo']
+        session['user'] = userinfo
+
+        email = userinfo.get('email', '')
+        display_name = userinfo.get('name', '')
+        picture = userinfo.get('picture', '')
+
+        # 確保用戶存在於 Firestore，取得白名單狀態
+        status = ensure_user(email, display_name, picture)
+        session['whitelist_status'] = status
+        update_last_login(email)
+
+        if status == 'approved':
+            return redirect(url_for('project_bp.list_projects'))
+        else:
+            return redirect(url_for('main_bp.pending'))
     except Exception as e:
         return f"Login failed: {e}"
 

@@ -1,0 +1,98 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.list_projects') }}">我的專案</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.project_detail', pid=pid) }}">{{ project.title }}</a></li>
+      <li class="breadcrumb-item active">{{ analysis.report_title }}</li>
+    </ol>
+  </nav>
+
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">{{ analysis.report_title }}</h2>
+    {% if analysis.status == 'completed' %}
+    <a href="{{ url_for('project_bp.download_analysis', pid=pid, aid=analysis.id) }}"
+       class="btn btn-success">
+      📥 下載 Markdown
+    </a>
+    {% endif %}
+  </div>
+
+  {# 進度區塊（未完成時顯示）#}
+  {% if analysis.status in ('pending', 'running') %}
+  <div id="progress-section" class="card shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex justify-content-between mb-2">
+        <span class="fw-semibold">分析進行中...</span>
+        <span id="progress-pct">{{ analysis.progress }}%</span>
+      </div>
+      <div class="progress mb-3" style="height:20px">
+        <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+             style="width:{{ analysis.progress }}%"></div>
+      </div>
+      <div id="status-log" class="text-muted small">{{ analysis.log }}</div>
+    </div>
+  </div>
+
+  <script>
+  (function poll() {
+    fetch("{{ url_for('project_bp.analysis_status', pid=pid, aid=analysis.id) }}")
+      .then(r => r.json())
+      .then(data => {
+        document.getElementById('progress-bar').style.width = (data.progress || 0) + '%';
+        document.getElementById('progress-pct').textContent = (data.progress || 0) + '%';
+        document.getElementById('status-log').textContent = data.log || '';
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          location.reload();
+        } else {
+          setTimeout(poll, 3000);
+        }
+      })
+      .catch(() => setTimeout(poll, 5000));
+  })();
+  </script>
+  {% endif %}
+
+  {# 失敗訊息 #}
+  {% if analysis.status == 'failed' %}
+  <div class="alert alert-danger">
+    <strong>分析失敗：</strong> {{ analysis.log }}
+  </div>
+  {% endif %}
+
+  {# 報告內容（完成時顯示）#}
+  {% if analysis.status == 'completed' and analysis.result_markdown %}
+  <div class="card shadow-sm">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span class="fw-semibold">分析報告</span>
+      <small class="text-muted">{{ analysis.n_articles }} 篇 · {{ analysis.llm_provider }} / {{ analysis.llm_model }}</small>
+    </div>
+    <div class="card-body p-4" id="report-content">
+      <div id="markdown-output" style="max-height:80vh;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  {# 使用 marked.js 渲染 Markdown #}
+  <script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
+  <script>
+    const md = {{ analysis.result_markdown | tojson }};
+    document.getElementById('markdown-output').innerHTML = marked.parse(md);
+  </script>
+  <style>
+    #markdown-output h1 { font-size: 1.6rem; margin-top: 1.5rem; }
+    #markdown-output h2 { font-size: 1.3rem; margin-top: 1.5rem; border-bottom: 1px solid #dee2e6; padding-bottom: .3rem; }
+    #markdown-output h3 { font-size: 1.1rem; margin-top: 1rem; }
+    #markdown-output table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    #markdown-output th, #markdown-output td { border: 1px solid #dee2e6; padding: .5rem .75rem; }
+    #markdown-output th { background: #f8f9fa; }
+    #markdown-output code { background: #f8f9fa; padding: .1rem .3rem; border-radius: .25rem; }
+    #markdown-output pre { background: #f8f9fa; padding: 1rem; border-radius: .5rem; overflow-x: auto; }
+    #markdown-output hr { margin: 2rem 0; }
+  </style>
+  {% endif %}
+
+</div>
+{% endblock %}
