@@ -610,14 +610,17 @@ Firestore: users/{email}/usage_log/{log_id}
 Firestore
 ├── system/                   系統設定（setup_admin.sh 寫入）
 ├── users/                    白名單用戶
-├── projects/                 所有 Project（頂層，支援多人協作）
+├── projects/                 所有 Project（頂層，多人協作）
+│     ├── datasets/           爬取資料集（URL → 非同步爬取結果文件）
+│     └── analyses/           分析任務
 ├── analysis_jobs/            analysis-pipeline 自管的非同步任務狀態
-└── api_keys/                 外部工具金鑰（規格，尚未實作）
+├── crawl_jobs/               content-crawler 自管的非同步爬取任務狀態
+└── api_keys/                 外部工具金鑰（含 hash、permissions）
 ```
 
-> 實作狀態（2026-06-12）：`system`、`users`（基本欄位）、`projects`、`analyses`、
-> `analysis_jobs` 已實作。`users/.../usage_log`、`api_keys`、`analyses/.../inputs`
-> 為規格中的未來功能，尚未實作（見第 10 節開發優先順序）。
+> 實作狀態（2026-06-13）：`system`、`users`、`projects`、`datasets`、`analyses`、
+> `analysis_jobs`、`crawl_jobs`、`api_keys` 均已實作。
+> `users/.../usage_log`、`analyses/.../inputs` 為未來功能，尚未實作。
 
 ---
 
@@ -708,13 +711,44 @@ analysis_jobs/{job_id}
 
 ---
 
-### `api_keys/{key_id}`（規格，尚未實作）
+### `api_keys/{key_id}`
 
-外部工具金鑰管理。目前 Colab/Cowork 直接使用 Secret Manager 的 CRAWLER_API_KEY / ANALYSIS_API_KEY，尚未實作 per-key 核發介面。
+外部工具金鑰管理（Admin 後台 /admin/api-keys 核發）。明文只顯示一次，僅存 SHA-256 hash。
+crawler 與 analysis 驗證時：先比對 Secret Manager 系統金鑰，再查此白名單（hash + is_active + permission）。
 
 ```
 api_keys/{key_id}
-  name / key_hash / permissions / created_by / is_active / call_count
+  name / key_prefix / key_hash / permissions（["crawl","analyse"]）
+  created_by / created_at / last_used_at / is_active / call_count
+```
+
+---
+
+### `projects/{pid}/datasets/{did}`
+
+爬取資料集（UI 輸入 URL → content-crawler 非同步爬取 → 結果文件 → 一鍵分析）。
+
+```
+projects/{pid}/datasets/{did}
+  name / source_urls / crawl_job_id
+  status（crawling | completed | failed）/ progress / log
+  item_count / succeeded
+  items: [{url, title, content, status, length, error}]   # 從 crawl_jobs 同步
+  created_by / created_at / updated_at
+```
+
+---
+
+### `crawl_jobs/{job_id}`
+
+content-crawler 自管的非同步爬取任務狀態（content-analyser 透過 crawl_job_id 輪詢）。
+
+```
+crawl_jobs/{job_id}
+  job_id / status / progress / log / total
+  results: [{status, url, title, content, length}]
+  succeeded / skipped / failed
+  created_at / updated_at / completed_at
 ```
 
 ---
