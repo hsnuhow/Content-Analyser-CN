@@ -17,11 +17,13 @@
   略過: {"status": "skipped", "url", "error"}
   失敗: {"status": "failed",  "url", "error"}
 """
+import ipaddress
 import os
 import uuid
 import threading
 import functools
 import subprocess
+from urllib.parse import urlparse
 
 import firebase_admin
 from firebase_admin import firestore
@@ -31,7 +33,35 @@ from crawler import HeadlessCrawler, UnsupportedSiteError
 from auth import is_authorized
 from crawl_job import run_crawl_batch, JOBS_COLLECTION
 
-SERVICE_VERSION = "1.3.0"
+SERVICE_VERSION = "1.4.0"
+
+
+def _is_safe_url(url: str):
+    """C1 SSRF 防護：阻擋私有/保留 IP、loopback、link-local（含 GCP metadata）。
+    回傳 (ok: bool, reason: str)。
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False, f"非 http/https 協議：{parsed.scheme}"
+        host = parsed.hostname or ""
+        if not host:
+            return False, "缺少 hostname"
+        # 已知危險 hostname
+        _BLOCKED_HOSTS = {"metadata.google.internal", "169.254.169.254"}
+        if host.lower() in _BLOCKED_HOSTS:
+            return False, f"禁止存取 metadata endpoint：{host}"
+        # 若 hostname 是 IP，直接檢查範圍
+        try:
+            ip = ipaddress.ip_address(host)
+            if (ip.is_private or ip.is_loopback or
+                    ip.is_link_local or ip.is_reserved or ip.is_multicast):
+                return False, f"禁止存取保留/私有 IP：{host}"
+        except ValueError:
+            pass  # 是 domain name，信任 DNS（避免 TOCTOU 的 DNS resolution）
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 # ── Firebase 初始化（供非同步 job 與 api_keys 驗證）──
 db = None
@@ -113,8 +143,9 @@ def scrape():
 
     if not url:
         return jsonify({"status": "failed", "error": "Missing 'url' in request body"}), 400
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return jsonify({"status": "failed", "url": url, "error": "Invalid URL: must start with http(s)://"}), 400
+    safe, reason = _is_safe_url(url)
+    if not safe:
+        return jsonify({"status": "failed", "url": url, "error": f"URL 不合法：{reason}"}), 400
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
@@ -146,8 +177,9 @@ def scrape_batch():
         if not url:
             results.append({"status": "failed", "url": url, "error": "Empty URL"})
             continue
-        if not (url.startswith("http://") or url.startswith("https://")):
-            results.append({"status": "failed", "url": url, "error": "Invalid URL"})
+        safe, reason = _is_safe_url(url)
+        if not safe:
+            results.append({"status": "failed", "url": url, "error": f"URL 不合法：{reason}"})
             continue
         results.append(_run_scrape(url, use_gemini, gemini_api_key))
 
@@ -176,9 +208,24 @@ def crawl_batch():
         return jsonify({"status": "failed", "error": "Missing or empty 'urls' list"}), 400
     if len(urls) > 100:
         return jsonify({"status": "failed", "error": "Maximum 100 URLs per crawl job"}), 400
+    # C1: 先過濾掉不安全 URL，回報給呼叫端
+    safe_urls, blocked = [], []
+    for u in urls:
+        ok, reason = _is_safe_url((u or "").strip())
+        if ok:
+            safe_urls.append(u)
+        else:
+            blocked.append({"url": u, "reason": reason})
+    if blocked:
+        return jsonify({
+            "status": "failed",
+            "error": f"{len(blocked)} 個 URL 被 SSRF 過濾拒絕",
+            "blocked": blocked,
+        }), 400
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
+    urls = safe_urls
 
     job_id = str(uuid.uuid4())
     db.collection(JOBS_COLLECTION).document(job_id).set({

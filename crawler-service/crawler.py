@@ -1240,6 +1240,25 @@ class HeadlessCrawler:
 
         except TimeoutError as e:
             self._log(f"[Crawler] 硬性時限超過: {e}")
+            # C5: 逾時時嘗試保留已載入的部分內容，避免整篇失敗
+            try:
+                if self.driver:
+                    partial_src = self.driver.page_source
+                    partial_content = self._extract_main_text(partial_src, url)
+                    if len(partial_content or "") < 200:
+                        block = self._extract_from_block_payload(partial_src)
+                        if len(block) > len(partial_content or ""):
+                            partial_content = block
+                    if len(partial_content or "") >= 200:
+                        title = self.driver.title or "No Title"
+                        self._log(f"[Crawler] 時限超過但保留 {len(partial_content)} 字部分內容")
+                        return {
+                            "status": "success", "url": url, "title": title,
+                            "content": partial_content, "length": len(partial_content),
+                            "warning": f"逾時截斷（{hard_timeout_sec}s），內容可能不完整",
+                        }
+            except Exception as pe:
+                self._log(f"[Crawler] 部分結果抽取失敗: {pe}")
             return {"status": "failed", "url": url, "error": str(e)}
         except WebDriverException as e:
             # driver 崩潰（invalid session / chrome crash）：強制關閉，

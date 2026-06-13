@@ -11,11 +11,27 @@ Path 2：LLM 直讀層
 費用：用戶 per-project LLM Key（Gemini 或 Claude），每次分析 < $0.005
 """
 import json
+import re
 from typing import List, Dict, Any, Callable, Optional
 
 from llm_client import LLMClient
 
 INTENT_BATCH_SIZE = 5   # 每批處理幾篇文章
+
+
+def _parse_llm_json(raw: str) -> str:
+    """C2: 穩健清理 LLM 回傳，去除 markdown 包裝後抽取 JSON 物件。
+    LLM 有時會在 JSON 前後加說明文字或 ```json``` fence，導致 json.loads 失敗。
+    """
+    # 移除 markdown code fence（含 ```json 與 ``` 開關）
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
+    raw = re.sub(r"\s*```\s*$", "", raw, flags=re.MULTILINE)
+    raw = raw.strip()
+    # 若 JSON 物件前後仍有多餘文字，用 regex 抽取最外層 {...}
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        return match.group(0)
+    return raw
 MAX_TEXT_FOR_INTENT = 2000   # 逐篇意圖萃取時，每篇最多取前 N 字
 MAX_TEXT_FOR_QUAL = 2500     # 跨篇質化分析時，每篇最多取前 N 字
 MAX_ARTICLES_FOR_QUAL = 30   # 質化分析最多取前 N 篇（避免超出 context window）
@@ -59,7 +75,7 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient) -> List[Dict]:
 
     try:
         raw = llm.generate(prompt, temperature=0.3, max_tokens=2048)
-        raw = raw.strip().replace("```json", "").replace("```", "").strip()
+        raw = _parse_llm_json(raw)
         data = json.loads(raw)
         return data.get("articles", [])
     except Exception as e:

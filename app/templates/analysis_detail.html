@@ -37,7 +37,12 @@
   </div>
 
   <script>
-  (function poll() {
+  (function poll(attempts) {
+    var MAX_POLLS = 200; // M13: 最多輪詢 200 次（約 10 分鐘）
+    if (attempts >= MAX_POLLS) {
+      document.getElementById('status-log').textContent = '⚠️ 輪詢逾時，請重新整理頁面確認狀態。';
+      return;
+    }
     fetch("{{ url_for('project_bp.analysis_status', pid=pid, aid=analysis.id) }}")
       .then(r => r.json())
       .then(data => {
@@ -48,18 +53,23 @@
         if (data.status === 'completed' || data.status === 'failed') {
           location.reload();
         } else {
-          setTimeout(poll, 3000);
+          setTimeout(function(){ poll(attempts + 1); }, 3000);
         }
       })
-      .catch(() => setTimeout(poll, 5000));
-  })();
+      .catch(() => setTimeout(function(){ poll(attempts + 1); }, 5000));
+  })(0);
   </script>
   {% endif %}
 
-  {# 失敗訊息 #}
+  {# 失敗訊息 + M12 重試按鈕 #}
   {% if analysis.status == 'failed' %}
   <div class="alert alert-danger">
     <strong>分析失敗：</strong> {{ analysis.log }}
+    <div class="mt-2">
+      <a href="{{ url_for('project_bp.project_detail', pid=pid) }}" class="btn btn-sm btn-outline-danger">
+        ↩ 返回專案，重新提交分析
+      </a>
+    </div>
   </div>
   {% endif %}
 
@@ -75,11 +85,12 @@
     </div>
   </div>
 
-  {# 使用 marked.js 渲染 Markdown #}
+  {# C3: 使用 DOMPurify sanitize 防 XSS，再以 marked.js 渲染 Markdown #}
   <script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   <script>
     const md = {{ analysis.result_markdown | tojson }};
-    document.getElementById('markdown-output').innerHTML = marked.parse(md);
+    document.getElementById('markdown-output').innerHTML = DOMPurify.sanitize(marked.parse(md));
   </script>
   <style>
     #markdown-output h1 { font-size: 1.6rem; margin-top: 1.5rem; }
