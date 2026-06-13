@@ -984,6 +984,36 @@ class HeadlessCrawler:
         lines = [line.strip() for line in text.splitlines() if line.strip() and len(line.strip()) >= 4]
         return "\n\n".join(lines)
 
+    # 台灣新聞站常見「尾部樣板」：贊助 CTA、APP 下載、版權宣告、社群分享。
+    # 文章正文之後才會出現，故只在「累積足夠正文後」遇到才裁切（保守，不誤傷短文）。
+    _TRAILING_BOILERPLATE = (
+        "支持中央社", "下載中央社", "一手新聞", "本網站之文字", "非經授權",
+        "小額贊助", "選擇與事實站在一起", "守護新聞自由",
+        "不得轉載", "版權所有", "著作權所有", "未經授權", "禁止轉載",
+        "加入...粉絲團", "點我加入", "訂閱電子報", "立即下載", "下載APP", "下載 APP",
+        "更多內容請見", "本文由", "授權轉載",
+    )
+
+    def _trim_trailing_boilerplate(self, content: str, min_keep: int = 150) -> str:
+        """裁掉文章正文之後的尾部樣板（贊助／APP／版權等）。
+
+        只在累積正文已達 min_keep 字後，遇到樣板行才截斷；之前的不動，
+        避免短文或正文中偶然含關鍵字時被誤砍。
+        """
+        if not content:
+            return content
+        lines = content.split("\n")
+        kept = []
+        acc = 0
+        for line in lines:
+            ls = line.strip()
+            if acc >= min_keep and any(bp in ls for bp in self._TRAILING_BOILERPLATE):
+                self._log(f"[Trim] 尾部樣板截斷於：{ls[:30]}")
+                break
+            kept.append(line)
+            acc += len(ls)
+        return "\n".join(kept).strip()
+
     def _css_path(self, el) -> str:
         try:
             parts = []
@@ -1695,6 +1725,9 @@ class HeadlessCrawler:
             if not content:
                 return {"status": "failed", "url": url, "error": "Extracted content is empty after full analysis."}
 
+            # 裁掉尾部樣板（贊助／APP／版權），所有萃取路徑統一套用
+            content = self._trim_trailing_boilerplate(content)
+
             return {"status": "success", "url": url, "title": title, "content": content, "length": len(content)}
 
         except TimeoutError as e:
@@ -1710,6 +1743,7 @@ class HeadlessCrawler:
                             partial_content = block
                     if len(partial_content or "") >= 200:
                         title = self.driver.title or "No Title"
+                        partial_content = self._trim_trailing_boilerplate(partial_content)
                         self._log(f"[Crawler] 時限超過但保留 {len(partial_content)} 字部分內容")
                         return {
                             "status": "success", "url": url, "title": title,
