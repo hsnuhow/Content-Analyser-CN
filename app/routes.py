@@ -96,7 +96,9 @@ def login():
     redirect_uri = url_for('main_bp.callback', _external=True)
     if redirect_uri.startswith('http://') and 'localhost' not in redirect_uri and '127.0.0.1' not in redirect_uri:
         redirect_uri = redirect_uri.replace('http://', 'https://', 1)
-    return oauth.google.authorize_redirect(redirect_uri)
+    # prompt='select_account'：每次點登入都強制顯示 Google 帳號選擇畫面，
+    # 不走 SSO 免互動秒進（含登出後再登入）。
+    return oauth.google.authorize_redirect(redirect_uri, prompt='select_account')
 
 
 @bp.route('/dev_login')
