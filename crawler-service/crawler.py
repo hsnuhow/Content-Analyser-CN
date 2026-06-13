@@ -298,6 +298,36 @@ class HeadlessCrawler:
             pass
         return content
 
+    def _extract_from_block_payload(self, html: str) -> str:
+        """從現代框架（Next.js App Router / RSC、Condé Nast Copilot 等）的
+        序列化 block payload 抽取主文。
+
+        這類頁面的內文不在標準 <p> 標籤，而以 JSON 陣列序列化嵌在 HTML 的
+        script 流裡，格式如：["p","段落文字"]、["blockquote","引言"]。
+        渲染後 DOM 抓不到（被當 script 移除或未 hydrate），但原始 HTML 有完整文字。
+        當標準 DOM 抽取結果過短時，由 scrape() 呼叫此 fallback。
+        """
+        try:
+            # 抓 ["p","..."] / ["blockquote","..."] / ["h1~h6","..."] 的文字部分，
+            # 文字內可含 JSON 跳脫（\" \\ \uXXXX），用 json.loads 還原。
+            pattern = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]')
+            seen = set()
+            parts = []
+            for m in pattern.finditer(html):
+                raw = m.group(2)
+                try:
+                    text = json.loads('"' + raw + '"')
+                except Exception:
+                    text = raw
+                text = (text or "").strip()
+                if len(text) >= 10 and text not in seen:
+                    seen.add(text)
+                    parts.append(text)
+            return self._clean_text("\n".join(parts))
+        except Exception as e:
+            self._log(f"[Block Payload] 抽取失敗: {e}")
+            return ""
+
     def _clear_overlays_and_click_cta(self, rounds: int = 3):
         """遮罩處理：對齊 Colab v3.8。
         順序：OneTrust（AllowAll JS → 按鈕）→ Fides（JS API）→ 通用點擊後備。
@@ -1192,9 +1222,16 @@ class HeadlessCrawler:
 
             content = self._extract_main_text(final_source, url)
 
-            # ⭐️ [Phase 1] 主文過短時補入 meta description（對齊 Colab v3.8）
+            # 主文過短：依序嘗試 fallback
             if len(content or '') < 200:
-                content = self._apply_meta_fallback(content or '', final_source)
+                # 1) 先試現代框架序列化 block payload（Next.js RSC / Copilot 等）
+                block_content = self._extract_from_block_payload(final_source)
+                if len(block_content) > len(content or ''):
+                    self._log(f"[Block Payload] 抽到 {len(block_content)} 字（優於 DOM {len(content or '')} 字），採用")
+                    content = block_content
+                # 2) 仍過短才補 meta description（對齊 Colab v3.8）
+                if len(content or '') < 200:
+                    content = self._apply_meta_fallback(content or '', final_source)
 
             if not content:
                 return {"status": "failed", "url": url, "error": "Extracted content is empty after full analysis."}
