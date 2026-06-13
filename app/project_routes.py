@@ -18,6 +18,7 @@ Blueprint：project_bp（prefix /projects）
   GET  /projects/<pid>/analyses/<aid>/status   → 輪詢進度（JSON）
 """
 import json
+import re
 from functools import wraps
 from flask import (Blueprint, render_template, request, jsonify,
                    session, redirect, url_for, flash, send_file, abort)
@@ -59,7 +60,7 @@ def get_user_role(project: dict, email: str) -> str | None:
     if project.get('owner', '').lower() == email.lower():
         return 'owner'
     members = project.get('members', {})
-    return members.get(email) or members.get(email.lower())
+    return members.get(email.lower())
 
 
 def project_access_required(min_role: str = 'viewer'):
@@ -216,6 +217,10 @@ def add_member(pid, project, role):
     if not member_email:
         flash('請填寫成員 email。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
+    _EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
+    if not _EMAIL_RE.match(member_email):
+        flash('Email 格式不正確。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
     if member_email == project.get('owner', '').lower():
         flash('該用戶已是 Owner，無法再新增為成員。', 'warning')
         return redirect(url_for('project_bp.project_detail', pid=pid))
@@ -269,6 +274,17 @@ def submit_analysis_route(pid, project, role):
             raise ValueError('contents 必須是非空陣列')
         if len(contents) > 100:
             raise ValueError('每次最多 100 篇內容')
+        _VALID_SOURCE_TYPES = {'media', 'ecommerce', 'forum', 'dcard', 'youtube', 'direct', ''}
+        for i, item in enumerate(contents):
+            if not isinstance(item, dict):
+                raise ValueError(f'第 {i+1} 筆內容格式錯誤')
+            url = str(item.get('url', ''))[:2048]
+            title = str(item.get('title', ''))[:512]
+            text = str(item.get('text') or item.get('content') or '')[:50000]
+            src = str(item.get('source_type', ''))
+            if src not in _VALID_SOURCE_TYPES:
+                src = ''
+            contents[i] = {'url': url, 'title': title, 'text': text, 'source_type': src}
     except Exception as e:
         flash(f'內容格式錯誤：{e}。請貼入正確的 JSON 陣列。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))

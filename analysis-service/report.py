@@ -16,6 +16,7 @@
 """
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
+from urllib.parse import urlparse
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
@@ -96,8 +97,10 @@ def _section_appendix(tfidf_per_article: List[Dict],
         intent_data = intent_map.get(key, {})
         intents = intent_data.get("search_intents", [])
 
-        if url:
-            lines.append(f"### [{title}]({url})")
+        parsed = urlparse(url) if url else None
+        safe_url = url if (parsed and parsed.scheme in ("http", "https")) else None
+        if safe_url:
+            lines.append(f"### [{title}]({safe_url})")
         else:
             lines.append(f"### {title}")
         lines.append("")
