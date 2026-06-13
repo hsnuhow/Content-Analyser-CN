@@ -119,6 +119,11 @@ def analyse():
         return jsonify({"status": "failed",
                         "error": f"不支援的 llm_provider：'{llm_provider}'。請使用 'gemini' 或 'claude'。"}), 400
 
+    _VALID_MODEL_PREFIXES = ("gemini-", "claude-")
+    if not any(llm_model.startswith(p) for p in _VALID_MODEL_PREFIXES):
+        return jsonify({"status": "failed",
+                        "error": f"不合法的 llm_model：'{llm_model}'。模型名稱須以 'gemini-' 或 'claude-' 開頭。"}), 400
+
     # ── 建立 Firestore job 文件 ──
     job_id = str(uuid.uuid4())
     job_ref = db.collection(JOBS_COLLECTION).document(job_id)

@@ -161,9 +161,16 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
     ]
 
     embeddings = _get_embeddings(texts, project_id)
+    if len(embeddings) < 2:
+        return {
+            "clusters": [{"cluster_id": 0, "articles": [
+                {"url": c.get("url", ""), "title": c.get("title", "")} for c in contents
+            ]}],
+            "n_clusters": 1,
+        }
     X = normalize(np.array(embeddings))
 
-    n_clusters = min(max(2, n // 3), MAX_CLUSTERS)
+    n_clusters = min(max(2, n // 3), MAX_CLUSTERS, len(embeddings))
     km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     labels = km.fit_predict(X)
 

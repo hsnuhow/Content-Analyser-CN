@@ -6,9 +6,11 @@ LLM 統一呼叫層
 呼叫端傳入 provider、model、api_key，由此層統一轉換為對應 SDK 呼叫。
 系統不提供 LLM Key，全部由 per-project 設定或呼叫端帶入。
 """
+import concurrent.futures
 
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 8192
+LLM_TIMEOUT_SEC = 300
 
 SUPPORTED_PROVIDERS = ("gemini", "claude")
 
@@ -33,12 +35,19 @@ class LLMClient:
     def generate(self, prompt: str,
                  temperature: float = DEFAULT_TEMPERATURE,
                  max_tokens: int = DEFAULT_MAX_TOKENS) -> str:
-        """呼叫 LLM，回傳生成的文字。失敗時拋出 LLMError。"""
-        try:
+        """呼叫 LLM，回傳生成的文字。失敗或逾時時拋出 LLMError。"""
+        def _call():
             if self.provider == "gemini":
                 return self._call_gemini(prompt, temperature, max_tokens)
             elif self.provider == "claude":
                 return self._call_claude(prompt, temperature, max_tokens)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_call)
+                return future.result(timeout=LLM_TIMEOUT_SEC)
+        except concurrent.futures.TimeoutError:
+            raise LLMError(f"LLM 呼叫逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
         except LLMError:
             raise
         except Exception as e:

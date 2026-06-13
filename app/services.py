@@ -95,6 +95,7 @@ def get_admin_email() -> str | None:
 
 def get_user(email: str) -> dict | None:
     """讀取 users/{email} 文件，不存在則回傳 None。"""
+    email = email.strip().lower()
     try:
         doc = db.collection('users').document(email).get()
         return doc.to_dict() if doc.exists else None
@@ -107,9 +108,10 @@ def ensure_user(email: str, display_name: str = "", picture: str = "") -> str:
     """確保 users/{email} 存在。首次登入時建立（status=pending）。
     回傳目前的 whitelist_status：'approved' | 'pending'。
     """
+    email = email.strip().lower()
     admin_email = get_admin_email()
     # Admin 不需要白名單流程
-    if admin_email and email.lower() == admin_email.lower():
+    if admin_email and email == admin_email.strip().lower():
         return "approved"
 
     ref = db.collection('users').document(email)
@@ -137,6 +139,7 @@ def ensure_user(email: str, display_name: str = "", picture: str = "") -> str:
 
 def update_last_login(email: str):
     """更新 users/{email}.last_login。"""
+    email = email.strip().lower()
     try:
         db.collection('users').document(email).update({
             'last_login': firestore.SERVER_TIMESTAMP,
@@ -147,6 +150,7 @@ def update_last_login(email: str):
 
 def approve_user(email: str, admin_email: str) -> bool:
     """將用戶設為 approved。"""
+    email = email.strip().lower()
     try:
         db.collection('users').document(email).update({
             'whitelist_status': 'approved',
@@ -161,6 +165,7 @@ def approve_user(email: str, admin_email: str) -> bool:
 
 def reject_user(email: str) -> bool:
     """將用戶設為 rejected（或刪除）。"""
+    email = email.strip().lower()
     try:
         db.collection('users').document(email).update({
             'whitelist_status': 'rejected',
