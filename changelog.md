@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-14 爬蟲覆蓋率提升 + pipeline 逾時防護 + 輸入驗證
+- **Feature (爬蟲模板大幅擴充)**: 新增 12 個台灣媒體 SITE_TEMPLATES：vogue_tw（Condé Nast）、gq_tw、udn（聯合報）、ettoday、thenewslens（關鍵評論網）、gvm（遠見）、bnext（數位時代）、storm_mg（風傳媒）、businesstoday（今周刊）、commonhealth（康健）、cw（天下）。
+- **Feature (RSC payload 抽取增強)**: `_extract_from_block_payload` 新增格式 2（React RSC `["$","p","key",{"children":"..."}]`）與格式 3（中文字串 fallback），覆蓋 Vogue/GQ 等 Next.js App Router 頁面。
+- **Feature (MAIN_CONTENT_SELECTORS 補強)**: 新增 `.rich-text`、`.prose`、`[class*='richtext']`、`[data-article-body]` 等現代 CMS 選擇器。
+- **Fix (噪音過濾放寬)**: 高類別標籤密度過濾條件加嚴（需 p_count < 2 且 density > 1.5），避免誤殺時尚媒體文章容器。
+- **Fix (pipeline thread 逾時)**: `t1/t2.join()` 加 `timeout=600`，防止 Path1/2 永久阻塞主執行緒。
+- **Fix (content 總長度上限)**: `analysis-service/app.py` 新增 contents 總文字長度 5MB 上限，防止 Firestore 文件超限。
+- **Fix (job dict 防禦)**: `_sync_crawling_dataset()` 加 `isinstance(job, dict)` 防止 AttributeError。
+
 ## 2026-06-13 部署 deploy-20260613-2（7 項安全修正全部上線）
 - 部署三個服務至 GCP asia-east1
 - 包含 M2/M5/M6/M7 + M-B1/M-B2/M-B3 共 7 項修正
