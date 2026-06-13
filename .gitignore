@@ -1,3 +1,6 @@
+# 本地參考資料（不推送 GitHub）
+REF/
+
 # Secrets & Setup Scripts（含敏感資訊，不提交）
 .env
 .env.local

@@ -1127,6 +1127,22 @@ class HeadlessCrawler:
             WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         except TimeoutException:
             self._log("[Crawler] Timeout waiting for body")
+            return
+        # 對齊 Colab：額外等待主內容選擇器（article / main / #content / .content）
+        # 讓 JS 有機會渲染完成再抽取 DOM
+        content_selectors = [
+            (By.TAG_NAME, "article"),
+            (By.TAG_NAME, "main"),
+            (By.CSS_SELECTOR, "#content"),
+            (By.CSS_SELECTOR, ".content"),
+        ]
+        for by, selector in content_selectors:
+            try:
+                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((by, selector)))
+                self._log(f"[Crawler] Content element found: {selector}")
+                break
+            except TimeoutException:
+                continue
 
     def _remove_cmp_containers(self, soup: BeautifulSoup):
         """⭐️ [v3.8] 抽取前移除 OneTrust / Fides / 通用 CMP 同意視窗容器。
@@ -1275,7 +1291,8 @@ class HeadlessCrawler:
                 if noisy_patterns.search(classes_str) or noisy_patterns.search(id_str):
                     p_count = len(el.find_all('p'))
                     text_len = len(el.get_text(strip=True))
-                    if p_count < 5 or text_len < 800:
+                    # 使用 AND 條件（對齊 Colab）：兩個條件都成立才移除，避免誤刪文章容器
+                    if p_count < 3 and text_len < 400:
                         elements_to_remove.append((el, f"noise_keyword (p={p_count}, len={text_len}, depth={depth})"))
                         continue
 
