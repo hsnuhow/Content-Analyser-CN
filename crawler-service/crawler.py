@@ -337,6 +337,54 @@ SITE_TEMPLATES = {
             'article',
         ]
     },
+    # ── 自由時報（ltn.com.tw，含 news/ec/m 等子域）──
+    # 靜態 HTML 為 JS 渲染佔位，headless 執行後 .article_body 有完整全文
+    # AMP 版（/amp/article/...）為靜態且有 .article_body
+    'ltn': {
+        'indicators': ['ltn.com.tw'],
+        'selectors': [
+            '.article_body', '#article_body',
+            '.text', '.content940',
+            '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 中央社 (cna.com.tw) ──
+    # 靜態 HTML 即有完整內文，包在 article.article > .paragraph 裡
+    'cna': {
+        'indicators': ['cna.com.tw'],
+        'selectors': [
+            'article.article',
+            '.centralContent',
+            '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 鏡週刊 (mirrormedia.mg) ──
+    # Next.js + styled-components（class 名稱含 hash，不穩定）
+    # 優先嘗試 [class*="ArticleBody"]；fallback 走 _extract_from_json_ld（JSON-LD 有完整 articleBody）
+    'mirrormedia': {
+        'indicators': ['mirrormedia.mg'],
+        'selectors': [
+            '[class*="ArticleBody"]',
+            '[class*="articleBody"]',
+            '[class*="article-content"]',
+            '[class*="story-body"]',
+            'article', 'main',
+        ]
+    },
+    # ── TechNews 科技新報 (technews.tw) ──
+    # WordPress 架構，.entry-content 是標準選擇器
+    'technews': {
+        'indicators': ['technews.tw'],
+        'selectors': [
+            '.entry-content',
+            '.articleContent_text',
+            '.newsLetter_articleContent',
+            '.article-content',
+            'article',
+        ]
+    },
 }
 
 # ⭐️ [v3.8] 抽取前要移除的 CMP（Cookie 同意視窗）容器
@@ -528,6 +576,41 @@ class HeadlessCrawler:
         except Exception:
             pass
         return content
+
+    def _extract_from_json_ld(self, html: str) -> str:
+        """從 JSON-LD <script> 中萃取 articleBody 文字。
+
+        適用於 MirrorMedia 等 Next.js 站台：內文以 JSON-LD NewsArticle schema 嵌入，
+        headless 瀏覽器渲染後 DOM 仍可能難以用 CSS selector 抓到（styled-components hash），
+        但 JSON-LD 在初始 HTML 中就完整存在。
+        """
+        try:
+            # 找所有 application/ld+json script
+            ld_scripts = re.findall(
+                r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+                html, re.DOTALL | re.I
+            )
+            for raw_json in ld_scripts:
+                try:
+                    data = json.loads(raw_json.strip())
+                except Exception:
+                    continue
+                # 支援 @graph 陣列
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if isinstance(item, dict) and item.get('@graph'):
+                        items = item['@graph']
+                        break
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    body = item.get('articleBody', '')
+                    if body and len(body) >= 200:
+                        self._log(f"[JSON-LD] 從 @type={item.get('@type', '?')} 抽到 {len(body)} 字")
+                        return self._clean_text(body)
+        except Exception as e:
+            self._log(f"[JSON-LD] 萃取失敗: {e}")
+        return ""
 
     def _extract_from_block_payload(self, html: str) -> str:
         """從現代框架（Next.js App Router / RSC、Condé Nast Copilot 等）的
@@ -1553,14 +1636,20 @@ class HeadlessCrawler:
 
             # 主文過短：依序嘗試 fallback
             # 500 字閾值：DOM 啟發式可能從導覽列/相關文章抽到少量內容（200-500 字），
-            # 但實際文章主體仍在 RSC payload 中，故提高閾值讓 block_payload 有機會介入。
+            # 但實際文章主體仍在 RSC payload 或 JSON-LD 中，故提高閾值讓 fallback 有機會介入。
             if len(content or '') < 500:
-                # 1) 先試現代框架序列化 block payload（Next.js RSC / Copilot 等）
-                block_content = self._extract_from_block_payload(final_source)
-                if len(block_content) > len(content or ''):
-                    self._log(f"[Block Payload] 抽到 {len(block_content)} 字（優於 DOM {len(content or '')} 字），採用")
-                    content = block_content
-                # 2) 仍過短才補 meta description（對齊 Colab v3.8）
+                # 1) JSON-LD articleBody（MirrorMedia 等 Next.js 站台的最可靠來源）
+                jld_content = self._extract_from_json_ld(final_source)
+                if len(jld_content) > len(content or ''):
+                    self._log(f"[JSON-LD] 抽到 {len(jld_content)} 字（優於 DOM {len(content or '')} 字），採用")
+                    content = jld_content
+                # 2) 現代框架序列化 block payload（Next.js RSC / Copilot 等）
+                if len(content or '') < 500:
+                    block_content = self._extract_from_block_payload(final_source)
+                    if len(block_content) > len(content or ''):
+                        self._log(f"[Block Payload] 抽到 {len(block_content)} 字（優於 DOM {len(content or '')} 字），採用")
+                        content = block_content
+                # 3) 仍過短才補 meta description（對齊 Colab v3.8）
                 if len(content or '') < 200:
                     content = self._apply_meta_fallback(content or '', final_source)
 
