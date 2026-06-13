@@ -16,42 +16,13 @@ Phase 3 將重建：
   - /download_project → 下載 Markdown 報告
 """
 import os
-from functools import wraps
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
 from firebase_admin import firestore
 from .services import db, get_admin_email, ensure_user, update_last_login, get_user
+from .auth_guards import login_required, is_dev_env
 from . import oauth
 
 bp = Blueprint('main_bp', __name__)
-
-
-def is_dev_env():
-    return os.environ.get('FLASK_DEBUG') == '1' or os.environ.get('FLASK_ENV') == 'development'
-
-
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user' not in session:
-            if is_dev_env():
-                admin_email = get_admin_email() or os.environ.get('DEV_LOGIN_EMAIL', 'dev@localhost')
-                print(f"[Debug] login_required: Dev 自動登入 {admin_email}")
-                session['user'] = {
-                    'name': 'Developer',
-                    'email': admin_email,
-                    'picture': 'https://via.placeholder.com/150'
-                }
-                session['whitelist_status'] = 'approved'
-                return f(*args, **kwargs)
-            return redirect(url_for('main_bp.auth'))
-
-        # 若 session 沒有 whitelist_status，從 Firestore 補查
-        if 'whitelist_status' not in session:
-            email = session['user'].get('email', '')
-            session['whitelist_status'] = ensure_user(email)
-
-        return f(*args, **kwargs)
-    return decorated_function
 
 
 @bp.route('/debug')
@@ -163,12 +134,16 @@ def callback():
         else:
             return redirect(url_for('main_bp.pending'))
     except Exception as e:
-        return f"Login failed: {e}"
+        # 不把內部例外細節暴露給使用者（資訊洩漏）；僅記錄於伺服器日誌。
+        print(f"[Auth] OAuth callback 失敗: {e}", flush=True)
+        flash('登入失敗，請重試。', 'danger')
+        return redirect(url_for('main_bp.auth'))
 
 
 @bp.route('/logout')
 def logout():
-    session.pop('user', None)
+    # 完整清除 session，避免 whitelist_status / _new_api_key 等殘留。
+    session.clear()
     return redirect('/')
 
 

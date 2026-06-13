@@ -39,12 +39,14 @@
               <form method="POST"
                     action="{{ url_for('admin_bp.approve_user_route', email=u.get('email')) }}"
                     class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-success">批准</button>
               </form>
               <form method="POST"
                     action="{{ url_for('admin_bp.reject_user_route', email=u.get('email')) }}"
                     class="d-inline ms-1"
                     onsubmit="return confirm('確定拒絕此用戶？')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger">拒絕</button>
               </form>
               {% elif u.get('whitelist_status') == 'approved' %}
@@ -52,12 +54,14 @@
                     action="{{ url_for('admin_bp.reject_user_route', email=u.get('email')) }}"
                     class="d-inline"
                     onsubmit="return confirm('確定停用此用戶？')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-outline-secondary">停用</button>
               </form>
               {% else %}
               <form method="POST"
                     action="{{ url_for('admin_bp.approve_user_route', email=u.get('email')) }}"
                     class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-outline-success">重新啟用</button>
               </form>
               {% endif %}

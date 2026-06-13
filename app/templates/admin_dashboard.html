@@ -68,6 +68,7 @@
             透過此介面更新 Secret Manager 中的系統金鑰。更新後需重啟對應 Cloud Run 服務才能生效。
           </p>
           <form method="POST" action="{{ url_for('admin_bp.update_secrets') }}" class="row g-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="col-md-3">
               <select name="key_name" class="form-select">
                 <option value="GENAI_API_KEY">GENAI_API_KEY（爬蟲 selector 輔助）</option>
