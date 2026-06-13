@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-13 (/loop 自動修正：Code Review C1–C5 + 爬蟲模板補強)
+- **Security Fix (C3 XSS)**: `analysis_detail.html` 加 DOMPurify.sanitize() 包覆 marked.parse()，防止 LLM 產生的 Markdown 注入惡意 script。
+- **Security Fix (C1 SSRF)**: `crawler-service/app.py` v1.4.0 新增 `_is_safe_url()` 過濾函式，攔截私有/保留 IP、loopback、GCP metadata endpoint (169.254.169.254)，套用至三個爬取端點。
+- **Fix (C2 LLM JSON 解析)**: `analysis-service/llm_path.py` 新增 `_parse_llm_json()`，用 regex 穩健去除 markdown fence 並抽取 `{...}`，防止 LLM 加說明文字導致整批失敗。`crawler-service/crawler.py` `_ask_gemini_selector()` 同步套用。
+- **Fix (C5 scroll timeout)**: `crawler-service/crawler.py` 逾時時先嘗試保留已載入部分內容（≥200 字則降級回傳 `warning`，而非整篇 `failed`）。
+- **Fix (M12 retry button)**: 分析失敗頁加「返回專案，重新提交分析」按鈕。
+- **Fix (M13 polling timeout)**: 輪詢加 MAX_POLLS=200 逾時上限（約 10 分鐘），停止後提示使用者重新整理。
+- **Feature (爬蟲模板)**: SITE_TEMPLATES 新增 elle.com.tw / cosmopolitan.com.tw / harpersbazaar.com.tw（Hearst Asia CMS）、businessweekly.com.tw、parenting.com.tw、cheers.com.tw 六組模板。MAIN_CONTENT_SELECTORS 補充 Hearst `article__body` 系列 class。
+
 ## 2026-06-13 (資料集下載 + Gemini 2.5-flash 升級 + 程式碼審查文件)
 - **Feature (資料集原始內容下載)**:
     - 已完成爬取的資料集新增下載功能：`/projects/<pid>/datasets/<did>/download.md`（Markdown）及 `/download.json`（JSON）。
