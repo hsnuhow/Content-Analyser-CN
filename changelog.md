@@ -1,12 +1,14 @@
 # Changelog
 
-## 2026-06-14 站台模板擴充 + 模板比對「最具體優先」修正（未部署）
+## 2026-06-14 站台模板擴充 + 模板比對修正 + 尾部裁切 + Tier 2/3 骨架（content-crawler 已部署）
 - **Feature（4 個新站台模板）**: 新增 ltn（自由時報，含 news/ec/m 子域）、cna（中央社）、mirrormedia（鏡週刊）、technews（科技新報）。
-- **Feature（JSON-LD 萃取）**: 新增 `_extract_from_json_ld()`，從 JSON-LD `NewsArticle.articleBody` 萃取主文（MirrorMedia 等 Next.js styled-components 站台的最可靠來源）。實測鏡週刊抽到 1689 字。
+- **Feature（JSON-LD 萃取）**: 新增 `_extract_from_json_ld()`，從 JSON-LD `NewsArticle.articleBody` 萃取主文（MirrorMedia 等 Next.js styled-components 站台的最可靠來源）。Chrome MCP 實測鏡週刊：JSON-LD 1689 字 = 文章正文，且不含尾部雜訊。
 - **Feature（fallback 鏈擴充）**: 主文過短時依序 JSON-LD → block_payload → meta description（原本只有 block_payload）。
-- **Fix（模板比對最具體優先）**: 通用 `news` 模板（indicator=`news`）會搶先命中 `cna.com.tw/news/`、`ltn.com.tw/news/` 等網址，蓋掉專屬模板而落入啟發式（抽到 cookie 橫幅）。改為收集所有命中模板，依「具體度」（網域型 indicator 含 `.` 加 1000 權重）排序選最具體者。實測 ltn/cna/nownews/chinatimes/ettoday/mirrormedia/technews 皆正確命中專屬模板；CNA 抽到 1107 字正文，不再洩漏 cookie 橫幅。
-- **文件**: 新增 `crawler-service/CRAWLER_STRATEGY.md`：抽取流程、25+ 站台選擇器對照表、分層爬取（Tier 1 無頭瀏覽器 → Tier 2 Gemini URL 直讀 → Tier 3 Webshare 住宅 IP）策略與成本評估。
-- ⏳ **待部署**：本批修正尚未部署，等待部署口令。
+- **Fix（模板比對最具體優先）**: 通用 `news` 模板（indicator=`news`）會搶先命中 `cna.com.tw/news/`、`ltn.com.tw/news/` 等網址，蓋掉專屬模板而落入啟發式（抽到 cookie 橫幅）。改為收集所有命中模板，依「具體度」（網域型 indicator 含 `.` 加 1000 權重）排序選最具體者。實測 ltn/cna/nownews/chinatimes/ettoday/mirrormedia/technews 皆正確命中專屬模板。
+- **補強（尾部樣板裁切）**: 新增 `_trim_trailing_boilerplate()`，累積 150 字正文後遇到「支持中央社/下載APP/非經授權/一手掌握/點我訂閱/你可能有興趣/支持鏡週刊」等尾部樣板即截斷。保守設計只裁尾部。Chrome MCP 實測 CNA/LTN：正文正確結束，樣板全裁切。
+- **Feature（分層爬取 Tier 2/3 骨架）**: 新增 `tiered_fallback.py`：Tier 2（Gemini URL 直讀，env `ENABLE_GEMINI_URL_FALLBACK`）、Tier 3（Webshare 住宅 IP 代理 + proxy auth 擴充，env `WEBSHARE_PROXY_ENABLED`+憑證）。`app.py` `_run_scrape` 改為 Tier 1→2→3 協調器。**全部 env 控制、預設關閉**，未設定時行為與單純 Tier 1 完全相同，等使用者填入憑證才啟用。async 批次（crawl_job.py）暫不走 Tier 2/3（保留 driver 重用），列為後續。
+- **文件**: 新增 `crawler-service/CRAWLER_STRATEGY.md`：抽取流程、25+ 站台選擇器對照表、分層策略與 Webshare 成本評估。
+- ✅ **已部署**：content-crawler 部署至 GCP asia-east1（revision content-crawler-00021-xrt 起；第二次部署補入尾部裁切）。
 
 ## 2026-06-14 Code-review 修正：5 項 bug／安全問題（deploy-20260614-8，三服務）
 - **Fix (crawler dead code)**: `_scroll_and_wait_for_full_load` 的 scrollTo/sleep 移到 return 前，修正 lazy 渲染等待永遠不執行的問題。
