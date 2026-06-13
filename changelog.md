@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-14 爬蟲新增 nownews、chinatimes、yahoo_tw + ETtoday 修正
+- **Feature (爬蟲模板補充)**: 新增 nownews.com（今日新聞）、chinatimes.com（中時新聞網）、yahoo_tw（Yahoo奇摩新聞/財經）三組 SITE_TEMPLATES。
+- **Fix (ETtoday redirect)**: ettoday 模板 indicators 加入 `star.ettoday.net`（301 重定向目標），並補充 `#newsContent` 選擇器。
+- 部署三個服務至 GCP asia-east1（deploy-20260614-2）。
+
 ## 2026-06-14 爬蟲覆蓋率提升 + pipeline 逾時防護 + 輸入驗證
 - **Feature (爬蟲模板大幅擴充)**: 新增 12 個台灣媒體 SITE_TEMPLATES：vogue_tw（Condé Nast）、gq_tw、udn（聯合報）、ettoday、thenewslens（關鍵評論網）、gvm（遠見）、bnext（數位時代）、storm_mg（風傳媒）、businesstoday（今周刊）、commonhealth（康健）、cw（天下）。
 - **Feature (RSC payload 抽取增強)**: `_extract_from_block_payload` 新增格式 2（React RSC `["$","p","key",{"children":"..."}]`）與格式 3（中文字串 fallback），覆蓋 Vogue/GQ 等 Next.js App Router 頁面。
