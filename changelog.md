@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-14 爬蟲核心邏輯對齊 Colab（Fix C/D/E）
+- **Fix C (noise_filter AND化)**: `crawler.py` 噪音關鍵字過濾條件從 `p_count < 5 OR text_len < 800` 改為 `p_count < 3 AND text_len < 400`，對齊 Colab，避免誤刪 Vogue/ELLE 等媒體文章容器。
+- **Fix D (_wait_for_content_load)**: 等待 body 後額外輪試 `article`、`main`、`#content`、`.content` 選擇器（各等最多 5 秒），對齊 Colab，確保 JS 渲染完成才抽取 DOM。
+- **Fix E (.gitignore REF/)**: 本地 Colab 參考爬蟲資料夾加入 `.gitignore`，不推送 GitHub。
+- 部署 content-crawler 至 GCP asia-east1（deploy-20260614-4）。
+
 ## 2026-06-14 補強 synthesis + llm_path LLM 呼叫穩健性
 - **Fix (synthesis.py)**: §1 摘要、§4 搜尋情境分析、§6 建議各自加個別 try/except，單一章節 LLM 失敗時以佔位文字降級，不中斷其他章節。
 - **Fix (llm_path.py)**: `run_qualitative_analysis()` 加 try/except，token 超限或逾時時降級回傳而非中斷整個 Path 2。
