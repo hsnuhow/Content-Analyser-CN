@@ -785,22 +785,38 @@ class HeadlessCrawler:
         self._log("[Page Type Analysis] Judgement: SINGLE ARTICLE PAGE.")
         return False
 
-    def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60):
+    def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60, original_url: str = None):
         """滾動到底以觸發 lazy-load（對齊 Colab v3.8 _scroll_page_safe）。
 
         逐次滾到底、等待，直到頁面高度連續穩定（stagnant）= 已到底。
         max_scrolls 上限防 infinity scroll（高度無限成長的 feed 頁）造成無限迴圈。
         網路在此階段保持開啟（_open 不再提早 window.stop），lazy-load 才能載入。
+        若 original_url 已提供，每次捲動後偵測 URL 是否因無限捲動換頁（pushState）
+        而改變，一旦改變立即停止並回傳 True，主流程應改用換頁前的 DOM 快照。
+
+        Returns:
+            True 若發生 URL 換頁（主流程應用 pre-scroll DOM 快照），否則 False。
         """
         self._log("[Scroll & Wait] Starting full page scroll for single article...")
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         stagnant_scrolls = 0
         max_stagnant_scrolls = 3
         scrolls = 0
+        url_changed = False
         while stagnant_scrolls < max_stagnant_scrolls and scrolls < max_scrolls:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(self.scroll_pause_time)
             scrolls += 1
+            # 偵測無限捲動換頁（A Day Magazine / ELLE 等現代媒體的 pushState 換頁）
+            if original_url:
+                try:
+                    current = self.driver.current_url
+                    if current != original_url:
+                        self._log(f"[Scroll & Wait] URL 已換頁（{current}），停止捲動以避免抓到下一篇")
+                        url_changed = True
+                        break
+                except Exception:
+                    pass
             new_height = self.driver.execute_script("return document.body.scrollHeight")
             if new_height > last_height:
                 self._log(f"[Scroll & Wait] Height → {new_height}px (scroll {scrolls}/{max_scrolls})")
@@ -811,8 +827,9 @@ class HeadlessCrawler:
                 self._log(f"[Scroll & Wait] Height stable {stagnant_scrolls}/{max_stagnant_scrolls} (scroll {scrolls})")
         if scrolls >= max_scrolls:
             self._log(f"[Scroll & Wait] 達滾動上限 {max_scrolls}（疑似 infinity scroll），停止。")
-        else:
+        elif not url_changed:
             self._log("[Scroll & Wait] 頁面高度已穩定，視為載入完整。")
+        return url_changed
         # 滾到底後回到頂部並緩衝，確保所有 lazy 區塊都已渲染進 DOM
         try:
             self.driver.execute_script("window.scrollTo(0, 0);")
@@ -1489,7 +1506,9 @@ class HeadlessCrawler:
                 return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
             self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
-            self._scroll_and_wait_for_full_load()
+            # pre_scroll_source：捲動前快照，供換頁時降級使用
+            pre_scroll_source = self.driver.page_source
+            url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
 
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（滾動階段後）")
@@ -1498,11 +1517,16 @@ class HeadlessCrawler:
                 self._wait_for_marieclaire_content()
 
             final_url = self.driver.current_url
-            if final_url != url:
-                self._log(f"[WARNING] URL changed! Original: {url} | Final: {final_url}")
-
-            final_source = self.driver.page_source
-            title = self.driver.title or "No Title"
+            if url_changed_during_scroll or final_url != url:
+                self._log(f"[WARNING] URL changed after scroll: {url} → {final_url}，使用 pre-scroll DOM 避免抓到換頁後內容")
+                # 無限捲動換頁（pushState）後的 DOM 包含下一篇文章，改用捲動前快照
+                final_source = pre_scroll_source
+                pre_scroll_soup = BeautifulSoup(pre_scroll_source, 'html.parser')
+                title_tag = pre_scroll_soup.find('title')
+                title = title_tag.get_text(strip=True) if title_tag else "No Title"
+            else:
+                final_source = self.driver.page_source
+                title = self.driver.title or "No Title"
             self._log(f"[Extraction] Page loaded. Title: '{title}'. Starting main content analysis.")
 
             content = self._extract_main_text(final_source, url)
