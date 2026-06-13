@@ -42,7 +42,7 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
     def _scrape_one(url: str) -> dict:
         try:
             # keep_driver=True：批次重用，不在每篇結束時 quit driver。
-            return crawler.scrape(url, hard_timeout_sec=150, keep_driver=True)
+            return crawler.scrape(url, hard_timeout_sec=300, keep_driver=True)
         except UnsupportedSiteError as e:
             return {"status": "skipped", "url": url, "error": str(e)}
         except Exception as e:

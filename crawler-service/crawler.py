@@ -185,12 +185,9 @@ class HeadlessCrawler:
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--dns-prefetch-disable")
 
-        # ⭐️ page_load_strategy = "none"：driver.get() 立即返回，不等任何載入完成。
-        #    改由 _open() 主動 poll document.readyState 控制等待時間（最多 N 秒），
-        #    達 interactive（HTML/主文 DOM 已就緒）即 window.stop()。
-        #    原因：eager 仍會等 DOMContentLoaded，重型站（ELLE 等）可達 90 秒；
-        #    且 undetected-chromedriver 不理會 set_page_load_timeout，無法靠它中斷。
-        options.page_load_strategy = "none"
+        # 對齊 Colab v3.8：eager 策略（等 DOMContentLoaded，不等所有資源）。
+        # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
+        options.page_load_strategy = "eager"
 
         uc_params = {
             "options": options,
@@ -215,11 +212,11 @@ class HeadlessCrawler:
         except Exception as e:
             self._log(f"[INIT] CDP 設定略過: {e}")
 
-        # none 策略下 driver.get 仍受 page_load_timeout 影響而阻塞；設短（15s）
-        # 讓它快返回，改由 _open 的主動 poll（readyState + 內文穩定）控制等待。
-        self.driver.set_page_load_timeout(15)
-        self.driver.set_script_timeout(15)
-        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面15s，腳本15s）")
+        # 不管時間優先：放寬頁面載入逾時，讓跨國重型站（eager DOMContentLoaded
+        # 可達 90s+）能完整載入。逾時時 _open 仍會容忍（用已載入 DOM）。
+        self.driver.set_page_load_timeout(120)
+        self.driver.set_script_timeout(30)
+        self._log("[INIT] ✓ undetected-chromedriver 已就緒（頁面120s，腳本30s）")
         return self.driver
 
     def _apply_locale_spoofing_js(self):
@@ -235,69 +232,29 @@ class HeadlessCrawler:
         except Exception:
             pass
 
-    def _open(self, url: str, max_load_wait: int = 45, max_retries: int = 2):
-        """打開網頁，採「none 策略 + 主動等待（readyState + 內文穩定）」。
+    def _open(self, url: str, max_retries: int = 2):
+        """打開網頁，對齊 Colab v3.8：eager 策略 driver.get + 重試。
 
-        page_load_strategy="none"，driver.get() 受短 page_load_timeout 限制快返回。
-        然後分兩階段主動等待：
-          階段1：poll document.readyState 達 interactive/complete（HTML 已解析）。
-          階段2：poll document.body.innerText 長度，等它「渲染穩定」
-                 （連續多次不再明顯成長）——針對 client-side render 的頁面
-                 （如 GQ 等 Next.js 專題頁），文字靠 JS 填入，需等渲染完才抽取。
-        達穩定或超過 max_load_wait（45s）即 window.stop() 用當前 DOM。
-        僅「真正的網路連線錯誤」才重試。
+        - 不在此處 window.stop()：保持網路開啟，讓後續 _scroll 階段能觸發
+          lazy-load 載入所有區塊（GQ 等滾動式頁面的內容靠此載入）。
+        - eager 載入逾時（>120s）時容忍：用已載入的 DOM 繼續，不判失敗。
+        - 僅「真正的網路連線錯誤」才重試。
         """
         for attempt in range(1, max_retries + 1):
             try:
                 self._log(f"[載入] 開啟網頁 (嘗試 {attempt}/{max_retries}): {url}")
+                self.driver.get(url)
+                self._apply_locale_spoofing_js()
+                self._log("[載入] ✓ 網頁已載入（DOMContentLoaded）")
+                return
+            except TimeoutException:
+                # eager 載入逾時：容忍，用已載入的 DOM；不重試（重試一樣慢）。
+                self._log("[載入] ⚠️ 載入逾時，使用已載入內容繼續（網路保持，供後續滾動 lazy-load）")
                 try:
-                    self.driver.get(url)
-                except TimeoutException:
-                    # none 策略 + 短 page_load_timeout：get 逾時但頁面仍在載入，繼續等。
-                    pass
-
-                start = time.time()
-
-                # 階段1：等 DOM 可用
-                while time.time() - start < max_load_wait:
-                    try:
-                        state = self.driver.execute_script("return document.readyState")
-                    except Exception:
-                        state = None
-                    if state in ("interactive", "complete"):
-                        break
-                    time.sleep(0.5)
-
-                # 階段2：等內文渲染穩定（針對 JS 動態渲染的頁面）
-                last_len = -1
-                stable = 0
-                while time.time() - start < max_load_wait:
-                    try:
-                        cur_len = int(self.driver.execute_script(
-                            "return (document.body && document.body.innerText) ? document.body.innerText.length : 0"
-                        ) or 0)
-                    except Exception:
-                        cur_len = last_len
-                    # 內文已有一定量且相較上次成長 < 3% → 視為穩定
-                    if cur_len > 300 and last_len > 0 and cur_len <= last_len * 1.03:
-                        stable += 1
-                        if stable >= 2:
-                            break
-                    else:
-                        stable = 0
-                    last_len = cur_len
-                    time.sleep(1)
-
-                try:
-                    self.driver.execute_script("window.stop();")
+                    self._apply_locale_spoofing_js()
                 except Exception:
                     pass
-                self._apply_locale_spoofing_js()
-
-                waited = int(time.time() - start)
-                self._log(f"[載入] ✓ 內文長度 {last_len}，等待 {waited}s 後停止，使用當前 DOM")
                 return
-
             except Exception as e:
                 error_msg = str(e).lower()
                 net_err = any(kw in error_msg for kw in [
@@ -540,23 +497,40 @@ class HeadlessCrawler:
         self._log("[Page Type Analysis] Judgement: SINGLE ARTICLE PAGE.")
         return False
 
-    def _scroll_and_wait_for_full_load(self):
+    def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60):
+        """滾動到底以觸發 lazy-load（對齊 Colab v3.8 _scroll_page_safe）。
+
+        逐次滾到底、等待，直到頁面高度連續穩定（stagnant）= 已到底。
+        max_scrolls 上限防 infinity scroll（高度無限成長的 feed 頁）造成無限迴圈。
+        網路在此階段保持開啟（_open 不再提早 window.stop），lazy-load 才能載入。
+        """
         self._log("[Scroll & Wait] Starting full page scroll for single article...")
         last_height = self.driver.execute_script("return document.body.scrollHeight")
         stagnant_scrolls = 0
         max_stagnant_scrolls = 3
-        while stagnant_scrolls < max_stagnant_scrolls:
+        scrolls = 0
+        while stagnant_scrolls < max_stagnant_scrolls and scrolls < max_scrolls:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(self.scroll_pause_time)
+            scrolls += 1
             new_height = self.driver.execute_script("return document.body.scrollHeight")
             if new_height > last_height:
-                self._log(f"[Scroll & Wait] Page height increased to {new_height}px. Continuing...")
+                self._log(f"[Scroll & Wait] Height → {new_height}px (scroll {scrolls}/{max_scrolls})")
                 last_height = new_height
                 stagnant_scrolls = 0
             else:
                 stagnant_scrolls += 1
-                self._log(f"[Scroll & Wait] Page height stable. Stagnant count: {stagnant_scrolls}/{max_stagnant_scrolls}")
-        self._log("[Scroll & Wait] Page height has stabilized. Assuming full page load.")
+                self._log(f"[Scroll & Wait] Height stable {stagnant_scrolls}/{max_stagnant_scrolls} (scroll {scrolls})")
+        if scrolls >= max_scrolls:
+            self._log(f"[Scroll & Wait] 達滾動上限 {max_scrolls}（疑似 infinity scroll），停止。")
+        else:
+            self._log("[Scroll & Wait] 頁面高度已穩定，視為載入完整。")
+        # 滾到底後回到頂部並緩衝，確保所有 lazy 區塊都已渲染進 DOM
+        try:
+            self.driver.execute_script("window.scrollTo(0, 0);")
+        except Exception:
+            pass
+        time.sleep(2)
 
     def _wait_for_marieclaire_content(self):
         """特別為 marieclaire 等待文章內容載入"""
@@ -1150,7 +1124,7 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
-    def scrape(self, url: str, hard_timeout_sec: int = 150,
+    def scrape(self, url: str, hard_timeout_sec: int = 300,
                keep_driver: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
 
