@@ -66,7 +66,7 @@ def run_analysis(job_id: str, report_title: str,
         try:
             llm = LLMClient(
                 provider=llm_config.get("provider", "gemini"),
-                model=llm_config.get("model", "gemini-2.0-flash"),
+                model=llm_config.get("model", "gemini-2.5-flash"),
                 api_key=llm_config.get("api_key", ""),
             )
         except ValueError as e:
@@ -150,7 +150,7 @@ def run_analysis(job_id: str, report_title: str,
             llm_results=llm_results,
             synthesis_parts=synthesis_parts,
             llm_provider=llm_config.get("provider", "gemini"),
-            llm_model=llm_config.get("model", "gemini-2.0-flash"),
+            llm_model=llm_config.get("model", "gemini-2.5-flash"),
         )
 
         _update_job(

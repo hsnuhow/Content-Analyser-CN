@@ -58,20 +58,28 @@
         <div class="list-group list-group-flush">
           {% if datasets %}
           {% for ds in datasets %}
-          <a href="{{ url_for('project_bp.dataset_detail', pid=pid, did=ds.id) }}"
-             class="list-group-item list-group-item-action">
+          <div class="list-group-item">
             <div class="d-flex justify-content-between align-items-center">
               <div>
-                <strong>{{ ds.name }}</strong>
+                <a href="{{ url_for('project_bp.dataset_detail', pid=pid, did=ds.id) }}"
+                   class="text-decoration-none fw-bold">{{ ds.name }}</a>
                 <div class="text-muted small">
                   {{ ds.item_count }} 個網址{% if ds.succeeded is defined %} · 成功 {{ ds.succeeded }}{% endif %}
                 </div>
               </div>
-              <span class="badge bg-{% if ds.status == 'completed' %}success{% elif ds.status == 'failed' %}danger{% elif ds.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
-                {{ ds.status }}
-              </span>
+              <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-{% if ds.status == 'completed' %}success{% elif ds.status == 'failed' %}danger{% elif ds.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
+                  {{ ds.status }}
+                </span>
+                {% if ds.status == 'completed' %}
+                <a href="{{ url_for('project_bp.download_dataset_md', pid=pid, did=ds.id) }}"
+                   class="btn btn-sm btn-outline-secondary" download title="下載 Markdown">📄 MD</a>
+                <a href="{{ url_for('project_bp.download_dataset_json', pid=pid, did=ds.id) }}"
+                   class="btn btn-sm btn-outline-secondary" download title="下載 JSON">🔧 JSON</a>
+                {% endif %}
+              </div>
             </div>
-          </a>
+          </div>
           {% endfor %}
           {% else %}
           <div class="list-group-item text-muted text-center py-4">尚無資料集。先在上方輸入網址爬取。</div>
@@ -161,7 +169,7 @@
               <label class="form-label small fw-semibold">模型</label>
               <input type="text" name="llm_model" class="form-control form-control-sm"
                      value="{{ project.llm_config.model }}"
-                     placeholder="gemini-2.0-flash">
+                     placeholder="gemini-2.5-flash">
             </div>
             <div class="mb-3">
               <label class="form-label small fw-semibold">API Key</label>

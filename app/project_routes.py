@@ -143,7 +143,7 @@ def create_project():
         'members': {},
         'llm_config': {
             'provider': 'gemini',
-            'model': 'gemini-2.0-flash',
+            'model': 'gemini-2.5-flash',
             'api_key': '',
         },
         'created_at': firestore.SERVER_TIMESTAMP,
@@ -175,6 +175,12 @@ def project_detail(pid, project, role):
         .stream()
     )
     datasets = [d.to_dict() | {'id': d.id} for d in datasets_docs]
+    # 進專案頁主動同步 crawling 中的資料集（回收背景爬完的結果，狀態/下載鈕即時正確）
+    datasets = [
+        (_sync_crawling_dataset(pid, ds['id'], ds) or ds)
+        if ds.get('status') == 'crawling' else ds
+        for ds in datasets
+    ]
 
     return render_template('project_detail.html',
                            project=project, pid=pid,
@@ -185,7 +191,7 @@ def project_detail(pid, project, role):
 @project_access_required(min_role='owner')
 def update_settings(pid, project, role):
     llm_provider = request.form.get('llm_provider', 'gemini').strip()
-    llm_model = request.form.get('llm_model', 'gemini-2.0-flash').strip()
+    llm_model = request.form.get('llm_model', 'gemini-2.5-flash').strip()
     llm_api_key = request.form.get('llm_api_key', '').strip()
 
     update = {
@@ -278,7 +284,7 @@ def submit_analysis_route(pid, project, role):
         report_title=report_title,
         contents=contents,
         llm_provider=llm_config.get('provider', 'gemini'),
-        llm_model=llm_config.get('model', 'gemini-2.0-flash'),
+        llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_api_key,
     )
 
@@ -302,7 +308,7 @@ def submit_analysis_route(pid, project, role):
         'log': '任務已提交，等待分析引擎處理...',
         'n_articles': len(contents),
         'llm_provider': llm_config.get('provider', 'gemini'),
-        'llm_model': llm_config.get('model', 'gemini-2.0-flash'),
+        'llm_model': llm_config.get('model', 'gemini-2.5-flash'),
         'submitted_by': current_user_email(),
         'submitted_at': firestore.SERVER_TIMESTAMP,
         'completed_at': None,
@@ -459,14 +465,56 @@ def create_dataset(pid, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
 
+def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
+    """若 dataset 仍在 crawling，向 crawler 拉 job 最新狀態並同步回 Firestore。
+    回傳最新 dataset dict（含 id）；找不到回傳 None。
+
+    這是「後端主動同步」的核心：頁面載入時呼叫（dataset_detail / project_detail），
+    確保即使使用者離開頁面、crawler 在背景跑完，下次進頁面就會回收結果並轉 completed，
+    不再只依賴前端輪詢（離開即斷 → 永遠卡 crawling）。
+    """
+    ds_ref = (db.collection('projects').document(pid)
+              .collection('datasets').document(did))
+    if dataset is None:
+        doc = ds_ref.get()
+        if not doc.exists:
+            return None
+        dataset = doc.to_dict() | {'id': did}
+
+    if dataset.get('status') != 'crawling':
+        return dataset
+    job_id = dataset.get('crawl_job_id')
+    if not job_id:
+        return dataset
+
+    job = get_crawl_status(job_id)
+    jstatus = job.get('status', 'crawling')
+    update = {
+        'progress': job.get('progress', dataset.get('progress', 0)),
+        'log': job.get('log', dataset.get('log', '')),
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    }
+    if jstatus == 'completed':
+        results = job.get('results', [])
+        update['items'] = results
+        update['status'] = 'completed'
+        update['item_count'] = len(results)
+        update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
+    elif jstatus == 'failed':
+        update['status'] = 'failed'
+        update['log'] = job.get('log', '爬取失敗')
+    ds_ref.update(update)
+    return {**dataset, **update}
+
+
 @bp.route('/<pid>/datasets/<did>')
 @project_access_required(min_role='viewer')
 def dataset_detail(pid, did, project, role):
-    doc = (db.collection('projects').document(pid)
-           .collection('datasets').document(did).get())
-    if not doc.exists:
+    # 進入詳情頁主動同步：離開頁面後 crawler 跑完的結果在此回收。
+    dataset = _sync_crawling_dataset(pid, did)
+    if dataset is None:
         abort(404)
-    dataset = doc.to_dict() | {'id': did}
+    dataset['id'] = did
     return render_template('dataset_detail.html',
                            project=project, pid=pid, dataset=dataset, role=role)
 
@@ -474,40 +522,11 @@ def dataset_detail(pid, did, project, role):
 @bp.route('/<pid>/datasets/<did>/status')
 @project_access_required(min_role='viewer')
 def dataset_status(pid, did, project, role):
-    """輪詢爬取進度；完成時把 crawler 結果同步進 dataset.items。"""
-    ds_ref = (db.collection('projects').document(pid)
-              .collection('datasets').document(did))
-    doc = ds_ref.get()
-    if not doc.exists:
+    """前端輪詢進度；同步邏輯共用 _sync_crawling_dataset。"""
+    dataset = _sync_crawling_dataset(pid, did)
+    if dataset is None:
         return jsonify({'error': '找不到此資料集'}), 404
-
-    dataset = doc.to_dict()
-    status = dataset.get('status', 'crawling')
-
-    if status == 'crawling':
-        job_id = dataset.get('crawl_job_id')
-        if job_id:
-            job = get_crawl_status(job_id)
-            jstatus = job.get('status', status)
-            update = {
-                'progress': job.get('progress', dataset.get('progress', 0)),
-                'log': job.get('log', dataset.get('log', '')),
-                'updated_at': firestore.SERVER_TIMESTAMP,
-            }
-            if jstatus == 'completed':
-                results = job.get('results', [])
-                update['items'] = results
-                update['status'] = 'completed'
-                update['item_count'] = len(results)
-                update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
-            elif jstatus == 'failed':
-                update['status'] = 'failed'
-                update['log'] = job.get('log', '爬取失敗')
-            ds_ref.update(update)
-            return jsonify({'status': update.get('status', 'crawling'),
-                            'progress': update['progress'], 'log': update['log']})
-
-    return jsonify({'status': status,
+    return jsonify({'status': dataset.get('status', 'crawling'),
                     'progress': dataset.get('progress', 0),
                     'log': dataset.get('log', '')})
 
@@ -552,7 +571,7 @@ def analyse_dataset(pid, did, project, role):
         report_title=report_title,
         contents=contents,
         llm_provider=llm_config.get('provider', 'gemini'),
-        llm_model=llm_config.get('model', 'gemini-2.0-flash'),
+        llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_config.get('api_key'),
     )
     if 'error' in result:
@@ -571,7 +590,7 @@ def analyse_dataset(pid, did, project, role):
         'log': '任務已提交，等待分析引擎處理...',
         'n_articles': len(contents),
         'llm_provider': llm_config.get('provider', 'gemini'),
-        'llm_model': llm_config.get('model', 'gemini-2.0-flash'),
+        'llm_model': llm_config.get('model', 'gemini-2.5-flash'),
         'submitted_by': current_user_email(),
         'submitted_at': firestore.SERVER_TIMESTAMP,
         'completed_at': None,
@@ -580,3 +599,91 @@ def analyse_dataset(pid, did, project, role):
     })
     flash(f'已從資料集「{dataset.get("name")}」提交分析（{len(contents)} 篇）。', 'success')
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 資料集下載（原始爬取內文）：Markdown / JSON
+# ──────────────────────────────────────────────────────────────────────
+
+def _dataset_to_markdown(dataset: dict) -> str:
+    """資料集 → Markdown：成功項目逐篇（標題/網址/字數/內文），末尾附未成功清單。"""
+    name = dataset.get('name', 'dataset')
+    items = dataset.get('items', [])
+    success = [it for it in items if it.get('status') == 'success' and it.get('content')]
+    others = [it for it in items if not (it.get('status') == 'success' and it.get('content'))]
+
+    lines = [f"# {name}", "",
+             f"> 共 {dataset.get('item_count', len(items))} 個網址，成功 {len(success)} 篇", ""]
+    for it in success:
+        lines += [f"## {it.get('title') or '(無標題)'}", "",
+                  f"- 網址：{it.get('url', '')}",
+                  f"- 字數：{it.get('length', '-')}", "",
+                  it.get('content', ''), "", "---", ""]
+    if others:
+        lines += ["## 未成功項目", ""]
+        for it in others:
+            err = f" — {it.get('error')}" if it.get('error') else ""
+            lines.append(f"- [{it.get('status', '?')}] {it.get('url', '')}{err}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _dataset_to_json(dataset: dict) -> dict:
+    """資料集 → 結構化 JSON：含全部項目（成功+失敗）。"""
+    items = dataset.get('items', [])
+    return {
+        'dataset': dataset.get('name', ''),
+        'item_count': dataset.get('item_count', len(items)),
+        'succeeded': sum(1 for it in items if it.get('status') == 'success'),
+        'items': [
+            {
+                'url': it.get('url', ''),
+                'title': it.get('title', ''),
+                'length': it.get('length'),
+                'status': it.get('status', ''),
+                'content': it.get('content', ''),
+                'error': it.get('error', ''),
+            } for it in items
+        ],
+    }
+
+
+def _get_completed_dataset_or_redirect(pid: str, did: str):
+    """讀取已完成的資料集；未完成回 (None, redirect_response)。"""
+    doc = (db.collection('projects').document(pid)
+           .collection('datasets').document(did).get())
+    if not doc.exists:
+        abort(404)
+    dataset = doc.to_dict()
+    if dataset.get('status') != 'completed':
+        flash('資料集尚未爬取完成，無法下載。', 'warning')
+        return None, redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    return dataset, None
+
+
+@bp.route('/<pid>/datasets/<did>/download.md')
+@project_access_required(min_role='viewer')
+def download_dataset_md(pid, did, project, role):
+    """下載資料集原始爬取內文（Markdown）。"""
+    dataset, resp = _get_completed_dataset_or_redirect(pid, did)
+    if resp:
+        return resp
+    md = _dataset_to_markdown(dataset)
+    fname = (dataset.get('name') or 'dataset').replace(' ', '_')
+    return send_file(BytesIO(md.encode('utf-8')), as_attachment=True,
+                     download_name=f"{fname}.md",
+                     mimetype='text/markdown; charset=utf-8')
+
+
+@bp.route('/<pid>/datasets/<did>/download.json')
+@project_access_required(min_role='viewer')
+def download_dataset_json(pid, did, project, role):
+    """下載資料集原始爬取內文（結構化 JSON，含全部項目）。"""
+    dataset, resp = _get_completed_dataset_or_redirect(pid, did)
+    if resp:
+        return resp
+    payload = json.dumps(_dataset_to_json(dataset), ensure_ascii=False, indent=2)
+    fname = (dataset.get('name') or 'dataset').replace(' ', '_')
+    return send_file(BytesIO(payload.encode('utf-8')), as_attachment=True,
+                     download_name=f"{fname}.json",
+                     mimetype='application/json; charset=utf-8')
