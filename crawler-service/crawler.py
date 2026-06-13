@@ -86,6 +86,17 @@ MAIN_CONTENT_SELECTORS = [
 ]
 
 SITE_TEMPLATES = {
+    # ── A Day Magazine（WordPress + #infinite-article 無限捲動換頁）──
+    # 注意：頁面使用 auto-advance JS，數秒後自動替換 DOM 並改 URL（pushState）
+    # 必須搭配 dom_snapshot_source 才能取到正確文章
+    'adaymag': {
+        'indicators': ['adaymag.com'],
+        'selectors': [
+            '.post-content.entry-content', '.post-content-container',
+            'article.blog-post .entry-content', 'article .entry-content',
+            '.entry-content', '.post-content', 'article',
+        ]
+    },
     'wordpress': {
         'indicators': ['wp-content', 'wp-includes', 'wordpress'],
         'selectors': ['.entry-content', '.post-content', 'article .content', '.single-content']
