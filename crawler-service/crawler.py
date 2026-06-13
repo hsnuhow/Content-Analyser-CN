@@ -70,6 +70,12 @@ MAIN_CONTENT_SELECTORS = [
     "[class*=content]", "[class*=article]", "[class*=post]",
     ".article-body", "[itemprop=articleBody]", ".story__content",
     ".content-detail.expand", "#container .content-left .content-detail",
+    # Hearst Asia CMS（ELLE / Cosmo / Bazaar）
+    ".article__body-content", ".article__body", ".article-body-content",
+    ".article-text", "[class*='article__body']",
+    # 常見中文媒體
+    ".single-content", ".content-body", ".post-article",
+    "[class*='entry-body']", "[class*='article-text']",
 ]
 
 SITE_TEMPLATES = {
@@ -105,7 +111,83 @@ SITE_TEMPLATES = {
             'main article',
             'article'
         ]
-    }
+    },
+    # ── Hearst Asia CMS（ELLE / Cosmopolitan / Harper's Bazaar 台灣版）──
+    # 均使用同一套 Hearst Digital CMS，class 命名一致。
+    'elle_tw': {
+        'indicators': ['elle.com.tw'],
+        'selectors': [
+            '.article__body-content',
+            '.article__body',
+            '.article-content',
+            '.article-body-content',
+            '.article-body',
+            '.article-text',
+            '[class*="article__body"]',
+            '[class*="article-body"]',
+            '[itemprop="articleBody"]',
+            'article .content',
+            'article',
+        ]
+    },
+    'cosmopolitan_tw': {
+        'indicators': ['cosmopolitan.com.tw', 'cosmo.com.tw'],
+        'selectors': [
+            '.article__body-content',
+            '.article__body',
+            '.article-content',
+            '.article-body',
+            '[class*="article__body"]',
+            '[itemprop="articleBody"]',
+            'article',
+        ]
+    },
+    'harpersbazaar_tw': {
+        'indicators': ['harpersbazaar.com.tw'],
+        'selectors': [
+            '.article__body-content',
+            '.article__body',
+            '.article-content',
+            '.article-body',
+            '[class*="article__body"]',
+            '[itemprop="articleBody"]',
+            'article',
+        ]
+    },
+    # ── 商業週刊 / 親子天下 / cheers ──
+    'businessweekly': {
+        'indicators': ['businessweekly.com.tw'],
+        'selectors': [
+            '.article-body',
+            '.article__content',
+            '#article-body',
+            '.article-content',
+            '[class*="article-body"]',
+            '.entry-content',
+            'article',
+        ]
+    },
+    'parenting': {
+        'indicators': ['parenting.com.tw'],
+        'selectors': [
+            '.article-body',
+            '.single-content',
+            '.article-content',
+            '.content-body',
+            '[itemprop="articleBody"]',
+            'article',
+        ]
+    },
+    'cheers': {
+        'indicators': ['cheers.com.tw'],
+        'selectors': [
+            '.article-body',
+            '.article-content',
+            '.content-detail',
+            '[itemprop="articleBody"]',
+            'article',
+        ]
+    },
 }
 
 # ⭐️ [v3.8] 抽取前要移除的 CMP（Cookie 同意視窗）容器
@@ -686,7 +768,13 @@ class HeadlessCrawler:
                 )
 
             text = (getattr(resp, "text", None) or "").strip()
-            text = text.replace("```json", "").replace("```", "").strip()
+            # 穩健去除 markdown fence，再抽取 {...}（對齊 C2 修正）
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+            text = re.sub(r"\s*```\s*$", "", text, flags=re.MULTILINE)
+            text = text.strip()
+            json_match = re.search(r"\{.*\}", text, re.DOTALL)
+            if json_match:
+                text = json_match.group(0)
             data = json.loads(text)
 
             main_sel = data.get("selector")
