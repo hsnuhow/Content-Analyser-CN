@@ -161,6 +161,7 @@
 | `核准部署` | 正式部署（等同「核准部署：正式」）|
 | `核准部署：正式` | 部署三個 Cloud Run 服務至生產環境 |
 | `核准部署：單一服務` | 只部署指定的單一服務 |
+| `核准部署：測試` | 部署為 Cloud Run revision tag、**不切流量**，供 tag URL 測試 |
 | `核准推送` | git push |
 
 **其他詞語如「可以」、「好」、「繼續」、「OK」、「試試看」均不構成授權。**
@@ -177,6 +178,33 @@
 ### 2.5 禁止自主延伸
 
 完成指定任務後必須停止並回報。不得自行進入下一個功能、下一個模組或額外重構，除非使用者明確批准。
+
+### 2.6 Git 分支與部署流程（標準）
+
+**核心原則：`main` 永遠等於「已部署且線上測試通過」的穩定正確版。所有開發在 feature branch 進行，絕不直接在 `main` 上開發或 commit 功能。**
+
+標準流程（每個功能/修正都照此走）：
+
+```
+1. 從 main 切 feature branch          git switch -c feat/<主題>
+2. 在 branch 開發 + 本地驗證           py_compile / 靜態檢查 / mock 載入
+3. 收到「核准部署：測試」口令後，
+   部署該 branch 程式碼為新 revision，
+   且【不切流量】，用 tag 專屬 URL 測試  gcloud run deploy --no-traffic --tag <tag>
+4. tag URL 線上測試通過               （正式站流量完全不受影響）
+5. 將流量切至新 revision               gcloud run services update-traffic --to-latest
+6. merge 回 main（保留分支歷史）        git merge --no-ff feat/<主題>
+7. 收到「核准推送」口令後 push main     → main 永遠 = 已驗證穩定版
+```
+
+延伸鐵則（與 §部署鐵則同等強制）：
+
+- `main` 不直接開發、不直接 commit 功能；功能一律走 feature branch。
+- **線上測試（含 tagged revision）通過前，不得 merge 進 `main`，不得 push。**
+- revision tag 部署同樣需要部署口令（`核准部署：測試`）。
+- 例外：若安全修正已部署生效，不得為了「演練流程」把正式流量切回含漏洞的舊版——安全優先於流程形式。
+
+> 註：2026-06-13 的 auth 修正曾誤在 main 直接 commit + 切 100% 流量，事後補正為 `feat/auth-csrf` 分支。此節即為杜絕重演而立。
 
 ---
 

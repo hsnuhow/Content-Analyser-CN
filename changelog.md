@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-13 (登入驗證授權修正 + 全站 CSRF + Git 分支流程規範)
+- **Security Fix (Broken Access Control)**:
+    - **目的**: code review 發現 `main_bp` 與 `project_bp` 各有一份 `login_required`，其中 `main_bp` 版「補查 whitelist 卻不擋非 approved」，導致 pending/rejected 用戶可訪問受保護頁面（如 `/profile`）。
+    - **解決方式**:
+        1. 新增 `app/auth_guards.py` 作為單一真實來源，統一 `login_required`（含 approved 檢查）與 `is_dev_env()`；`routes.py`、`project_routes.py` 移除各自重複定義改 import。
+        2. `project_access_required` 補白名單 gate：被列為某專案 member 的非 approved 用戶不再能繞過白名單。
+    - **修改檔案**: 新增 `app/auth_guards.py`；`app/routes.py`、`app/project_routes.py`。
+- **Security Fix (資訊洩漏 / session)**:
+    - OAuth `callback` 失敗改為記伺服器 log + 通用訊息 + 導回 `/auth`，不再把內部例外字串回傳給使用者。
+    - `logout` 改 `session.clear()`，完整清除（含 `whitelist_status` / `_new_api_key` 殘留）。
+- **Hardening (CSRF)**:
+    - 導入 `Flask-WTF` `CSRFProtect`（`app/__init__.py`），7 個模板 16 個 POST 表單全加 `{{ csrf_token() }}`。
+    - 驗證：無 token 的 POST 回 `400 The CSRF token is missing`；帶 token 正常通過。
+    - **修改檔案**: `requirements.txt`(+Flask-WTF)、`app/__init__.py`、`app/templates/{profile,project_new,admin_users,project_detail,dataset_detail,admin_api_keys,admin_dashboard}.html`。
+- **Process (Git 分支與部署流程)**:
+    - CLAUDE.md §2.6 新增標準流程：feature branch 開發 → `核准部署：測試` 部署為 Cloud Run revision tag（不切流量）測試 → 通過才切流量並 `merge --no-ff` 進 main → `核准推送` push。
+    - 口令表新增 `核准部署：測試`。`main` 永遠等於已部署且測試通過的穩定版。
+
 ## 2026-06-10 21:30:00 (爬蟲拆分為獨立 API 服務 + 對齊 Colab v3.8)
 - **Refactor (Architecture)**:
     - **目的**: 將爬蟲改為一個完全獨立、透過 API 操作的 Cloud Run 服務，並以金鑰保護存取。
