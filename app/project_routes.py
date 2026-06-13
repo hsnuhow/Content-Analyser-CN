@@ -175,6 +175,12 @@ def project_detail(pid, project, role):
         .stream()
     )
     datasets = [d.to_dict() | {'id': d.id} for d in datasets_docs]
+    # 進專案頁主動同步 crawling 中的資料集（回收背景爬完的結果，狀態/下載鈕即時正確）
+    datasets = [
+        (_sync_crawling_dataset(pid, ds['id'], ds) or ds)
+        if ds.get('status') == 'crawling' else ds
+        for ds in datasets
+    ]
 
     return render_template('project_detail.html',
                            project=project, pid=pid,
@@ -459,14 +465,56 @@ def create_dataset(pid, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
 
+def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
+    """若 dataset 仍在 crawling，向 crawler 拉 job 最新狀態並同步回 Firestore。
+    回傳最新 dataset dict（含 id）；找不到回傳 None。
+
+    這是「後端主動同步」的核心：頁面載入時呼叫（dataset_detail / project_detail），
+    確保即使使用者離開頁面、crawler 在背景跑完，下次進頁面就會回收結果並轉 completed，
+    不再只依賴前端輪詢（離開即斷 → 永遠卡 crawling）。
+    """
+    ds_ref = (db.collection('projects').document(pid)
+              .collection('datasets').document(did))
+    if dataset is None:
+        doc = ds_ref.get()
+        if not doc.exists:
+            return None
+        dataset = doc.to_dict() | {'id': did}
+
+    if dataset.get('status') != 'crawling':
+        return dataset
+    job_id = dataset.get('crawl_job_id')
+    if not job_id:
+        return dataset
+
+    job = get_crawl_status(job_id)
+    jstatus = job.get('status', 'crawling')
+    update = {
+        'progress': job.get('progress', dataset.get('progress', 0)),
+        'log': job.get('log', dataset.get('log', '')),
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    }
+    if jstatus == 'completed':
+        results = job.get('results', [])
+        update['items'] = results
+        update['status'] = 'completed'
+        update['item_count'] = len(results)
+        update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
+    elif jstatus == 'failed':
+        update['status'] = 'failed'
+        update['log'] = job.get('log', '爬取失敗')
+    ds_ref.update(update)
+    return {**dataset, **update}
+
+
 @bp.route('/<pid>/datasets/<did>')
 @project_access_required(min_role='viewer')
 def dataset_detail(pid, did, project, role):
-    doc = (db.collection('projects').document(pid)
-           .collection('datasets').document(did).get())
-    if not doc.exists:
+    # 進入詳情頁主動同步：離開頁面後 crawler 跑完的結果在此回收。
+    dataset = _sync_crawling_dataset(pid, did)
+    if dataset is None:
         abort(404)
-    dataset = doc.to_dict() | {'id': did}
+    dataset['id'] = did
     return render_template('dataset_detail.html',
                            project=project, pid=pid, dataset=dataset, role=role)
 
@@ -474,40 +522,11 @@ def dataset_detail(pid, did, project, role):
 @bp.route('/<pid>/datasets/<did>/status')
 @project_access_required(min_role='viewer')
 def dataset_status(pid, did, project, role):
-    """輪詢爬取進度；完成時把 crawler 結果同步進 dataset.items。"""
-    ds_ref = (db.collection('projects').document(pid)
-              .collection('datasets').document(did))
-    doc = ds_ref.get()
-    if not doc.exists:
+    """前端輪詢進度；同步邏輯共用 _sync_crawling_dataset。"""
+    dataset = _sync_crawling_dataset(pid, did)
+    if dataset is None:
         return jsonify({'error': '找不到此資料集'}), 404
-
-    dataset = doc.to_dict()
-    status = dataset.get('status', 'crawling')
-
-    if status == 'crawling':
-        job_id = dataset.get('crawl_job_id')
-        if job_id:
-            job = get_crawl_status(job_id)
-            jstatus = job.get('status', status)
-            update = {
-                'progress': job.get('progress', dataset.get('progress', 0)),
-                'log': job.get('log', dataset.get('log', '')),
-                'updated_at': firestore.SERVER_TIMESTAMP,
-            }
-            if jstatus == 'completed':
-                results = job.get('results', [])
-                update['items'] = results
-                update['status'] = 'completed'
-                update['item_count'] = len(results)
-                update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
-            elif jstatus == 'failed':
-                update['status'] = 'failed'
-                update['log'] = job.get('log', '爬取失敗')
-            ds_ref.update(update)
-            return jsonify({'status': update.get('status', 'crawling'),
-                            'progress': update['progress'], 'log': update['log']})
-
-    return jsonify({'status': status,
+    return jsonify({'status': dataset.get('status', 'crawling'),
                     'progress': dataset.get('progress', 0),
                     'log': dataset.get('log', '')})
 
