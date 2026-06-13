@@ -192,14 +192,42 @@ SITE_TEMPLATES = {
             'article', 'main',
         ]
     },
-    # ── ETtoday 新聞雲 ──
+    # ── ETtoday 新聞雲（ettoday.net → star.ettoday.net redirect）──
     'ettoday': {
-        'indicators': ['ettoday.net'],
+        'indicators': ['ettoday.net', 'star.ettoday.net'],
         'selectors': [
             '.story', '#story', '.story-details',
-            '.article-content', '.newsContent',
+            '.newsContent', '#newsContent',
+            '.article-content', '.article-body',
             '[class*="story"]', '[itemprop="articleBody"]',
             'article', 'main',
+        ]
+    },
+    # ── 今日新聞 (nownews.com) ──
+    'nownews': {
+        'indicators': ['nownews.com'],
+        'selectors': [
+            '#article_content', '.article_body', '.article-body',
+            '.article-content', '.content-body',
+            '[itemprop="articleBody"]', 'article', 'main',
+        ]
+    },
+    # ── 中時新聞網 (chinatimes.com) ──
+    'chinatimes': {
+        'indicators': ['chinatimes.com'],
+        'selectors': [
+            '.article-body', '.article-box',
+            '.article-content', '#article-body',
+            '[itemprop="articleBody"]', 'article', 'main',
+        ]
+    },
+    # ── Yahoo奇摩新聞 / Yahoo Finance ──
+    'yahoo_tw': {
+        'indicators': ['yahoo.com/news', 'tw.yahoo.com', 'tw.finance.yahoo.com'],
+        'selectors': [
+            '[class*="caas-body"]', '.caas-body',
+            '.article-content', '[data-component="text-block"]',
+            '[itemprop="articleBody"]', 'article', 'main',
         ]
     },
     # ── 關鍵評論網 (thenewslens.com) ──
