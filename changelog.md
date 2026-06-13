@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-13 (M-B1/M-B2/M-B3 第二批安全修正)
+- **Fix (M-B1 - URL XSS 防護)**: `analysis-service/report.py` 附錄 URL 輸出前驗證 scheme，僅允許 http/https，防止 `javascript:` scheme 注入 Markdown 連結。
+- **Fix (M-B2 - email 查找一致性)**: `app/project_routes.py` `get_user_role()` 改為統一 `email.lower()` 查找，移除雙重 key fallback 邏輯。
+- **Fix (M-B3 - 輸入長度截斷 + source_type 白名單)**: `app/project_routes.py` `add_member()` 加 email regex 驗證；`submit_analysis_route()` 對每筆 content 物件強制截斷欄位長度並白名單過濾 source_type。
+
+## 2026-06-13 (M2/M5/M6/M7 安全與穩健性修正)
+- **Fix (M2 - Email 大小寫正規化)**: `app/services.py` 的 `get_user`、`ensure_user`、`update_last_login`、`approve_user`、`reject_user` 全加 `email.strip().lower()`，防止同帳號大小寫差異產生重複文件。
+- **Fix (M5 - LLM 模型白名單)**: `analysis-service/app.py` 加入 `llm_model` 白名單驗證，僅接受 `gemini-` 或 `claude-` 開頭的模型名，拒絕非法模型注入。
+- **Fix (M6 - KMeans 安全上限)**: `analysis-service/nlp_path.py` 加入 `n_clusters = min(n_clusters, len(embeddings))` 限制，並於 embeddings 少於 2 時提前回傳單一分群，防止 Vertex AI 回傳向量不足時 KMeans 崩潰。
+- **Fix (M7 - LLM 呼叫逾時)**: `analysis-service/llm_client.py` 加入 300 秒 timeout（透過 `concurrent.futures.ThreadPoolExecutor`），防止 LLM 呼叫永久阻塞分析 pipeline。
+
 ## 2026-06-13 (/loop 自動修正：Code Review C1–C5 + 爬蟲模板補強)
 - **Security Fix (C3 XSS)**: `analysis_detail.html` 加 DOMPurify.sanitize() 包覆 marked.parse()，防止 LLM 產生的 Markdown 注入惡意 script。
 - **Security Fix (C1 SSRF)**: `crawler-service/app.py` v1.4.0 新增 `_is_safe_url()` 過濾函式，攔截私有/保留 IP、loopback、GCP metadata endpoint (169.254.169.254)，套用至三個爬取端點。
