@@ -408,13 +408,24 @@ class UnsupportedSiteError(Exception):
 
 
 class HeadlessCrawler:
-    def __init__(self, log_callback: Optional[Callable[[str], None]] = None):
+    def __init__(self, log_callback: Optional[Callable[[str], None]] = None,
+                 use_proxy: bool = False):
         self.driver = None  # 型別為 uc.Chrome
         self.max_wait_time = 15
         self.scroll_pause_time = 1.5
         self.domain_selector_cache = {}
         self.genai_api_key = None
         self.log_callback = log_callback
+
+        # ⭐ Tier 3：是否使用 Webshare 代理（預設 False；僅 use_proxy=True
+        #    且環境變數有設定憑證時才生效，否則為 None = 不掛代理）。
+        self.proxy_config = None
+        if use_proxy:
+            try:
+                from tiered_fallback import load_proxy_config
+                self.proxy_config = load_proxy_config()
+            except Exception:
+                self.proxy_config = None
 
         env_key = os.environ.get("GENAI_API_KEY")
         if env_key:
@@ -467,6 +478,14 @@ class HeadlessCrawler:
         # 對齊 Colab v3.8：eager 策略（等 DOMContentLoaded，不等所有資源）。
         # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
         options.page_load_strategy = "eager"
+
+        # ⭐ Tier 3：掛載 Webshare 代理（僅 self.proxy_config 有值時；預設不執行）
+        if self.proxy_config:
+            try:
+                from tiered_fallback import apply_proxy_to_options
+                apply_proxy_to_options(options, self.proxy_config, log_fn=self._log)
+            except Exception as e:
+                self._log(f"[Tier3] 代理掛載失敗（改用直連）：{e}")
 
         uc_params = {
             "options": options,

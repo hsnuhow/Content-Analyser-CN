@@ -118,9 +118,10 @@ def health():
     }), 200
 
 
-def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
-                hard_timeout_sec: int = 60) -> dict:
-    crawler = HeadlessCrawler()
+def _tier1_scrape(url: str, use_gemini: bool, gemini_api_key: str,
+                  hard_timeout_sec: int, use_proxy: bool = False) -> dict:
+    """Tier 1：undetected-chromedriver 爬取（use_proxy=True 時走 Tier 3 代理）。"""
+    crawler = HeadlessCrawler(use_proxy=use_proxy)
     try:
         if use_gemini and gemini_api_key:
             crawler.configure_genai(gemini_api_key)
@@ -131,6 +132,60 @@ def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
         return {"status": "failed", "url": url, "error": str(e)}
     finally:
         crawler.close()
+
+
+# 視為「需要升級」的條件：失敗，或成功但內文過短（疑似只抓到導語）
+_TIER_UPGRADE_MIN_LEN = 200
+
+
+def _needs_upgrade(result: dict) -> bool:
+    if result.get("status") == "skipped":
+        return False  # skip（需登入等）升級也沒用
+    if result.get("status") != "success":
+        return True
+    return len((result.get("content") or "")) < _TIER_UPGRADE_MIN_LEN
+
+
+def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
+                hard_timeout_sec: int = 60) -> dict:
+    """分層爬取協調器（Tier 1 → 2 → 3）。
+
+    Tier 2/3 皆由環境變數控制、預設關閉：未設定時行為與單純 Tier 1 完全相同。
+    見 tiered_fallback.py 與 CRAWLER_STRATEGY.md。
+    """
+    # ── Tier 1：無頭瀏覽器（直連）──
+    result = _tier1_scrape(url, use_gemini, gemini_api_key, hard_timeout_sec)
+    if not _needs_upgrade(result):
+        return result
+
+    # ── Tier 2：Gemini URL 直讀（env: ENABLE_GEMINI_URL_FALLBACK）──
+    try:
+        from tiered_fallback import is_gemini_url_fallback_enabled, gemini_url_read
+        if is_gemini_url_fallback_enabled():
+            key = gemini_api_key or os.environ.get("GENAI_API_KEY")
+            text = gemini_url_read(url, key, log_fn=lambda m: print(m, flush=True))
+            if len(text) >= _TIER_UPGRADE_MIN_LEN:
+                return {"status": "success", "url": url,
+                        "title": result.get("title") or "(Tier2 Gemini)",
+                        "content": text, "length": len(text), "tier": 2}
+    except Exception as e:
+        print(f"[Tier2] 協調失敗：{e}", flush=True)
+
+    # ── Tier 3：Webshare 住宅 IP 代理重試（env: WEBSHARE_PROXY_ENABLED）──
+    try:
+        from tiered_fallback import load_proxy_config
+        if load_proxy_config() is not None:
+            print(f"[Tier3] Tier1/2 失敗，改用 Webshare 代理重試：{url}", flush=True)
+            proxied = _tier1_scrape(url, use_gemini, gemini_api_key,
+                                    hard_timeout_sec, use_proxy=True)
+            if not _needs_upgrade(proxied):
+                proxied["tier"] = 3
+                return proxied
+    except Exception as e:
+        print(f"[Tier3] 協調失敗：{e}", flush=True)
+
+    # 全部失敗：回傳 Tier 1 的結果（保留原始錯誤訊息）
+    return result
 
 
 # ── 同步端點（向後相容）──
