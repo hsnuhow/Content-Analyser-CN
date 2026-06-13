@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-14 爬蟲 auto-advance 換頁修正 + adaymag SITE_TEMPLATE（deploy-20260614-5/6/7）
+- **Fix（auto-advance URL 換頁）**: `_scroll_and_wait_for_full_load` 新增 `original_url` 參數，每次捲動後偵測 `current_url`，URL 改變時立即停止並回傳 `url_changed=True`。
+- **Fix（DOMContentLoaded 快照）**: `_open()` 後立即取 `dom_snapshot_source`（SSR 初始 HTML），URL 換頁時改用快照而非捲動後 DOM，防止 A Day Magazine 等媒體的 auto-advance JS 在 3-7 秒後替換文章內容。
+- **新增 SITE_TEMPLATE（adaymag.com）**: `.post-content.entry-content` / `.post-content-container` 直接命中，不須呼叫 Gemini LLM。
+- 根本原因確認：透過 Chrome MCP 比對 `friendship-red-flags-unsalvable.html`，發現爬蟲穩定回傳錯誤文章（過度努力/創傷反應），確認是 pushState auto-advance 換頁問題。
+- 修正後正確回傳「友情紅旗」友情文章內容。
+
 ## 2026-06-14 爬蟲核心邏輯對齊 Colab（Fix C/D/E）
 - **Fix C (noise_filter AND化)**: `crawler.py` 噪音關鍵字過濾條件從 `p_count < 5 OR text_len < 800` 改為 `p_count < 3 AND text_len < 400`，對齊 Colab，避免誤刪 Vogue/ELLE 等媒體文章容器。
 - **Fix D (_wait_for_content_load)**: 等待 body 後額外輪試 `article`、`main`、`#content`、`.content` 選擇器（各等最多 5 秒），對齊 Colab，確保 JS 渲染完成才抽取 DOM。
