@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-14 Code-review 修正：5 項 bug／安全問題（deploy-20260614-8，三服務）
+- **Fix (crawler dead code)**: `_scroll_and_wait_for_full_load` 的 scrollTo/sleep 移到 return 前，修正 lazy 渲染等待永遠不執行的問題。
+- **Fix (RSC regex DOTALL)**: `_extract_from_block_payload` pat1/pat2 加 `re.DOTALL`，修正多行段落在 RSC payload 中被漏抓。
+- **Fix (pipeline KeyError)**: `n_intents` 改用 `.get()` 防止 Path 2 完成後計算進度時拋 KeyError。
+- **Fix (TF-IDF 單篇)**: 只有一篇文章時 `max_df` 改為 1.0，防止特徵矩陣空白。
+- **Fix (header injection)**: download_analysis / download_dataset 的 filename 改用 `re.sub` 清洗，防止 Content-Disposition header 注入。
+- **Fix (截斷靜默)**: 文章超過 50,000 字元時現在會顯示 warning flash 訊息。
+
 ## 2026-06-14 爬蟲 auto-advance 換頁修正 + adaymag SITE_TEMPLATE（deploy-20260614-5/6/7）
 - **Fix（auto-advance URL 換頁）**: `_scroll_and_wait_for_full_load` 新增 `original_url` 參數，每次捲動後偵測 `current_url`，URL 改變時立即停止並回傳 `url_changed=True`。
 - **Fix（DOMContentLoaded 快照）**: `_open()` 後立即取 `dom_snapshot_source`（SSR 初始 HTML），URL 換頁時改用快照而非捲動後 DOM，防止 A Day Magazine 等媒體的 auto-advance JS 在 3-7 秒後替換文章內容。
