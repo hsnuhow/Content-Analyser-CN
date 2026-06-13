@@ -76,7 +76,17 @@
   {# 爬取結果列表 #}
   {% if dataset.get('items') %}
   <div class="card shadow-sm">
-    <div class="card-header fw-semibold">爬取結果</div>
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+      <span>爬取結果</span>
+      {% if dataset.status == 'completed' %}
+      <div class="d-flex gap-2">
+        <a href="{{ url_for('project_bp.download_dataset_md', pid=pid, did=dataset.id) }}"
+           class="btn btn-sm btn-outline-secondary" download title="下載 Markdown">📄 下載 Markdown</a>
+        <a href="{{ url_for('project_bp.download_dataset_json', pid=pid, did=dataset.id) }}"
+           class="btn btn-sm btn-outline-secondary" download title="下載 JSON">🔧 下載 JSON</a>
+      </div>
+      {% endif %}
+    </div>
     <div class="table-responsive">
       <table class="table table-hover mb-0 align-middle">
         <thead class="table-light">
