@@ -158,7 +158,11 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient) -> str:
 ### 受眾輪廓與平台分工
 目標讀者是誰？不同平台（雜誌、Dcard、IG、Threads 等）各自承擔什麼角色？"""
 
-    return llm.generate(prompt, temperature=0.3, max_tokens=4096)
+    try:
+        return llm.generate(prompt, temperature=0.3, max_tokens=4096)
+    except Exception as e:
+        print(f"[Path 2b] 質化分析生成失敗：{e}", flush=True)
+        return "（質化分析生成失敗，請重新分析）"
 
 
 # ──────────────────────────────────────────────────────────────────────

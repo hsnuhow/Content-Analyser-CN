@@ -76,7 +76,11 @@ def run(nlp_results: Dict, llm_results: Dict,
 最值得關注的質化洞察是什麼。
 語氣精確、有說服力，像是給行銷主管看的一頁式報告開頭。
 直接輸出段落，不要標題。"""
-    summary = llm.generate(summary_prompt, temperature=0.3, max_tokens=1024)
+    try:
+        summary = llm.generate(summary_prompt, temperature=0.3, max_tokens=1024)
+    except Exception as e:
+        print(f"[Synthesis] § 1 摘要生成失敗：{e}", flush=True)
+        summary = "（摘要生成失敗，請重新分析）"
 
     # ── § 4 搜尋情境分析 ──
     intent_prompt = f"""{base_context}
@@ -91,7 +95,11 @@ def run(nlp_results: Dict, llm_results: Dict,
 - 內容特徵：[這類搜尋找到的內容有什麼共同特點]
 
 直接輸出以上格式，不要前言或後記。"""
-    search_intent_analysis = llm.generate(intent_prompt, temperature=0.3, max_tokens=2048)
+    try:
+        search_intent_analysis = llm.generate(intent_prompt, temperature=0.3, max_tokens=2048)
+    except Exception as e:
+        print(f"[Synthesis] § 4 搜尋情境分析失敗：{e}", flush=True)
+        search_intent_analysis = "（搜尋情境分析生成失敗，請重新分析）"
 
     # ── § 6 綜合建議 ──
     rec_prompt = f"""{base_context}
@@ -105,7 +113,11 @@ def run(nlp_results: Dict, llm_results: Dict,
 
 建議應涵蓋：訴求切角、關鍵字使用、內容格式、標題公式、平台策略等面向。
 直接輸出建議清單，不要前言或後記。"""
-    recommendations = llm.generate(rec_prompt, temperature=0.3, max_tokens=3072)
+    try:
+        recommendations = llm.generate(rec_prompt, temperature=0.3, max_tokens=3072)
+    except Exception as e:
+        print(f"[Synthesis] § 6 建議生成失敗：{e}", flush=True)
+        recommendations = "（建議生成失敗，請重新分析）"
 
     return {
         "summary": summary,
