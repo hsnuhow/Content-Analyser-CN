@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-14 站台模板擴充 + 模板比對「最具體優先」修正（未部署）
+- **Feature（4 個新站台模板）**: 新增 ltn（自由時報，含 news/ec/m 子域）、cna（中央社）、mirrormedia（鏡週刊）、technews（科技新報）。
+- **Feature（JSON-LD 萃取）**: 新增 `_extract_from_json_ld()`，從 JSON-LD `NewsArticle.articleBody` 萃取主文（MirrorMedia 等 Next.js styled-components 站台的最可靠來源）。實測鏡週刊抽到 1689 字。
+- **Feature（fallback 鏈擴充）**: 主文過短時依序 JSON-LD → block_payload → meta description（原本只有 block_payload）。
+- **Fix（模板比對最具體優先）**: 通用 `news` 模板（indicator=`news`）會搶先命中 `cna.com.tw/news/`、`ltn.com.tw/news/` 等網址，蓋掉專屬模板而落入啟發式（抽到 cookie 橫幅）。改為收集所有命中模板，依「具體度」（網域型 indicator 含 `.` 加 1000 權重）排序選最具體者。實測 ltn/cna/nownews/chinatimes/ettoday/mirrormedia/technews 皆正確命中專屬模板；CNA 抽到 1107 字正文，不再洩漏 cookie 橫幅。
+- **文件**: 新增 `crawler-service/CRAWLER_STRATEGY.md`：抽取流程、25+ 站台選擇器對照表、分層爬取（Tier 1 無頭瀏覽器 → Tier 2 Gemini URL 直讀 → Tier 3 Webshare 住宅 IP）策略與成本評估。
+- ⏳ **待部署**：本批修正尚未部署，等待部署口令。
+
 ## 2026-06-14 Code-review 修正：5 項 bug／安全問題（deploy-20260614-8，三服務）
 - **Fix (crawler dead code)**: `_scroll_and_wait_for_full_load` 的 scrollTo/sleep 移到 return 前，修正 lazy 渲染等待永遠不執行的問題。
 - **Fix (RSC regex DOTALL)**: `_extract_from_block_payload` pat1/pat2 加 `re.DOTALL`，修正多行段落在 RSC payload 中被漏抓。
