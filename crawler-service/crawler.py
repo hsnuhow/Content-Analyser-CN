@@ -759,10 +759,20 @@ class HeadlessCrawler:
 
     def _is_listing_page(self, soup: BeautifulSoup) -> bool:
         self._log("[Page Type Analysis] Starting analysis...")
-        articles = soup.find_all('article', limit=5)
-        if len(articles) > 1:
+        articles = soup.find_all('article', limit=10)
+        if len(articles) >= 5:
             self._log(f"[Page Type Analysis] Judgement: LISTING PAGE (found {len(articles)} <article> tags).")
             return True
+        if 2 <= len(articles) < 5:
+            # Article pages often have 1 main + 2-3 related-article cards.
+            # Only call it a listing if the articles are similarly sized (none dominates).
+            text_lens = sorted([len(a.get_text(strip=True)) for a in articles], reverse=True)
+            avg_rest = sum(text_lens[1:]) / max(len(text_lens) - 1, 1)
+            if text_lens[0] > max(3 * avg_rest, 500):
+                self._log(f"[Page Type Analysis] {len(articles)} <article> tags but largest ({text_lens[0]} chars) dominates — SINGLE ARTICLE PAGE.")
+            else:
+                self._log(f"[Page Type Analysis] Judgement: LISTING PAGE ({len(articles)} similarly-sized <article> tags).")
+                return True
         list_items = soup.find_all('li', limit=20)
         if len(list_items) > 5:
             article_like_li = 0
@@ -1481,7 +1491,9 @@ class HeadlessCrawler:
             content = self._extract_main_text(final_source, url)
 
             # 主文過短：依序嘗試 fallback
-            if len(content or '') < 200:
+            # 500 字閾值：DOM 啟發式可能從導覽列/相關文章抽到少量內容（200-500 字），
+            # 但實際文章主體仍在 RSC payload 中，故提高閾值讓 block_payload 有機會介入。
+            if len(content or '') < 500:
                 # 1) 先試現代框架序列化 block payload（Next.js RSC / Copilot 等）
                 block_content = self._extract_from_block_payload(final_source)
                 if len(block_content) > len(content or ''):
