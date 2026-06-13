@@ -103,7 +103,7 @@ def run_analysis(job_id: str, report_title: str,
                     log_fn=lambda m: _update_job(db, job_id, log=m),
                 )
                 llm_results.update(result)
-                n_intents = sum(len(a["search_intents"]) for a in result["search_intents"])
+                n_intents = sum(len(a.get("search_intents", [])) for a in result.get("search_intents", []))
                 _progress(70, f"Path 2 完成：{n_intents} 個搜尋情境萃取完畢")
             except Exception as e:
                 llm_error.append(str(e))

@@ -68,11 +68,13 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
         for c in contents
     ]
 
+    # 單篇時 max_df=0.95 會把所有詞（df=100%）過濾掉，改為 1.0 保留所有詞
+    effective_max_df = 1.0 if len(texts) <= 1 else 0.95
     vectorizer = TfidfVectorizer(
         tokenizer=_tokenize,
         max_features=500,
         min_df=1,
-        max_df=0.95,
+        max_df=effective_max_df,
         token_pattern=None,
     )
     matrix = vectorizer.fit_transform(texts)

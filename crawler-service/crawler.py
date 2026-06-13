@@ -549,7 +549,8 @@ class HeadlessCrawler:
                     parts.append(text)
 
             # 格式1：["p","..."] / ["blockquote","..."] / ["h1~h6","..."]
-            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]')
+            # re.DOTALL 讓 [^"\\] 能匹配包含換行的段落（修正多行段落漏抓）
+            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.|\n)*)"\]', re.DOTALL)
             for m in pat1.finditer(html):
                 raw = m.group(2)
                 try:
@@ -559,9 +560,10 @@ class HeadlessCrawler:
                 _add(text)
 
             # 格式2：["$","p","key",{"children":"..."}] (React RSC)
-            # children 可為字串或陣列
+            # children 可為字串或陣列，re.DOTALL 同上修正多行漏抓
             pat2 = re.compile(
-                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.)*)"\}'
+                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.|\n)*)"\}',
+                re.DOTALL
             )
             for m in pat2.finditer(html):
                 raw = m.group(1)
@@ -840,13 +842,14 @@ class HeadlessCrawler:
             self._log(f"[Scroll & Wait] 達滾動上限 {max_scrolls}（疑似 infinity scroll），停止。")
         elif not url_changed:
             self._log("[Scroll & Wait] 頁面高度已穩定，視為載入完整。")
-        return url_changed
         # 滾到底後回到頂部並緩衝，確保所有 lazy 區塊都已渲染進 DOM
-        try:
-            self.driver.execute_script("window.scrollTo(0, 0);")
-        except Exception:
-            pass
-        time.sleep(2)
+        if not url_changed:
+            try:
+                self.driver.execute_script("window.scrollTo(0, 0);")
+            except Exception:
+                pass
+            time.sleep(2)
+        return url_changed
 
     def _wait_for_marieclaire_content(self):
         """特別為 marieclaire 等待文章內容載入"""
