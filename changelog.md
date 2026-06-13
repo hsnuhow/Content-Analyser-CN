@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-13 部署 deploy-20260613-2（7 項安全修正全部上線）
+- 部署三個服務至 GCP asia-east1
+- 包含 M2/M5/M6/M7 + M-B1/M-B2/M-B3 共 7 項修正
+
 ## 2026-06-13 (M-B1/M-B2/M-B3 第二批安全修正)
 - **Fix (M-B1 - URL XSS 防護)**: `analysis-service/report.py` 附錄 URL 輸出前驗證 scheme，僅允許 http/https，防止 `javascript:` scheme 注入 Markdown 連結。
 - **Fix (M-B2 - email 查找一致性)**: `app/project_routes.py` `get_user_role()` 改為統一 `email.lower()` 查找，移除雙重 key fallback 邏輯。
