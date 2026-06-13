@@ -30,6 +30,7 @@
         <div class="card-header fw-semibold">核發新金鑰</div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('admin_bp.create_api_key_route') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
               <label class="form-label small fw-semibold">名稱（識別用途）</label>
               <input type="text" name="name" class="form-control" required
@@ -106,10 +107,12 @@ requests.get(f"{CRAWLER}/api/crawl/{job['job_id']}",
                   {% if k.get('is_active') %}
                   <form method="POST" action="{{ url_for('admin_bp.revoke_api_key_route', key_id=k.get('key_id')) }}" class="d-inline"
                         onsubmit="return confirm('確定撤銷此金鑰？使用此金鑰的工具將立即失效。')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="btn btn-sm btn-outline-danger">撤銷</button>
                   </form>
                   {% else %}
                   <form method="POST" action="{{ url_for('admin_bp.reactivate_api_key_route', key_id=k.get('key_id')) }}" class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="btn btn-sm btn-outline-success">重新啟用</button>
                   </form>
                   {% endif %}

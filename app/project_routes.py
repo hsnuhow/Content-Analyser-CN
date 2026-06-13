@@ -25,6 +25,7 @@ from firebase_admin import firestore
 from io import BytesIO
 
 from .services import db, get_admin_email, ensure_user
+from .auth_guards import login_required
 from .analysis_client import submit_analysis, get_job_status
 from .crawler_client import submit_crawl_batch, get_crawl_status
 
@@ -61,26 +62,6 @@ def get_user_role(project: dict, email: str) -> str | None:
     return members.get(email) or members.get(email.lower())
 
 
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'user' not in session:
-            return redirect(url_for('main_bp.auth'))
-
-        # 若 session 沒有 whitelist_status（舊 session 或第一次），
-        # 從 Firestore 補查確保白名單狀態正確。
-        if 'whitelist_status' not in session:
-            email = session['user'].get('email', '')
-            status = ensure_user(email)
-            session['whitelist_status'] = status
-
-        if session.get('whitelist_status') != 'approved':
-            return redirect(url_for('main_bp.pending'))
-
-        return f(*args, **kwargs)
-    return decorated
-
-
 def project_access_required(min_role: str = 'viewer'):
     """確認用戶有 Project 存取權。min_role: 'viewer' | 'editor' | 'owner'。"""
     ROLE_LEVEL = {'viewer': 1, 'editor': 2, 'owner': 3}
@@ -90,6 +71,13 @@ def project_access_required(min_role: str = 'viewer'):
         def decorated(*args, **kwargs):
             if 'user' not in session:
                 return redirect(url_for('main_bp.auth'))
+            # 白名單 gate：非 approved（pending/rejected）不得訪問任何專案資源，
+            # 即使其 email 被列為某專案 member。
+            if session.get('whitelist_status') != 'approved':
+                email = session['user'].get('email', '')
+                if ensure_user(email) != 'approved':
+                    return redirect(url_for('main_bp.pending'))
+                session['whitelist_status'] = 'approved'
             pid = kwargs.get('pid')
             project = get_project(pid)
             if not project:

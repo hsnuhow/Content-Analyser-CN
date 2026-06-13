@@ -54,6 +54,7 @@
   <div class="card shadow-sm mb-4 border-primary">
     <div class="card-body">
       <form method="POST" action="{{ url_for('project_bp.analyse_dataset', pid=pid, did=dataset.id) }}" class="row g-2 align-items-end">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-md-8">
           <label class="form-label fw-semibold mb-1">報告標題</label>
           <input type="text" name="report_title" class="form-control" value="{{ dataset.name }}">

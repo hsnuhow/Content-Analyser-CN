@@ -1,10 +1,12 @@
 import os
 from flask import Flask
 from authlib.integrations.flask_client import OAuth
+from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
 from . import services # Initialize Firebase
 
 oauth = OAuth()
+csrf = CSRFProtect()
 
 def create_app():
     app = Flask(__name__)
@@ -33,6 +35,11 @@ def create_app():
     
     # Initialize OAuth
     oauth.init_app(app)
+
+    # Initialize CSRF protection：保護所有 POST 表單（session-based）。
+    # 所有受保護表單已加入 {{ csrf_token() }} hidden input。
+    # 注意：OAuth callback 為 GET（authlib 自有 state 防護），不受影響。
+    csrf.init_app(app)
     
     # Register Google OAuth
     oauth.register(

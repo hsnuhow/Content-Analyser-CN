@@ -30,6 +30,7 @@
         <div class="card-header fw-semibold">① 爬取資料集（輸入網址）</div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('project_bp.create_dataset', pid=pid) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-3">
               <label class="form-label fw-semibold">資料集名稱</label>
               <input type="text" name="name" class="form-control" required
@@ -91,6 +92,7 @@
             <div class="alert alert-warning mb-3">⚠️ 尚未設定 LLM API Key，請先在右側「專案設定」填入。</div>
             {% endif %}
             <form method="POST" action="{{ url_for('project_bp.submit_analysis_route', pid=pid) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <div class="mb-3">
                 <label class="form-label fw-semibold">報告標題</label>
                 <input type="text" name="report_title" class="form-control" required>
@@ -147,6 +149,7 @@
         <div class="card-header fw-semibold">LLM 設定</div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('project_bp.update_settings', pid=pid) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-2">
               <label class="form-label small fw-semibold">提供商</label>
               <select name="llm_provider" class="form-select form-select-sm">
@@ -196,6 +199,7 @@
               </span>
               <form method="POST" action="{{ url_for('project_bp.remove_member', pid=pid) }}"
                     onsubmit="return confirm('確定移除此成員？')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="email" value="{{ email }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">✕</button>
               </form>
@@ -205,6 +209,7 @@
         </div>
         <div class="card-footer">
           <form method="POST" action="{{ url_for('project_bp.add_member', pid=pid) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="input-group input-group-sm mb-2">
               <input type="email" name="email" class="form-control" placeholder="Email" required>
               <select name="role" class="form-select" style="max-width:90px">

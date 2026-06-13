@@ -26,6 +26,7 @@
                     </p>
                     
                     <form action="{{ url_for('main_bp.profile') }}" method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="mb-3">
                             <label for="gemini_api_key" class="form-label">Your Gemini API Key:</label>
                             <input type="password" class="form-control" id="gemini_api_key" name="gemini_api_key" value="{{ current_key }}" placeholder="Enter your personal API key">
