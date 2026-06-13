@@ -1330,10 +1330,30 @@ class HeadlessCrawler:
         template_matched = None
         template_elements_to_protect = set()
 
+        # ⭐ 比對所有命中模板，選「最具體」者：
+        #    網域型 indicator（含 '.'，如 cna.com.tw）比通用關鍵字（news/article/story）更具體，
+        #    避免 'news' 通用模板搶先命中 cna.com.tw/news/... 而蓋掉專屬 cna 模板。
+        url_lower = url.lower()
+        matched_templates = []
         for tmpl_name, tmpl in SITE_TEMPLATES.items():
-            if any(ind in url.lower() for ind in tmpl['indicators']):
+            best_ind = None
+            for ind in tmpl['indicators']:
+                if ind in url_lower:
+                    if best_ind is None or len(ind) > len(best_ind):
+                        best_ind = ind
+            if best_ind is not None:
+                # 具體度：含 '.' 的網域型 indicator +1000 權重，再加長度
+                specificity = (1000 if '.' in best_ind else 0) + len(best_ind)
+                matched_templates.append((specificity, tmpl_name, tmpl))
+        matched_templates.sort(key=lambda x: x[0], reverse=True)
+
+        if matched_templates:
+            for _spec, tmpl_name, tmpl in matched_templates[:1]:
                 template_matched = tmpl_name
-                self._log(f"  → ✅ Matched template: '{tmpl_name}'")
+                self._log(f"  → ✅ Matched template: '{tmpl_name}' (specificity={_spec})")
+                if len(matched_templates) > 1:
+                    others = ', '.join(t[1] for t in matched_templates[1:])
+                    self._log(f"  → （其他命中但較不具體，略過：{others}）")
                 self._log(f"  → Selectors to try: {tmpl['selectors']}")
 
                 for sel in tmpl['selectors']:
