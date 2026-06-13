@@ -504,6 +504,8 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
         return dataset
 
     job = get_crawl_status(job_id)
+    if not isinstance(job, dict):
+        return dataset
     jstatus = job.get('status', 'crawling')
     update = {
         'progress': job.get('progress', dataset.get('progress', 0)),

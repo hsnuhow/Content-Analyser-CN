@@ -107,6 +107,11 @@ def analyse():
         return jsonify({"status": "failed",
                         "error": "每次分析最多 100 篇內容"}), 400
 
+    total_text_len = sum(len(str(c.get("text") or c.get("content") or "")) for c in contents)
+    if total_text_len > 5_000_000:
+        return jsonify({"status": "failed",
+                        "error": f"內容總長度過大（{total_text_len:,} 字元），上限 5,000,000 字元"}), 400
+
     llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
     llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
     llm_api_key = (data.get("llm_api_key") or "").strip()

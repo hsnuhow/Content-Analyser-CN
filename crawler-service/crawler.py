@@ -76,6 +76,13 @@ MAIN_CONTENT_SELECTORS = [
     # 常見中文媒體
     ".single-content", ".content-body", ".post-article",
     "[class*='entry-body']", "[class*='article-text']",
+    # 現代 CMS / styled-components / Tailwind
+    ".rich-text", ".richtext", "[class*='rich-text']", "[class*='richtext']",
+    ".prose", "[class*='prose']",
+    ".body-text", ".body-copy", "[class*='body-text']",
+    "[class*='story-body']", "[class*='story-content']",
+    # 資料屬性選擇器
+    "[data-content-type='article']", "[data-article-body]", "[data-module='article-body']",
 ]
 
 SITE_TEMPLATES = {
@@ -152,6 +159,109 @@ SITE_TEMPLATES = {
             '[class*="article__body"]',
             '[itemprop="articleBody"]',
             'article',
+        ]
+    },
+    # ── Condé Nast 台灣（Vogue / GQ）── Next.js App Router + styled-components
+    'vogue_tw': {
+        'indicators': ['vogue.com.tw'],
+        'selectors': [
+            '[class*="ArticleBody"]', '[class*="article-body"]',
+            '[class*="RichText"]', '[class*="richtext"]',
+            '[class*="ContentBody"]', '[class*="StoryBody"]',
+            '.article-content', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    'gq_tw': {
+        'indicators': ['gq.com.tw'],
+        'selectors': [
+            '[class*="ArticleBody"]', '[class*="article-body"]',
+            '[class*="RichText"]', '[class*="richtext"]',
+            '[class*="ContentBody"]', '[class*="StoryBody"]',
+            '.article-content', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 聯合報 (udn.com) ──
+    'udn': {
+        'indicators': ['udn.com'],
+        'selectors': [
+            '.article-body__editor', '.article-content__wrapper',
+            '#story_body_content', '.article-content',
+            '[class*="article-body"]', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── ETtoday 新聞雲 ──
+    'ettoday': {
+        'indicators': ['ettoday.net'],
+        'selectors': [
+            '.story', '#story', '.story-details',
+            '.article-content', '.newsContent',
+            '[class*="story"]', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 關鍵評論網 (thenewslens.com) ──
+    'thenewslens': {
+        'indicators': ['thenewslens.com'],
+        'selectors': [
+            '.main-content', '[class*="article-body"]',
+            '.article-content', '.content-body',
+            '[itemprop="articleBody"]', 'article', 'main',
+        ]
+    },
+    # ── 遠見 (gvm.com.tw) ──
+    'gvm': {
+        'indicators': ['gvm.com.tw'],
+        'selectors': [
+            '.article_body', '.article-body', '.content-body',
+            '.article-content', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 數位時代 (bnext.com.tw) ──
+    'bnext': {
+        'indicators': ['bnext.com.tw'],
+        'selectors': [
+            '.article-content__editor', '.article-content',
+            '.post-content', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 風傳媒 (storm.mg) ──
+    'storm_mg': {
+        'indicators': ['storm.mg'],
+        'selectors': [
+            '.article-body', '.article-content',
+            '.news-content', '.content-body',
+            '[itemprop="articleBody"]', 'article', 'main',
+        ]
+    },
+    # ── 今周刊 (businesstoday.com.tw) ──
+    'businesstoday': {
+        'indicators': ['businesstoday.com.tw'],
+        'selectors': [
+            '.article-content', '.content-body',
+            '.article-body', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 康健雜誌 (commonhealth.com.tw) ──
+    'commonhealth': {
+        'indicators': ['commonhealth.com.tw'],
+        'selectors': [
+            '.article-body', '.article-content',
+            '.content-body', '[itemprop="articleBody"]',
+            'article', 'main',
+        ]
+    },
+    # ── 天下雜誌 (cw.com.tw) ──
+    'cw': {
+        'indicators': ['cw.com.tw'],
+        'selectors': [
+            '.article-body', '.content', '.article-content',
+            '[itemprop="articleBody"]', 'article', 'main',
         ]
     },
     # ── 商業週刊 / 親子天下 / cheers ──
@@ -384,27 +494,55 @@ class HeadlessCrawler:
         """從現代框架（Next.js App Router / RSC、Condé Nast Copilot 等）的
         序列化 block payload 抽取主文。
 
-        這類頁面的內文不在標準 <p> 標籤，而以 JSON 陣列序列化嵌在 HTML 的
-        script 流裡，格式如：["p","段落文字"]、["blockquote","引言"]。
-        渲染後 DOM 抓不到（被當 script 移除或未 hydrate），但原始 HTML 有完整文字。
-        當標準 DOM 抽取結果過短時，由 scrape() 呼叫此 fallback。
+        支援兩種格式：
+        1. 簡化格式：["p","段落文字"]、["blockquote","引言"]
+        2. React RSC 格式：["$","p","key",{"children":"文字"}]
+                           ["$","p",null,{"className":"...","children":["文字段落"]}]
         """
         try:
-            # 抓 ["p","..."] / ["blockquote","..."] / ["h1~h6","..."] 的文字部分，
-            # 文字內可含 JSON 跳脫（\" \\ \uXXXX），用 json.loads 還原。
-            pattern = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]')
             seen = set()
             parts = []
-            for m in pattern.finditer(html):
+
+            def _add(text):
+                text = (text or "").strip()
+                if len(text) >= 10 and text not in seen:
+                    seen.add(text)
+                    parts.append(text)
+
+            # 格式1：["p","..."] / ["blockquote","..."] / ["h1~h6","..."]
+            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]')
+            for m in pat1.finditer(html):
                 raw = m.group(2)
                 try:
                     text = json.loads('"' + raw + '"')
                 except Exception:
                     text = raw
-                text = (text or "").strip()
-                if len(text) >= 10 and text not in seen:
-                    seen.add(text)
-                    parts.append(text)
+                _add(text)
+
+            # 格式2：["$","p","key",{"children":"..."}] (React RSC)
+            # children 可為字串或陣列
+            pat2 = re.compile(
+                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.)*)"\}'
+            )
+            for m in pat2.finditer(html):
+                raw = m.group(1)
+                try:
+                    text = json.loads('"' + raw + '"')
+                except Exception:
+                    text = raw
+                _add(text)
+
+            # 格式3：純文字字串（至少15字，在 RSC JSON 串流中）
+            # 比對 script 區段中較長的中文/英文字串段落
+            pat3 = re.compile(r'"([一-鿿㐀-䶿][^\\"]{14,})"')
+            for m in pat3.finditer(html):
+                raw = m.group(1)
+                try:
+                    text = json.loads('"' + raw + '"')
+                except Exception:
+                    text = raw
+                _add(text)
+
             return self._clean_text("\n".join(parts))
         except Exception as e:
             self._log(f"[Block Payload] 抽取失敗: {e}")
@@ -671,7 +809,8 @@ class HeadlessCrawler:
     def _clean_text(self, text: str) -> str:
         if not text:
             return ""
-        lines = [line.strip() for line in text.splitlines() if line.strip() and len(line.strip()) >= 6]
+        # 中文字 4 字以上即可成行（一個短句如「不知道。」4 字有意義）
+        lines = [line.strip() for line in text.splitlines() if line.strip() and len(line.strip()) >= 4]
         return "\n\n".join(lines)
 
     def _css_path(self, el) -> str:
@@ -1108,13 +1247,16 @@ class HeadlessCrawler:
                     if len(direct_links) > 5:
                         elements_to_remove.append((el, f"many_links ({len(direct_links)} direct links, depth={depth})"))
                         continue
-                    category_tags = text.upper().count('ENTERTAINMENT') + \
-                                  text.upper().count('BEAUTY') + \
-                                  text.upper().count('FASHION') + \
-                                  text.upper().count('LIFESTYLE')
-                    tag_density = category_tags / max(len(text) / 100, 1)
-                    if tag_density > 1.0:
-                        elements_to_remove.append((el, f"high_tag_density (density={tag_density:.2f}, tags={category_tags}, len={len(text)}, depth={depth})"))
+                    # 只計算明確的欄目導覽標籤（非文章內文），且需 p 數極少
+                    p_count_el = len(el.find_all('p'))
+                    if p_count_el < 2:
+                        category_tags = text.upper().count('ENTERTAINMENT') + \
+                                      text.upper().count('BEAUTY') + \
+                                      text.upper().count('FASHION') + \
+                                      text.upper().count('LIFESTYLE')
+                        tag_density = category_tags / max(len(text) / 100, 1)
+                        if tag_density > 1.5:
+                            elements_to_remove.append((el, f"high_tag_density (density={tag_density:.2f}, tags={category_tags}, p={p_count_el}, len={len(text)}, depth={depth})"))
             except Exception:
                 continue
 

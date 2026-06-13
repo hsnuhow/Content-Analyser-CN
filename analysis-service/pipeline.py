@@ -114,8 +114,14 @@ def run_analysis(job_id: str, report_title: str,
         t2 = threading.Thread(target=_run_path2, daemon=True)
         t1.start()
         t2.start()
-        t1.join()
-        t2.join()
+        t1.join(timeout=600)
+        t2.join(timeout=600)
+        if t1.is_alive():
+            nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
+            _log("⚠️ Path 1 thread 逾時（600s），繼續執行")
+        if t2.is_alive():
+            llm_error.append("Path 2 超過 600s 未完成，已放棄等待")
+            _log("⚠️ Path 2 thread 逾時（600s），停止任務")
 
         # ── 路徑失敗處理 ──
         if llm_error:
