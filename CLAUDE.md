@@ -1,6 +1,6 @@
 # CLAUDE.md — Content Analyser CN（InsightOut）
 
-**Version:** 3.1  
+**Version:** 3.2  
 **Scope:** 本專案的全部開發、測試、部署規範。適用於 Claude Code 與所有開發協作者。  
 **Primary Rule:** 安全、可回溯、先計畫後執行。Safety, traceability, and plan-before-action come first.
 
@@ -16,6 +16,26 @@
 - 不可先啟動部署再補口令（先斬後奏）。
 - 有效部署口令：`核准部署` / `核准部署：正式` / `核准部署：測試` / `核准部署：單一服務`。
 - 完整鐵則見 `deploy.md`。違反屬嚴重操作錯誤。
+
+---
+
+## ✅ /loop 模式（自動批准例外）
+
+**當使用者明確下達 `/loop` 指令時，本對話進入「自動批准模式」**，以下規則生效：
+
+- 程式碼修改（`核准開發` / `核准修正` / `核准改善` / `核准執行`）**自動批准**，無需等待口令。
+- **部署操作同樣自動批准**（含 `gcloud run deploy`、`bash deploy.sh`、`gcloud builds submit`）。
+- `/loop` 的典型任務：爬蟲品質審查 + 內容差距修正、code review 自動修正、迭代式功能審查與補強。
+
+**但仍保留以下安全限制，即使在 /loop 模式下也不得自動執行：**
+
+1. `git push --force` / `git reset --hard` / `git clean -fd`（破壞性 Git 操作）
+2. `gcloud secrets versions access`（讀取金鑰值）
+3. `gcloud projects delete` / `gcloud iam`（雲端基礎設施變更）
+4. 提交含敏感資訊（`.env`、`serviceAccount*.json`）的檔案
+5. 刪除 Firestore collection 或批量清除資料
+
+**退出 /loop 模式**：對話結束、或使用者下 `禁止執行開發` 口令，立即回到鐵則。
 
 ---
 
