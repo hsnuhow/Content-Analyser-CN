@@ -64,7 +64,7 @@ class LLMClient:
         try:
             return _generate(self.model)
         except Exception as e:
-            fallback = "gemini-2.0-flash"
+            fallback = "gemini-2.5-flash"
             if self.model != fallback:
                 print(f"[LLMClient] {self.model} 失敗，後備使用 {fallback}: {e}", flush=True)
                 return _generate(fallback)

@@ -143,7 +143,7 @@ def create_project():
         'members': {},
         'llm_config': {
             'provider': 'gemini',
-            'model': 'gemini-2.0-flash',
+            'model': 'gemini-2.5-flash',
             'api_key': '',
         },
         'created_at': firestore.SERVER_TIMESTAMP,
@@ -191,7 +191,7 @@ def project_detail(pid, project, role):
 @project_access_required(min_role='owner')
 def update_settings(pid, project, role):
     llm_provider = request.form.get('llm_provider', 'gemini').strip()
-    llm_model = request.form.get('llm_model', 'gemini-2.0-flash').strip()
+    llm_model = request.form.get('llm_model', 'gemini-2.5-flash').strip()
     llm_api_key = request.form.get('llm_api_key', '').strip()
 
     update = {
@@ -284,7 +284,7 @@ def submit_analysis_route(pid, project, role):
         report_title=report_title,
         contents=contents,
         llm_provider=llm_config.get('provider', 'gemini'),
-        llm_model=llm_config.get('model', 'gemini-2.0-flash'),
+        llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_api_key,
     )
 
@@ -308,7 +308,7 @@ def submit_analysis_route(pid, project, role):
         'log': '任務已提交，等待分析引擎處理...',
         'n_articles': len(contents),
         'llm_provider': llm_config.get('provider', 'gemini'),
-        'llm_model': llm_config.get('model', 'gemini-2.0-flash'),
+        'llm_model': llm_config.get('model', 'gemini-2.5-flash'),
         'submitted_by': current_user_email(),
         'submitted_at': firestore.SERVER_TIMESTAMP,
         'completed_at': None,
@@ -571,7 +571,7 @@ def analyse_dataset(pid, did, project, role):
         report_title=report_title,
         contents=contents,
         llm_provider=llm_config.get('provider', 'gemini'),
-        llm_model=llm_config.get('model', 'gemini-2.0-flash'),
+        llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_config.get('api_key'),
     )
     if 'error' in result:
@@ -590,7 +590,7 @@ def analyse_dataset(pid, did, project, role):
         'log': '任務已提交，等待分析引擎處理...',
         'n_articles': len(contents),
         'llm_provider': llm_config.get('provider', 'gemini'),
-        'llm_model': llm_config.get('model', 'gemini-2.0-flash'),
+        'llm_model': llm_config.get('model', 'gemini-2.5-flash'),
         'submitted_by': current_user_email(),
         'submitted_at': firestore.SERVER_TIMESTAMP,
         'completed_at': None,

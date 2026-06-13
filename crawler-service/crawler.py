@@ -654,7 +654,7 @@ class HeadlessCrawler:
     def _ask_gemini_selector(self, url: str, soup: BeautifulSoup) -> List[str]:
         """向 Gemini 詢問主文容器選擇器（回傳多組建議）。
         對齊 Colab v3.8：改用新的 google-genai 套件（genai.Client + models.generate_content），
-        優先 gemini-2.0-flash，失敗回退 gemini-1.5-flash，temperature=0.3。
+        優先 gemini-2.5-flash，失敗回退 gemini-2.5-flash-lite，temperature=0.3。
         """
         if not HAS_GENAI or not self.genai_api_key:
             return []
@@ -673,14 +673,14 @@ class HeadlessCrawler:
             client = genai.Client(api_key=self.genai_api_key)
             try:
                 resp = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=prompt_text,
                     config=types.GenerateContentConfig(temperature=0.3),
                 )
             except Exception:
                 self._log(f"[LLM] Gemini 2.0 Flash 不可用，改用 1.5 Flash - {url}")
                 resp = client.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.5-flash-lite",
                     contents=prompt_text,
                     config=types.GenerateContentConfig(temperature=0.3),
                 )

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-13 (資料集下載 + Gemini 2.5-flash 升級 + 程式碼審查文件)
+- **Feature (資料集原始內容下載)**:
+    - 已完成爬取的資料集新增下載功能：`/projects/<pid>/datasets/<did>/download.md`（Markdown）及 `/download.json`（JSON）。
+    - `project_detail.html` 與 `dataset_detail.html` 新增下載按鈕（僅限 `completed` 狀態資料集顯示）。
+    - 新增 `_dataset_to_markdown()`、`_dataset_to_json()`、`_get_completed_dataset_or_redirect()` helper。
+    - **修改檔案**: `app/project_routes.py`、`app/templates/project_detail.html`、`app/templates/dataset_detail.html`。
+- **Fix (資料集爬取狀態後端同步)**:
+    - 使用者離開頁面後，已完成的爬取 job 不再卡在 `crawling` 狀態；`project_detail` 與 `dataset_detail` 頁面載入時呼叫 `_sync_crawling_dataset()` 主動同步。
+    - **修改檔案**: `app/project_routes.py`。
+- **Fix (Gemini 棄用模型替換)**:
+    - `gemini-2.0-flash` 全面替換為 `gemini-2.5-flash`（content-analyser、analysis-service、crawler-service）。
+    - crawler-service 後備模型改為 `gemini-2.5-flash-lite`（原為 `gemini-1.5-flash`，已棄用）。
+    - **修改檔案**: `analysis-service/app.py`、`analysis-service/llm_client.py`、`analysis-service/pipeline.py`、`app/project_routes.py`、`app/templates/project_detail.html`、`crawler-service/crawler.py`。
+- **Docs (程式碼審查 + 前端交接 + 安全事件)**:
+    - 新增 `CODE_REVIEW.md`：全專案四模組並行審查，涵蓋 C1 SSRF、C2 LLM JSON 解析、C3 XSS、C4 表格樣式、C5 scroll 逾時，及 M1–M15 中等、L1–L8 低優先問題。
+    - 新增 `FRONTEND_HANDOFF.md`：前端重新設計用，含頁面清單、BUG 清單、後端對接點。
+    - 新增 `SECURITY_INCIDENTS.md`：記錄 2026-06-13 WebSearch prompt injection 事件及本平台高風險場景分析。
+
 ## 2026-06-13 (登入驗證授權修正 + 全站 CSRF + Git 分支流程規範)
 - **Security Fix (Broken Access Control)**:
     - **目的**: code review 發現 `main_bp` 與 `project_bp` 各有一份 `login_required`，其中 `main_bp` 版「補查 whitelist 卻不擋非 approved」，導致 pending/rejected 用戶可訪問受保護頁面（如 `/profile`）。

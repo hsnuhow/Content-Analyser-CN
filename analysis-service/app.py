@@ -85,7 +85,7 @@ def analyse():
         ...
       ],
       "llm_provider":  "gemini" | "claude",
-      "llm_model":     "gemini-2.0-flash" | "claude-sonnet-4-5" | ...,
+      "llm_model":     "gemini-2.5-flash" | "claude-sonnet-4-5" | ...,
       "llm_api_key":   "AIza..."
     }
 
@@ -108,7 +108,7 @@ def analyse():
                         "error": "每次分析最多 100 篇內容"}), 400
 
     llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
-    llm_model = (data.get("llm_model") or "gemini-2.0-flash").strip()
+    llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
     llm_api_key = (data.get("llm_api_key") or "").strip()
 
     if not llm_api_key:
