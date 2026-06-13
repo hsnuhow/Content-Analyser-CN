@@ -1488,6 +1488,12 @@ class HeadlessCrawler:
         try:
             # ⭐️ [Phase 1] 使用 _open() 重試邏輯（對齊 Colab v3.8）
             self._open(url)
+            # ⭐️ 立即在 DOMContentLoaded 後取快照（SSR 初始 HTML）
+            # 目的：防止 A Day Magazine / ELLE 等媒體的 auto-advance JS
+            # 在 3-7 秒後替換 DOM 內容，讓後續 URL 換頁時有乾淨的初始快照可回退
+            dom_snapshot_source = self.driver.page_source
+            self._log(f"[Snapshot] DOMContentLoaded 後立即取得初始 DOM 快照（{len(dom_snapshot_source)} chars）")
+
             self._wait_for_content_load()
 
             if time.time() > deadline:
@@ -1506,8 +1512,6 @@ class HeadlessCrawler:
                 return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
             self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
-            # pre_scroll_source：捲動前快照，供換頁時降級使用
-            pre_scroll_source = self.driver.page_source
             url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
 
             if time.time() > deadline:
@@ -1518,12 +1522,14 @@ class HeadlessCrawler:
 
             final_url = self.driver.current_url
             if url_changed_during_scroll or final_url != url:
-                self._log(f"[WARNING] URL changed after scroll: {url} → {final_url}，使用 pre-scroll DOM 避免抓到換頁後內容")
-                # 無限捲動換頁（pushState）後的 DOM 包含下一篇文章，改用捲動前快照
-                final_source = pre_scroll_source
-                pre_scroll_soup = BeautifulSoup(pre_scroll_source, 'html.parser')
-                title_tag = pre_scroll_soup.find('title')
+                self._log(f"[WARNING] URL changed after scroll: {url} → {final_url}，回退至 DOMContentLoaded 初始快照")
+                # A Day Magazine 等媒體的 auto-advance JS 會在數秒後替換 DOM 內容並改 URL
+                # 使用 DOMContentLoaded 後立即拍的快照（含正確 SSR 內容）
+                final_source = dom_snapshot_source
+                snap_soup = BeautifulSoup(dom_snapshot_source, 'html.parser')
+                title_tag = snap_soup.find('title')
                 title = title_tag.get_text(strip=True) if title_tag else "No Title"
+                self._log(f"[Snapshot] 回退快照標題：{title}")
             else:
                 final_source = self.driver.page_source
                 title = self.driver.title or "No Title"
