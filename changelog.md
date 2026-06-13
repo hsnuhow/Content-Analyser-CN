@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-14 補強 synthesis + llm_path LLM 呼叫穩健性
+- **Fix (synthesis.py)**: §1 摘要、§4 搜尋情境分析、§6 建議各自加個別 try/except，單一章節 LLM 失敗時以佔位文字降級，不中斷其他章節。
+- **Fix (llm_path.py)**: `run_qualitative_analysis()` 加 try/except，token 超限或逾時時降級回傳而非中斷整個 Path 2。
+- 部署三個服務至 GCP asia-east1（deploy-20260614-3）。
+
 ## 2026-06-14 爬蟲新增 nownews、chinatimes、yahoo_tw + ETtoday 修正
 - **Feature (爬蟲模板補充)**: 新增 nownews.com（今日新聞）、chinatimes.com（中時新聞網）、yahoo_tw（Yahoo奇摩新聞/財經）三組 SITE_TEMPLATES。
 - **Fix (ETtoday redirect)**: ettoday 模板 indicators 加入 `star.ettoday.net`（301 重定向目標），並補充 `#newsContent` 選擇器。
