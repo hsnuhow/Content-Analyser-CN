@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-14 CHANEL 社群來源處理：Threads/Instagram og 文案 + Cloudflare 挑戰頁偵測（已部署 00031-vhk）
+- **Threads/Instagram 公開貼文（新增 `_fetch_og_meta()`）**：用 `facebookexternalhit` 社群 UA 抓
+  og:title/og:description（連結預覽機制，不啟動 Chrome）。Threads 直接取得文案；Instagram 從
+  Cloud Run IP 也成功取得 og 文案（本地 curl 被擋但 Cloud Run IP 可）。實測：Threads 57 字、IG 632 字文案。
+  （IG 若某些 IP 被封則回 skipped 並提示 oEmbed/手動。）
+- **Dcard 改走 Tier 1→3 並偵測 Cloudflare 挑戰頁**：移除 Dcard 硬跳過。Dcard 用 Cloudflare，
+  headless 抓到「需要確認您的連線是安全的／Enable JavaScript and cookies」挑戰頁（302字），
+  原本當假成功。`_BROWSER_ERROR_MARKERS` 加入 Cloudflare 挑戰頁特徵 → 判失敗 → 觸發 Tier 3 代理。
+  實測確認：Tier 1（直連）→ Cloudflare 擋；Tier 3（Webshare datacenter proxy）→ 仍 Cloudflare 擋 → failed。
+  **證實 Dcard 擋所有無頭瀏覽器，免費 datacenter proxy 無法突破，需 residential。**
+- CHANEL 資料集（22 網址）最終：時尚媒體 18 篇正常抽取、Threads/IG 5 篇取得文案、Dcard 3 篇
+  正確失敗（需 residential）、adaymag 1 篇 Chrome crash（待查）。
+
 ## 2026-06-14 CHANEL 資料集實測修正：Hearst 國際網域 + Vogue 列表頁誤判（已部署 00029-zsh）
 - 重爬 test 專案 CHANEL 資料集（22 網址）找實際錯誤，修正並線上驗證：
 - **Fix（Hearst 國際網域 indicator）**：CHANEL 用 `www.elle.com/tw`、`cosmopolitan.com/tw`、
