@@ -195,6 +195,15 @@ def assemble(report_title: str,
         + synthesis_parts.get("recommendations", "（無法生成）")
     )
 
+    # § 7 延伸關鍵字與內容缺口（語意延伸，Synthesis LLM）
+    if synthesis_parts.get("expansion"):
+        sections.append(
+            "## 7. 延伸關鍵字與內容缺口（dataset 之外的相關機會）\n\n"
+            "本節跳出本批內容，推論與同一群受眾相關、但這批 dataset 未直接涵蓋、"
+            "可延伸經營的關鍵字、內容缺口與周邊主題。\n\n"
+            + synthesis_parts.get("expansion", "")
+        )
+
     # 附錄（程式直接生成）
     sections.append(
         _section_appendix(

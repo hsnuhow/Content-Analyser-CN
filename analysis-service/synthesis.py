@@ -119,8 +119,36 @@ def run(nlp_results: Dict, llm_results: Dict,
         print(f"[Synthesis] § 6 建議生成失敗：{e}", flush=True)
         recommendations = "（建議生成失敗，請重新分析）"
 
+    # ── § 7 延伸關鍵字與內容缺口（語意延伸，dataset 之外的差異化機會）──
+    # 對應產品方法論二：找「閱聽眾在意、但現有內容沒說好」的 gap。
+    expansion_prompt = f"""{base_context}
+
+以上是本批內容「內部」的分析。現在請你跳出這批 dataset，運用你對此主題與受眾的知識，\
+推論「這批內容之外、但與同一群受眾高度相關、值得延伸經營」的內容機會。\
+重點是找出 dataset 沒有直接涵蓋、但其實相關可延伸的關鍵字與主題。
+
+請用以下三段格式輸出（正體中文，直接輸出，不要前言後記）：
+
+### 延伸關鍵字（相關但本批內容未涵蓋或著墨不足）
+列出 8–15 個「同一群受眾也會搜尋、但這批內容沒出現或只略提」的關鍵字／搜尋詞組，\
+每個用 `- 關鍵字 — 為何與此受眾相關（一句）` 格式。優先列搜尋意圖明確、可帶來新流量的詞。
+
+### 內容缺口（差異化切點）
+找出 4–6 個「受眾在意、但現有內容沒說清楚或沒切到」的角度，每個說明缺口是什麼、為何是好的差異化機會。
+
+### 可延伸的周邊主題
+列出 3–5 個與核心主題相鄰、可擴展成內容矩陣的周邊主題，並簡述延伸邏輯。
+
+註明：本節為基於受眾知識的「推論延伸」，非 dataset 內實際出現，建議再以實際搜尋資料（如 Google 相關搜尋/Trends）驗證。"""
+    try:
+        expansion = llm.generate(expansion_prompt, temperature=0.5, max_tokens=2560)
+    except Exception as e:
+        print(f"[Synthesis] § 7 延伸關鍵字生成失敗：{e}", flush=True)
+        expansion = "（延伸關鍵字分析生成失敗，請重新分析）"
+
     return {
         "summary": summary,
         "search_intent_analysis": search_intent_analysis,
         "recommendations": recommendations,
+        "expansion": expansion,
     }
