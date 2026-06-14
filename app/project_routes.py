@@ -894,9 +894,17 @@ def _items_ref(pid: str, did: str):
 
 def _load_dataset_items(pid: str, did: str) -> list:
     try:
-        return [d.to_dict() for d in _items_ref(pid, did).order_by('_seq').stream()]
+        items = [d.to_dict() for d in _items_ref(pid, did).order_by('_seq').stream()]
+        if items:
+            return items
     except Exception as e:
-        print(f"[items] 讀取失敗 {did}: {e}", flush=True)
+        print(f"[items] 子集合讀取失敗 {did}: {e}", flush=True)
+    # 後備（向後相容）：舊格式 items 內嵌於 dataset 文件，子集合空時讀回。
+    try:
+        doc = (db.collection('projects').document(pid)
+               .collection('datasets').document(did).get())
+        return (doc.to_dict() or {}).get('items', []) if doc.exists else []
+    except Exception:
         return []
 
 
