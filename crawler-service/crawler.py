@@ -652,6 +652,25 @@ class HeadlessCrawler:
             self._log(f"[JSON-LD] 萃取失敗: {e}")
         return ""
 
+    def _quick_content_len(self, source: str) -> int:
+        """快速估算頁面「已就緒」的主文長度（JSON-LD + 主文容器選擇器）。
+
+        供深度滾動「前」判斷內容是否已足量：Hearst listicle/gallery 等頁面主文在
+        `.listicle-body-content`/JSON-LD 早已就緒，但有上百個 slide + lazy 圖會讓
+        `_scroll_and_wait_for_full_load` 滾到逾時。已足量就跳過深度滾動。
+        """
+        try:
+            best = len(self._extract_from_json_ld(source))
+            soup = BeautifulSoup(source, 'html.parser')
+            for sel in ('.listicle-body-content', '.content-container',
+                        '[itemprop="articleBody"]', 'article'):
+                node = soup.select_one(sel)
+                if node:
+                    best = max(best, len(node.get_text(' ', strip=True)))
+            return best
+        except Exception:
+            return 0
+
     def _extract_from_block_payload(self, html: str) -> str:
         """從現代框架（Next.js App Router / RSC、Condé Nast Copilot 等）的
         序列化 block payload 抽取主文。
@@ -1912,8 +1931,15 @@ class HeadlessCrawler:
                     self._log("[Execution Strategy] Detected a listing page. Skipping.")
                     return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
-            self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
-            url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
+            # ⭐ 內容已足量則跳過深度滾動：Hearst listicle/gallery 等頁面主文在早期 DOM
+            #   就緒，但有上百個 slide + lazy 圖，滾完只是白等逾時。淺滾觸發近端 lazy 即可。
+            early_len = self._quick_content_len(initial_source)
+            if early_len >= 1200:
+                self._log(f"[Execution Strategy] 初始 DOM 已有足量內容（{early_len} 字），淺滾跳過深度滾動。")
+                url_changed_during_scroll = self._scroll_and_wait_for_full_load(max_scrolls=4, original_url=url)
+            else:
+                self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
+                url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
 
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（滾動階段後）")
