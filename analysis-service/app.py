@@ -26,7 +26,7 @@ from flask import Flask, request, jsonify
 from pipeline import run_analysis, JOBS_COLLECTION
 from auth import is_authorized
 
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.1.0"
 
 # ── Firebase 初始化 ──
 if not firebase_admin._apps:
@@ -206,6 +206,59 @@ def get_job(job_id: str):
         safe_fields["error"] = job.get("log", "")
 
     return jsonify(safe_fields), 200
+
+
+@app.route("/api/analyse/<job_id>/cancel", methods=["POST"])
+@require_api_key
+def cancel_job(job_id: str):
+    """請求取消分析任務（合作式）。
+
+    設 cancel_requested=True；pipeline 於各檢查點檢查，收到即停止並轉 cancelled。
+    已完成/失敗則不影響。
+    """
+    try:
+        ref = db.collection(JOBS_COLLECTION).document(job_id)
+        doc = ref.get()
+        if not doc.exists:
+            return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+        cur = doc.to_dict().get("status")
+        if cur in ("completed", "failed", "cancelled"):
+            return jsonify({"status": cur, "message": "任務已結束，無需取消"}), 200
+        ref.update({"cancel_requested": True,
+                    "updated_at": firestore.SERVER_TIMESTAMP})
+        return jsonify({"status": "cancelling", "job_id": job_id}), 200
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
+
+@app.route("/api/analyse/cleanup", methods=["POST"])
+@require_api_key
+def cleanup_jobs():
+    """清除孤兒/陳舊分析任務文件（status 已結束且超過 days 天）。
+
+    Request: {"days": 7}（預設 7）。回傳刪除筆數。
+    analysis_jobs 是 pipeline 暫存層，結果回收進 content-analyser 後即可清理。
+    """
+    import datetime
+    data = request.get_json(silent=True) or {}
+    try:
+        days = max(0, int(data.get("days", 7)))
+    except (TypeError, ValueError):
+        days = 7
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    deleted = 0
+    try:
+        for doc in db.collection(JOBS_COLLECTION).stream():
+            d = doc.to_dict() or {}
+            if d.get("status") not in ("completed", "failed", "cancelled"):
+                continue
+            updated = d.get("updated_at") or d.get("completed_at")
+            if updated is None or updated < cutoff:
+                doc.reference.delete()
+                deleted += 1
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
+    return jsonify({"status": "ok", "deleted": deleted, "days": days}), 200
 
 
 if __name__ == "__main__":

@@ -89,6 +89,38 @@
       </div>
     </div>
 
+    {# 維護：孤兒資料清理 + 使用量 #}
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">維護與用量</div>
+        <div class="card-body">
+          <div class="row g-3 align-items-end">
+            <div class="col-md-8">
+              <div class="fw-semibold">清除孤兒資料</div>
+              <small class="text-muted d-block mb-2">
+                刪除 crawler / analysis 已結束（完成 / 失敗 / 取消）且超過指定天數的暫存任務文件，
+                回收 Firestore 空間。不影響專案內已保存的資料集與報告。
+              </small>
+              <form method="POST" action="{{ url_for('admin_bp.cleanup_orphans') }}" class="d-flex gap-2"
+                    onsubmit="return confirm('確定清除超過指定天數的已結束任務暫存？');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="input-group input-group-sm" style="max-width:200px">
+                  <span class="input-group-text">保留天數</span>
+                  <input type="number" name="days" class="form-control" value="7" min="0" max="365">
+                </div>
+                <button type="submit" class="btn btn-sm btn-outline-warning">執行清理</button>
+              </form>
+            </div>
+            <div class="col-md-4 text-md-end">
+              <a href="{{ url_for('admin_bp.admin_usage') }}" class="btn btn-outline-primary">
+                📊 使用量總覽
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     {# Secret Manager 金鑰管理 #}
     <div class="col-12">
       <div class="card shadow-sm">

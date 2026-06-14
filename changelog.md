@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-06-14 資料治理四features：刪除/更名 + 孤兒清理 + 強制停止 + usage_log + LLM 精緻調配（待部署）
+四項一次開發，尚未部署。涉及三服務（新增取消/清理 API → 需重新部署 crawler 與 analysis）。
+
+**#9 LLM 精緻調配（analysis-pipeline + content-analyser）**：
+- 專案設定新增「溫度（0–1 slider）」與「Gemini 2.5 思考模式開關」。
+- LLMClient 接受 temperature/thinking；Gemini 2.5 預設 thinking_budget=0（避免思考吃掉輸出截斷），
+  用戶可開啟。串接：專案設定 → llm_config → submit_analysis → /api/analyse → run_analysis → LLMClient。
+
+**#7 刪除 / 更名資料集與報告 + 孤兒清理（content-analyser）**：
+- 資料集：`POST /<pid>/datasets/<did>/rename`、`/delete`。
+- 報告：`POST /<pid>/analyses/<aid>/rename`、`/delete`。
+- Admin 孤兒清理 `POST /admin/cleanup`：呼叫 crawler/analysis 的 cleanup 端點，
+  刪除已結束（completed/failed/cancelled）且超過 N 天（預設 7）的 job 暫存文件。
+- 詳情頁與列表皆加更名／刪除 UI（Owner/Editor）。
+
+**#8 強制停止爬取與分析（三服務，合作式取消）**：
+- 新增取消端點：crawler `POST /api/crawl/<id>/cancel`、analysis `POST /api/analyse/<id>/cancel`，
+  設 Firestore `cancel_requested=True`。
+- 背景任務於檢查點檢查旗標：crawl_job 每篇前；pipeline 啟動後/Synthesis 前/組裝前。
+  收到即轉 `cancelled` 並停止（含昂貴的 Synthesis LLM）。
+- content-analyser 的 delete 路由：若仍在執行則先呼叫 cancel（廢除執行階段），再刪除記錄與資料。
+
+**#10 usage_log（content-analyser）**：
+- `users/{email}/usage_log/{id}`：{action, detail, count, project_id, at}。
+- 記錄 crawl / manual_import / analyse / stop / delete 事件。
+- Admin `GET /admin/usage`：各用戶用量彙整 + 最近 100 筆事件。
+
+**新增服務 API**：crawler `POST /api/crawl/<id>/cancel`、`POST /api/crawl/cleanup`（v1.5.0）；
+analysis `POST /api/analyse/<id>/cancel`、`POST /api/analyse/cleanup`（v1.1.0）。皆需 X-API-Key。
+
 ## 2026-06-14 分析品質強化 + Cowork 整合 + YouTube + Decodo + Tier3 開關（三服務皆部署）
 線上版本：content-crawler 00036 / content-analyser 00013 / analysis-pipeline 00009。
 

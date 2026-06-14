@@ -27,8 +27,8 @@ from io import BytesIO
 
 from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
-from .analysis_client import submit_analysis, get_job_status
-from .crawler_client import submit_crawl_batch, get_crawl_status
+from .analysis_client import submit_analysis, get_job_status, cancel_analysis
+from .crawler_client import submit_crawl_batch, get_crawl_status, cancel_crawl
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -61,6 +61,29 @@ def get_user_role(project: dict, email: str) -> str | None:
         return 'owner'
     members = project.get('members', {})
     return members.get(email.lower())
+
+
+def log_usage(action: str, detail: str = '', count: int = 1,
+              project_id: str = '', email: str = None):
+    """記錄使用量事件至 users/{email}/usage_log/{auto_id}。
+
+    action 例：'crawl'、'manual_import'、'analyse'、'delete_dataset'、'delete_analysis'。
+    用量統計（按用戶）供 Admin 檢視。失敗只記 log，不影響主流程。
+    """
+    email = (email or current_user_email() or '').lower()
+    if not email:
+        return
+    try:
+        (db.collection('users').document(email)
+         .collection('usage_log').document().set({
+             'action': action,
+             'detail': str(detail)[:200],
+             'count': int(count) if isinstance(count, (int, float)) else 1,
+             'project_id': project_id,
+             'at': firestore.SERVER_TIMESTAMP,
+         }))
+    except Exception as e:
+        print(f"[usage_log] 寫入失敗（{email}/{action}）：{e}", flush=True)
 
 
 def project_access_required(min_role: str = 'viewer'):
@@ -349,6 +372,7 @@ def submit_analysis_route(pid, project, role):
         'result_markdown': None,
     })
 
+    log_usage('analyse', detail=report_title, count=len(contents), project_id=pid)
     flash(f'分析任務已提交（{len(contents)} 篇），正在處理中...', 'success')
     return redirect(url_for('project_bp.analysis_detail',
                             pid=pid, aid=analysis_ref.id))
@@ -446,6 +470,54 @@ def download_analysis(pid, aid, project, role):
     )
 
 
+@bp.route('/<pid>/analyses/<aid>/rename', methods=['POST'])
+@project_access_required(min_role='editor')
+def rename_analysis(pid, aid, project, role):
+    """更名分析報告（report_title）。"""
+    new_title = request.form.get('report_title', '').strip()[:200]
+    if not new_title:
+        flash('請填寫新的報告標題。', 'danger')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+    ref = (db.collection('projects').document(pid)
+           .collection('analyses').document(aid))
+    if not ref.get().exists:
+        abort(404)
+    ref.update({'report_title': new_title,
+                'updated_at': firestore.SERVER_TIMESTAMP})
+    flash('報告標題已更新。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+
+@bp.route('/<pid>/analyses/<aid>/delete', methods=['POST'])
+@project_access_required(min_role='editor')
+def delete_analysis(pid, aid, project, role):
+    """刪除分析報告；若仍在進行中則先請求分析引擎強制停止（廢除執行階段），再移除記錄。"""
+    ref = (db.collection('projects').document(pid)
+           .collection('analyses').document(aid))
+    doc = ref.get()
+    if not doc.exists:
+        abort(404)
+    analysis = doc.to_dict()
+    status = analysis.get('status')
+    job_id = analysis.get('job_id')
+
+    stopped = False
+    if status in ('pending', 'running') and job_id:
+        res = cancel_analysis(job_id)
+        stopped = 'error' not in res
+        log_usage('stop_analysis', detail=analysis.get('report_title', ''),
+                  project_id=pid)
+
+    ref.delete()
+    log_usage('delete_analysis', detail=analysis.get('report_title', ''),
+              project_id=pid)
+    if stopped:
+        flash('已強制停止分析、廢除執行階段並刪除報告。', 'success')
+    else:
+        flash('分析報告已刪除。', 'success')
+    return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 資料集（爬取文件）：輸入 URL → 後端非同步爬取 → 文件 → 一鍵分析
 # Firestore: projects/{pid}/datasets/{did}
@@ -495,6 +567,7 @@ def create_dataset(pid, project, role):
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
+    log_usage('crawl', detail=name, count=len(urls), project_id=pid)
     flash(f'資料集「{name}」已建立，正在爬取 {len(urls)} 個網址...', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
@@ -590,6 +663,7 @@ def create_manual_dataset(pid, project, role):
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
+    log_usage('manual_import', detail=name, count=succeeded, project_id=pid)
     flash(f'資料集「{name}」已匯入 {succeeded} 筆，可直接分析。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
@@ -730,6 +804,7 @@ def analyse_dataset(pid, did, project, role):
         'result_markdown': None,
         'source_dataset': did,
     })
+    log_usage('analyse', detail=report_title, count=len(contents), project_id=pid)
     flash(f'已從資料集「{dataset.get("name")}」提交分析（{len(contents)} 篇）。', 'success')
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
@@ -813,6 +888,7 @@ def analyse_combined(pid, project, role):
         'result_markdown': None,
         'source_dataset': ','.join(dataset_ids),
     })
+    log_usage('analyse', detail=report_title, count=len(contents), project_id=pid)
     flash(f'已合併 {len(used_names)} 個資料集提交分析（{len(contents)} 篇）。', 'success')
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
@@ -903,3 +979,52 @@ def download_dataset_json(pid, did, project, role):
     return send_file(BytesIO(payload.encode('utf-8')), as_attachment=True,
                      download_name=f"{fname}.json",
                      mimetype='application/json; charset=utf-8')
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 資料集更名 / 刪除（含強制停止爬取）
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/<pid>/datasets/<did>/rename', methods=['POST'])
+@project_access_required(min_role='editor')
+def rename_dataset(pid, did, project, role):
+    """更名資料集。"""
+    new_name = request.form.get('name', '').strip()[:200]
+    if not new_name:
+        flash('請填寫新的資料集名稱。', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    ref = (db.collection('projects').document(pid)
+           .collection('datasets').document(did))
+    if not ref.get().exists:
+        abort(404)
+    ref.update({'name': new_name, 'updated_at': firestore.SERVER_TIMESTAMP})
+    flash('資料集名稱已更新。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/delete', methods=['POST'])
+@project_access_required(min_role='editor')
+def delete_dataset(pid, did, project, role):
+    """刪除資料集；若仍在爬取中則先請求爬蟲強制停止（廢除執行階段），再移除記錄。"""
+    ref = (db.collection('projects').document(pid)
+           .collection('datasets').document(did))
+    doc = ref.get()
+    if not doc.exists:
+        abort(404)
+    dataset = doc.to_dict()
+    status = dataset.get('status')
+    crawl_job_id = dataset.get('crawl_job_id')
+
+    stopped = False
+    if status == 'crawling' and crawl_job_id:
+        res = cancel_crawl(crawl_job_id)
+        stopped = 'error' not in res
+        log_usage('stop_crawl', detail=dataset.get('name', ''), project_id=pid)
+
+    ref.delete()
+    log_usage('delete_dataset', detail=dataset.get('name', ''), project_id=pid)
+    if stopped:
+        flash('已強制停止爬取、廢除執行階段並刪除資料集。', 'success')
+    else:
+        flash('資料集已刪除。', 'success')
+    return redirect(url_for('project_bp.project_detail', pid=pid))

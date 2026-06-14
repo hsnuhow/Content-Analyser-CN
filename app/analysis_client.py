@@ -80,6 +80,38 @@ def submit_analysis(report_title: str, contents: list,
         return {"error": f"無法連線至分析服務：{e}"}
 
 
+def cancel_analysis(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
+    """請求取消分析任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
+    if not job_id:
+        return {"error": "缺少 job_id。"}
+    try:
+        resp = requests.post(f"{base}/api/analyse/{job_id}/cancel",
+                             headers=_headers(), timeout=timeout)
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": "取消請求逾時。"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def cleanup_analysis_jobs(days: int = 7, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """清除孤兒/陳舊分析任務文件。回傳 {"deleted": N} 或 {"error": ...}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.post(f"{base}/api/analyse/cleanup", json={"days": days},
+                             headers=_headers(), timeout=timeout)
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": "清理請求逾時。"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def get_job_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """查詢分析任務進度與結果。
 

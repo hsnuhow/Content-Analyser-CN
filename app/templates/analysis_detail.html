@@ -20,6 +20,35 @@
     {% endif %}
   </div>
 
+  {# 更名 / 刪除 / 強制停止（Owner/Editor）#}
+  {% if role in ('owner', 'editor') %}
+  <div class="d-flex gap-2 mb-4">
+    <button class="btn btn-sm btn-outline-secondary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#renameAnalysis">✏️ 更名</button>
+    {% if analysis.status in ('pending', 'running') %}
+    <form method="POST" action="{{ url_for('project_bp.delete_analysis', pid=pid, aid=analysis.id) }}"
+          onsubmit="return confirm('強制停止會終止分析執行階段、廢除中間結果並刪除此報告，確定？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-danger">⏹ 強制停止並刪除</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('project_bp.delete_analysis', pid=pid, aid=analysis.id) }}"
+          onsubmit="return confirm('確定刪除此分析報告？此操作不可還原。');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-outline-danger">🗑 刪除報告</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="collapse mb-4" id="renameAnalysis">
+    <form method="POST" action="{{ url_for('project_bp.rename_analysis', pid=pid, aid=analysis.id) }}"
+          class="input-group" style="max-width:480px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="report_title" class="form-control" value="{{ analysis.report_title }}" maxlength="200" required>
+      <button type="submit" class="btn btn-primary">儲存新標題</button>
+    </form>
+  </div>
+  {% endif %}
+
   {# 進度區塊（未完成時顯示）#}
   {% if analysis.status in ('pending', 'running') %}
   <div id="progress-section" class="card shadow-sm mb-4">

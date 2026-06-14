@@ -1,0 +1,68 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{{ url_for('admin_bp.admin_dashboard') }}">系統管理控制台</a></li>
+      <li class="breadcrumb-item active">使用量總覽</li>
+    </ol>
+  </nav>
+
+  <h2 class="mb-4">使用量總覽（usage_log）</h2>
+
+  {# 各用戶彙整 #}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">各用戶用量</div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr><th>用戶</th><th>事件數</th><th>動作分布</th><th>累計內容量</th></tr>
+        </thead>
+        <tbody>
+          {% for s in summary %}
+          <tr>
+            <td class="text-truncate" style="max-width:240px">{{ s.email }}</td>
+            <td>{{ s.events }}</td>
+            <td class="small">
+              {% for act, n in s.actions.items() %}
+              <span class="badge bg-secondary">{{ act }} ×{{ n }}</span>
+              {% endfor %}
+            </td>
+            <td>{{ '{:,}'.format(s.total_count) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="text-muted text-center py-4">尚無使用記錄。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# 最近事件 #}
+  <div class="card shadow-sm">
+    <div class="card-header fw-semibold">最近事件（最多 100 筆）</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr><th>時間</th><th>用戶</th><th>動作</th><th>內容</th><th>量</th></tr>
+        </thead>
+        <tbody>
+          {% for r in recent %}
+          <tr>
+            <td class="small text-muted">{{ r.at.strftime('%Y-%m-%d %H:%M') if r.at and r.at.strftime is defined else '-' }}</td>
+            <td class="small text-truncate" style="max-width:180px">{{ r.email }}</td>
+            <td><span class="badge bg-secondary">{{ r.action }}</span></td>
+            <td class="small text-truncate" style="max-width:240px">{{ r.detail }}</td>
+            <td>{{ r.count }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="text-muted text-center py-4">尚無事件。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

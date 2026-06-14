@@ -91,6 +91,17 @@
                 <a href="{{ url_for('project_bp.download_dataset_json', pid=pid, did=ds.id) }}"
                    class="btn btn-sm btn-outline-secondary" download title="下載 JSON">🔧 JSON</a>
                 {% endif %}
+                {% if role in ('owner', 'editor') %}
+                {% if ds.status == 'crawling' %}
+                <button type="submit" formaction="{{ url_for('project_bp.delete_dataset', pid=pid, did=ds.id) }}"
+                        formnovalidate class="btn btn-sm btn-danger" title="強制停止並刪除"
+                        onclick="return confirm('強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？');">⏹</button>
+                {% else %}
+                <button type="submit" formaction="{{ url_for('project_bp.delete_dataset', pid=pid, did=ds.id) }}"
+                        formnovalidate class="btn btn-sm btn-outline-danger" title="刪除資料集"
+                        onclick="return confirm('確定刪除資料集「{{ ds.name }}」？此操作不可還原。');">🗑</button>
+                {% endif %}
+                {% endif %}
               </div>
             </div>
           </div>
@@ -181,20 +192,33 @@
         <div class="list-group list-group-flush">
           {% if analyses %}
           {% for a in analyses %}
-          <a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=a.id) }}"
-             class="list-group-item list-group-item-action">
+          <div class="list-group-item">
             <div class="d-flex justify-content-between align-items-center">
-              <div>
+              <a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=a.id) }}"
+                 class="text-decoration-none flex-grow-1 me-2">
                 <strong>{{ a.report_title }}</strong>
                 <div class="text-muted small">
                   {{ a.n_articles }} 篇 · {{ a.llm_provider }} / {{ a.llm_model }}
                 </div>
+              </a>
+              <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-{% if a.status == 'completed' %}success{% elif a.status == 'failed' %}danger{% elif a.status == 'running' %}warning text-dark{% else %}secondary{% endif %}">
+                  {{ a.status }}
+                </span>
+                {% if role in ('owner', 'editor') %}
+                <form method="POST" action="{{ url_for('project_bp.delete_analysis', pid=pid, aid=a.id) }}"
+                      onsubmit="return confirm({% if a.status in ('pending','running') %}'強制停止會終止分析、廢除中間結果並刪除此報告，確定？'{% else %}'確定刪除報告「{{ a.report_title }}」？此操作不可還原。'{% endif %});">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  {% if a.status in ('pending', 'running') %}
+                  <button type="submit" class="btn btn-sm btn-danger py-0 px-1" title="強制停止並刪除">⏹</button>
+                  {% else %}
+                  <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1" title="刪除報告">🗑</button>
+                  {% endif %}
+                </form>
+                {% endif %}
               </div>
-              <span class="badge bg-{% if a.status == 'completed' %}success{% elif a.status == 'failed' %}danger{% elif a.status == 'running' %}warning text-dark{% else %}secondary{% endif %}">
-                {{ a.status }}
-              </span>
             </div>
-          </a>
+          </div>
           {% endfor %}
           {% else %}
           <div class="list-group-item text-muted text-center py-4">

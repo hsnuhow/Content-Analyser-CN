@@ -20,6 +20,35 @@
     </span>
   </div>
 
+  {# 更名 / 刪除（Owner/Editor）#}
+  {% if role in ('owner', 'editor') %}
+  <div class="d-flex gap-2 mb-4">
+    <button class="btn btn-sm btn-outline-secondary" type="button"
+            data-bs-toggle="collapse" data-bs-target="#renameDataset">✏️ 更名</button>
+    {% if dataset.status == 'crawling' %}
+    <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-danger">⏹ 強制停止並刪除</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('確定刪除此資料集？此操作不可還原。');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-outline-danger">🗑 刪除資料集</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="collapse mb-4" id="renameDataset">
+    <form method="POST" action="{{ url_for('project_bp.rename_dataset', pid=pid, did=dataset.id) }}"
+          class="input-group" style="max-width:480px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="name" class="form-control" value="{{ dataset.name }}" maxlength="200" required>
+      <button type="submit" class="btn btn-primary">儲存新名稱</button>
+    </form>
+  </div>
+  {% endif %}
+
   {# 爬取進度（crawling 時）#}
   {% if dataset.status == 'crawling' %}
   <div class="card shadow-sm mb-4">

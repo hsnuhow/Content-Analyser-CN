@@ -20,8 +20,10 @@ from .services import (
     list_all_users, approve_user, reject_user,
     create_api_key, list_api_keys, revoke_api_key, reactivate_api_key,
 )
-from .crawler_client import check_crawler_health
-from .analysis_client import check_health as check_analysis_health
+from .crawler_client import check_crawler_health, cleanup_crawl_jobs
+from .analysis_client import (check_health as check_analysis_health,
+                              cleanup_analysis_jobs)
+from firebase_admin import firestore
 
 
 def _get_tier3_enabled() -> bool:
@@ -228,6 +230,88 @@ def update_secrets():
         flash(f'更新 {key_name} 失敗，請查看系統日誌。', 'danger')
 
     return redirect(url_for('admin_bp.admin_dashboard'))
+
+
+@bp.route('/cleanup', methods=['POST'])
+@admin_required
+def cleanup_orphans():
+    """清除孤兒資料：
+
+    1. content-analyser 自身：刪除狀態異常或無記錄的暫存（此處主要清遠端 job 暫存層）。
+    2. 呼叫 crawler / analysis 的 cleanup 端點，刪除已結束且超過 N 天的 job 文件。
+    """
+    try:
+        days = max(0, int(request.form.get('days', 7)))
+    except (TypeError, ValueError):
+        days = 7
+
+    crawl_res = cleanup_crawl_jobs(days)
+    analysis_res = cleanup_analysis_jobs(days)
+
+    parts = []
+    if 'error' in crawl_res:
+        parts.append(f'爬取任務清理失敗：{crawl_res["error"]}')
+    else:
+        parts.append(f'爬取任務清除 {crawl_res.get("deleted", 0)} 筆')
+    if 'error' in analysis_res:
+        parts.append(f'分析任務清理失敗：{analysis_res["error"]}')
+    else:
+        parts.append(f'分析任務清除 {analysis_res.get("deleted", 0)} 筆')
+
+    has_err = 'error' in crawl_res or 'error' in analysis_res
+    flash('；'.join(parts) + f'（門檻 {days} 天）。',
+          'warning' if has_err else 'success')
+    return redirect(url_for('admin_bp.admin_dashboard'))
+
+
+@bp.route('/usage')
+@admin_required
+def admin_usage():
+    """使用量總覽：彙整各用戶 usage_log，依 action 統計次數與內容量。"""
+    summary = []
+    recent = []
+    try:
+        for u in list_all_users():
+            email = u.get('email')
+            if not email:
+                continue
+            actions = {}
+            total_count = 0
+            try:
+                logs = (db.collection('users').document(email)
+                        .collection('usage_log').stream())
+            except Exception:
+                logs = []
+            n_events = 0
+            for d in logs:
+                rec = d.to_dict() or {}
+                act = rec.get('action', 'unknown')
+                cnt = rec.get('count', 1) or 0
+                actions[act] = actions.get(act, 0) + 1
+                total_count += cnt
+                n_events += 1
+                recent.append({
+                    'email': email,
+                    'action': act,
+                    'detail': rec.get('detail', ''),
+                    'count': cnt,
+                    'at': rec.get('at'),
+                })
+            if n_events:
+                summary.append({
+                    'email': email,
+                    'events': n_events,
+                    'actions': actions,
+                    'total_count': total_count,
+                })
+    except Exception as e:
+        flash(f'讀取使用量失敗：{e}', 'danger')
+
+    summary.sort(key=lambda s: s['events'], reverse=True)
+    recent.sort(key=lambda r: r.get('at') or '', reverse=True)
+    return render_template('admin_usage.html',
+                           user=session.get('user'),
+                           summary=summary, recent=recent[:100])
 
 
 @bp.route('/force_kill_crawler', methods=['POST'])

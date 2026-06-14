@@ -24,6 +24,21 @@ def _update_job(db, job_id: str, **fields):
         print(f"[CrawlJob] Firestore update 失敗: {e}", flush=True)
 
 
+def _is_cancelled(db, job_id: str) -> bool:
+    """合作式取消：讀 job 文件，若 cancel_requested=True 或文件已被刪除 → 視為取消。
+
+    呼叫端（content-analyser）透過 POST /api/crawl/<id>/cancel 設旗標，
+    或直接刪除文件。背景迴圈於每篇前檢查，收到即停止。
+    """
+    try:
+        snap = db.collection(JOBS_COLLECTION).document(job_id).get()
+        if not snap.exists:
+            return True
+        return bool(snap.to_dict().get("cancel_requested"))
+    except Exception:
+        return False
+
+
 def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                     gemini_api_key: str, db) -> None:
     """背景執行：逐一爬取 urls，結果寫入 crawl_jobs/{job_id}。
@@ -80,6 +95,12 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
 
         results = []
         for i, url in enumerate(urls):
+            # 合作式取消檢查：使用者強制停止 → 立即停止爬取。
+            if _is_cancelled(db, job_id):
+                _log("收到取消請求，停止爬取")
+                _update_job(db, job_id, status="cancelled",
+                            log=f"已取消（完成 {i}/{total}）")
+                return
             url = (url or "").strip()
             if not url:
                 results.append({"status": "failed", "url": url, "error": "Empty URL"})

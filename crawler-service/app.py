@@ -33,7 +33,7 @@ from crawler import HeadlessCrawler, UnsupportedSiteError
 from auth import is_authorized
 from crawl_job import run_crawl_batch, JOBS_COLLECTION
 
-SERVICE_VERSION = "1.4.0"
+SERVICE_VERSION = "1.5.0"
 
 
 def _is_safe_url(url: str):
@@ -289,6 +289,64 @@ def get_crawl_job(job_id):
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
     return jsonify(doc.to_dict()), 200
+
+
+@app.route("/api/crawl/<job_id>/cancel", methods=["POST"])
+@require_api_key
+def cancel_crawl_job(job_id):
+    """請求取消非同步爬取任務（合作式）。
+
+    設 cancel_requested=True；背景迴圈於每篇前檢查，收到即停止並轉 cancelled。
+    若任務已完成/失敗則不影響。回傳當前狀態。
+    """
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    try:
+        ref = db.collection(JOBS_COLLECTION).document(job_id)
+        doc = ref.get()
+        if not doc.exists:
+            return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
+        cur = doc.to_dict().get("status")
+        if cur in ("completed", "failed", "cancelled"):
+            return jsonify({"status": cur, "message": "任務已結束，無需取消"}), 200
+        ref.update({"cancel_requested": True,
+                    "updated_at": firestore.SERVER_TIMESTAMP})
+        return jsonify({"status": "cancelling", "job_id": job_id}), 200
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
+
+@app.route("/api/crawl/cleanup", methods=["POST"])
+@require_api_key
+def cleanup_crawl_jobs():
+    """清除孤兒/陳舊爬取任務文件（status 已結束且超過 days 天）。
+
+    Request: {"days": 7}（預設 7）。回傳刪除筆數。
+    crawl_jobs 是 crawler 的暫存層，結果回收進 content-analyser 後即可清理。
+    """
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    import datetime
+    data = request.get_json(silent=True) or {}
+    try:
+        days = max(0, int(data.get("days", 7)))
+    except (TypeError, ValueError):
+        days = 7
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    deleted = 0
+    try:
+        for doc in db.collection(JOBS_COLLECTION).stream():
+            d = doc.to_dict() or {}
+            if d.get("status") not in ("completed", "failed", "cancelled"):
+                continue
+            updated = d.get("updated_at") or d.get("completed_at")
+            # 無時間戳或早於 cutoff → 刪除
+            if updated is None or updated < cutoff:
+                doc.reference.delete()
+                deleted += 1
+    except Exception as e:
+        return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
+    return jsonify({"status": "ok", "deleted": deleted, "days": days}), 200
 
 
 if __name__ == "__main__":

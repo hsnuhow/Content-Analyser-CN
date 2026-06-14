@@ -775,6 +775,10 @@ Content-Analyser-CN/
 | `GET /health` | 探活（無需金鑰）|
 | `POST /api/scrape` | 爬取單一 URL，支援 `hard_timeout_sec` |
 | `POST /api/scrape/batch` | 批次（最多 20）|
+| `POST /api/crawl/batch` | 非同步批次（最多 100），回傳 `job_id` |
+| `GET /api/crawl/{job_id}` | 查詢非同步爬取進度與結果 |
+| `POST /api/crawl/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
+| `POST /api/crawl/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 
 回傳：`{status: success/skipped/failed, url, title, content, length}`
 
@@ -785,6 +789,8 @@ Content-Analyser-CN/
 | `GET /health` | 探活（無需金鑰）|
 | `POST /api/analyse` | 提交分析（非同步），回傳 `{job_id}` |
 | `GET /api/analyse/{job_id}` | 查詢進度與結果 |
+| `POST /api/analyse/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
+| `POST /api/analyse/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 
 `POST /api/analyse` body：
 ```json

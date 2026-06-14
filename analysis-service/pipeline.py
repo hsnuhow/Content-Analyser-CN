@@ -38,6 +38,21 @@ def _update_job(db, job_id: str, **fields):
         print(f"[Pipeline] Firestore update 失敗：{e}", flush=True)
 
 
+def _is_cancelled(db, job_id: str) -> bool:
+    """合作式取消：讀 job 文件，cancel_requested=True 或文件已刪除 → 視為取消。
+
+    呼叫端透過 POST /api/analyse/<id>/cancel 設旗標。pipeline 於各檢查點檢查，
+    收到即停止後續（含昂貴的 Synthesis LLM 呼叫）。
+    """
+    try:
+        snap = db.collection(JOBS_COLLECTION).document(job_id).get()
+        if not snap.exists:
+            return True
+        return bool(snap.to_dict().get("cancel_requested"))
+    except Exception:
+        return False
+
+
 def run_analysis(job_id: str, report_title: str,
                  contents: List[Dict], llm_config: Dict, db) -> None:
     """
@@ -59,8 +74,18 @@ def run_analysis(job_id: str, report_title: str,
         _log(log)
         _update_job(db, job_id, progress=prog, log=log)
 
+    def _cancelled_stop() -> bool:
+        """檢查點：若已取消，標記 cancelled 並回傳 True（呼叫端應 return）。"""
+        if _is_cancelled(db, job_id):
+            _log("收到取消請求，停止分析")
+            _update_job(db, job_id, status="cancelled", log="已取消")
+            return True
+        return False
+
     try:
         _update_job(db, job_id, status="running", progress=5, log="分析任務啟動...")
+        if _cancelled_stop():
+            return
 
         # ── 建立 LLM client ──
         try:
@@ -139,6 +164,10 @@ def run_analysis(job_id: str, report_title: str,
                 nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
                                "clusters": {"clusters": [], "n_clusters": 0}}
 
+        # 兩路完成 → 進入昂貴的 Synthesis 前先檢查取消。
+        if _cancelled_stop():
+            return
+
         # ── 為主題群生成 LLM 描述（label + 一句話定位）──
         try:
             _progress(78, "為語意主題群生成描述...")
@@ -155,6 +184,9 @@ def run_analysis(job_id: str, report_title: str,
             n_articles=len(contents),
             llm=llm,
         )
+
+        if _cancelled_stop():
+            return
 
         # ── 組裝最終報告 ──
         _progress(93, "組裝最終 Markdown 報告...")

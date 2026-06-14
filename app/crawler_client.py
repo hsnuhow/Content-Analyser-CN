@@ -69,6 +69,38 @@ def get_crawl_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def cancel_crawl(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """請求取消非同步爬取任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
+    base = _crawler_url()
+    if not base:
+        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
+    if not job_id:
+        return {"error": "缺少 job_id。"}
+    try:
+        resp = requests.post(f"{base}/api/crawl/{job_id}/cancel",
+                             headers=_headers(), timeout=timeout)
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": "取消請求逾時。"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def cleanup_crawl_jobs(days: int = 7, timeout: int = SUBMIT_TIMEOUT) -> dict:
+    """清除孤兒/陳舊爬取任務文件。回傳 {"deleted": N} 或 {"error": ...}。"""
+    base = _crawler_url()
+    if not base:
+        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.post(f"{base}/api/crawl/cleanup", json={"days": days},
+                             headers=_headers(), timeout=timeout)
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": "清理請求逾時。"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def check_crawler_health(timeout: int = DEFAULT_TIMEOUT) -> dict:
     """呼叫 content-crawler /health，回傳狀態 dict。
 
