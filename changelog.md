@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-14 adaymag 廣編全頁修正 + Dcard 機制研究（已部署 00032-hgd）
+- **Fix（A Day Magazine 廣編全頁 .fullpage-content）**：Chrome MCP 研究發現 adaymag CHANEL 文章用
+  fullPage.js，內文容器 `.fullpage-content`（非標準 `.entry-content`），SSR HTML 即有 1567 字，
+  但 JS 渲染後被清空（headless body 剩 75 字）。修正：adaymag 模板加 `.fullpage-content`；
+  fallback 鏈新增「DOMContentLoaded 初始快照抽取」（內容過短時從 dom_snapshot_source 重抽 SSR 原文）。
+  線上實測 3/3 穩定 success、1542 字、無 crash。
+- **研究結論（Dcard 反制）**：Chrome MCP 確認 Dcard 用 **Cloudflare WAF 封鎖 datacenter/server IP**
+  （403 "Attention Required"，非 JS 挑戰）。所有 UA（瀏覽器/facebookexternalhit/Googlebot/Twitterbot）
+  從 datacenter IP 都 403；使用者住宅 IP 的真實瀏覽器可正常載入（含 og:description 文案）。
+  → og/社群 UA 手法**無效**；唯二反制 = (a) residential proxy（付費），(b) Chrome MCP 真實瀏覽器蒐集。
+
 ## 2026-06-14 CHANEL 社群來源處理：Threads/Instagram og 文案 + Cloudflare 挑戰頁偵測（已部署 00031-vhk）
 - **Threads/Instagram 公開貼文（新增 `_fetch_og_meta()`）**：用 `facebookexternalhit` 社群 UA 抓
   og:title/og:description（連結預覽機制，不啟動 Chrome）。Threads 直接取得文案；Instagram 從
