@@ -21,7 +21,16 @@ from sklearn.preprocessing import normalize
 # jieba 靜默模式
 jieba.setLogLevel(20)
 
-# ⭐ 美妝/保養領域自訂詞典：jieba 預設詞典不懂這些複合詞，會切碎（如「維他命」→「他命」、
+# ⭐ A 方案：改用 jieba 繁體辭典 dict.txt.big（含詞頻，專為繁中斷詞）為基底，
+#    取代預設簡體導向辭典，大幅提升台灣繁中內容的斷詞品質。
+_DICT_BIG = os.path.join(os.path.dirname(__file__), "dict.txt.big")
+if os.path.exists(_DICT_BIG):
+    try:
+        jieba.set_dictionary(_DICT_BIG)
+    except Exception as _e:
+        print(f"[nlp] set_dictionary 失敗，沿用預設辭典：{_e}", flush=True)
+
+# ⭐ 美妝/保養領域自訂詞典：辭典不懂這些複合詞，會切碎（如「維他命」→「他命」、
 #    「傳明酸」「菸鹼醯胺」「初生光采」被拆開）。預先加入，提升斷詞與關鍵字品質。
 _DOMAIN_TERMS = [
     # 成分
@@ -42,6 +51,14 @@ for _t in _DOMAIN_TERMS:
         jieba.add_word(_t)
     except Exception:
         pass
+
+# ⭐ moedict 蒸餾版補充詞庫（教育部辭典萃取的 2-4 字現代詞），檔存在才載入（由離線工具產出）。
+_MOEDICT_USERDICT = os.path.join(os.path.dirname(__file__), "moedict_userdict.txt")
+if os.path.exists(_MOEDICT_USERDICT):
+    try:
+        jieba.load_userdict(_MOEDICT_USERDICT)
+    except Exception as _e:
+        print(f"[nlp] moedict userdict 載入失敗（略過）：{_e}", flush=True)
 
 # 中文停用詞（常見但無語意的詞）
 _STOPWORDS = frozenset([

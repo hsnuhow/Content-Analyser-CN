@@ -13,8 +13,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 預先初始化 jieba 字典（避免首次請求時延遲）
-RUN python -c "import jieba; jieba.initialize(); print('[jieba] dictionary initialized')"
+# 下載 jieba 繁體辭典 dict.txt.big（含詞頻，繁中斷詞品質更佳）並預先初始化（避免首次請求延遲）
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/fxsjy/jieba/raw/master/extra_dict/dict.txt.big', '/app/dict.txt.big')" && \
+    python -c "import jieba; jieba.set_dictionary('/app/dict.txt.big'); jieba.initialize(); print('[jieba] big dict initialized')"
 
 COPY . .
 
