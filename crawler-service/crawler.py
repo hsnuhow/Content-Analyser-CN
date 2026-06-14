@@ -750,9 +750,14 @@ class HeadlessCrawler:
             self._log(f"[Block Payload] 抽取失敗: {e}")
             return ""
 
-    def _clear_overlays_and_click_cta(self, rounds: int = 3):
+    def _clear_overlays_and_click_cta(self, rounds: int = 3,
+                                      skip_generic_fallback: bool = False):
         """遮罩處理：對齊 Colab v3.8。
         順序：OneTrust（AllowAll JS → 按鈕）→ Fides（JS API）→ 通用點擊後備。
+
+        skip_generic_fallback=True 時略過「通用後備邏輯」（對所有 button/a 跑 execute_script 點擊）。
+        該步對廣告無限載入、renderer 持續忙碌的重 SPA（如 HK 時尚站）會卡死；模板/已知容器
+        命中時其實不需要它（站台已知、且實測無遮罩），故略過以免卡住。OneTrust/Fides 仍照處理。
         """
         # ========= ⭐️ [v3.8] 優先偵測並處理 OneTrust CMP（Vogue Taiwan 等）=========
         try:
@@ -886,6 +891,9 @@ class HeadlessCrawler:
             pass
 
         # ========= 通用後備邏輯 =========
+        if skip_generic_fallback:
+            self._log("[遮罩處理] 模板/已知容器命中，略過通用後備邏輯（避免重 SPA 卡死）")
+            return
         self._log("[遮罩處理] ...執行通用後備邏輯...")
 
         def click_candidates():
@@ -2017,8 +2025,10 @@ class HeadlessCrawler:
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（載入階段後）")
 
-            # 遮罩處理（OneTrust → Fides → 通用後備），對齊 Colab v3.8
-            self._clear_overlays_and_click_cta()
+            # 遮罩處理（OneTrust → Fides → 通用後備），對齊 Colab v3.8。
+            # 模板/已學選擇器命中（已知站）→ 略過會卡死的通用後備（重 SPA 廣告拖住 renderer）。
+            self._clear_overlays_and_click_cta(
+                skip_generic_fallback=self._content_container_known(url))
 
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（遮罩處理後）")
