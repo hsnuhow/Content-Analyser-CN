@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-14 修正：爬蟲 OOM — 模板判別優先 + 批次回收 driver（待部署 crawler）
+香港/時尚 listicle 批次爬到一半 Worker SIGKILL（OOM）→ 整批中斷。診斷：批次重用單一 driver，
+Chrome 記憶體隨頁數累積；HK 站（hk.news.yahoo/popbee 無模板）深滾整頁加速膨脹。
+
+- **治本｜模板判別優先（crawler.py scrape）**：把「內容容器判別」移到滾動前。
+  ① 初始 DOM 足量 → 淺滾；② 容器已知（模板/已學選擇器）→ 淺滾；
+  ③ 未知站 → 先用 Gemini 對初始 DOM 即時學選擇器（存 site_learning），學到 → 淺滾，否則才深滾。
+  新方法 `_content_container_known()`、`_discover_selector_on_initial_dom()`。深滾（記憶體元兇）只在真正找不到容器時才跑。
+- **記憶體保險｜crawl_job 每 6 篇回收重建 driver**（RECYCLE_EVERY=6），釋放 Chrome 累積記憶體；
+  學到的選擇器已持久化 Firestore，回收不遺失。
+- **併發 4→2**（部署參數），降低同實例多 Chrome 疊加 OOM 風險。
+
 ## 2026-06-14 LLM 設定介面改版：三家提供商 + 模型下拉 + 進階參數（待部署）
 分析模型選擇介面強化（簡易/進階雙模式）。
 

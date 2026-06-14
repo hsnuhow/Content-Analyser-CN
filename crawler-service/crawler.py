@@ -1853,6 +1853,65 @@ class HeadlessCrawler:
         self._log("[Cloudflare] ⚠️ 挑戰未在時限內通過（可能 IP 被封或需互動驗證）")
         return False
 
+    def _content_container_known(self, url: str) -> bool:
+        """滾動前判斷：內容容器是否已知（模板 indicator 命中、或已學/快取選擇器）。
+
+        已知容器代表內文在固定 DOM 容器內，**不需深滾整頁**（深滾只為觸發 lazy-load
+        與 infinity feed，對固定容器無益且耗記憶體）→ 淺滾即可。
+        """
+        url_lower = url.lower()
+        for tmpl in SITE_TEMPLATES.values():
+            for ind in tmpl.get('indicators', []):
+                if ind in url_lower:
+                    return True
+        domain = urlparse(url).netloc
+        if domain and domain in self.domain_selector_cache:
+            return True
+        try:
+            from site_learning import load_learned_selectors
+            if domain and load_learned_selectors().get(domain):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _discover_selector_on_initial_dom(self, url: str, source: str) -> bool:
+        """未知站「模板判別優先」：滾動前先用 Gemini 對初始 DOM 找內容選擇器。
+
+        找到並驗證（≥300 字）→ 存入快取 + 學習庫（site_learning），回 True；
+        之後 _extract_main_text 會直接命中快取選擇器，且本次可只淺滾。
+        沒有 Gemini key 或找不到 → 回 False（退回原本深滾流程）。
+        """
+        if not (HAS_GENAI and self.genai_api_key):
+            return False
+        try:
+            soup = BeautifulSoup(source, 'html.parser')
+            self._remove_cmp_containers(soup)
+            selectors = self._ask_gemini_selector(url, soup)
+            domain = urlparse(url).netloc
+            best, best_len = None, 0
+            for sel in (selectors or []):
+                try:
+                    node = soup.select_one(sel)
+                    if node:
+                        txt = self._clean_text(node.get_text("\n", strip=True))
+                        if len(txt) > best_len:
+                            best_len, best = len(txt), sel
+                except Exception:
+                    continue
+            if best and best_len >= 300:
+                self.domain_selector_cache[domain] = best
+                try:
+                    from site_learning import save_learned_selector, detect_cms
+                    save_learned_selector(domain, best, url, best_len, detect_cms(source))
+                except Exception:
+                    pass
+                self._log(f"[SiteLearning] 滾動前即時學會選擇器：{domain} → '{best}'（{best_len} 字）")
+                return True
+        except Exception as e:
+            self._log(f"[SiteLearning] 初始 DOM 選擇器探詢失敗（回退深滾）：{e}")
+        return False
+
     def scrape(self, url: str, hard_timeout_sec: int = 300,
                keep_driver: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
@@ -1948,11 +2007,19 @@ class HeadlessCrawler:
                     self._log("[Execution Strategy] Detected a listing page. Skipping.")
                     return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
-            # ⭐ 內容已足量則跳過深度滾動：Hearst listicle/gallery 等頁面主文在早期 DOM
-            #   就緒，但有上百個 slide + lazy 圖，滾完只是白等逾時。淺滾觸發近端 lazy 即可。
+            # ⭐ 滾動策略（模板判別優先，治本省記憶體）：
+            #   1) 初始 DOM 已足量 → 淺滾。
+            #   2) 內容容器已知（模板/已學選擇器）→ 淺滾（固定容器不必深滾整頁）。
+            #   3) 未知站 → 先用 Gemini 對初始 DOM 即時學選擇器；學到 → 淺滾、否則才深滾。
             early_len = self._quick_content_len(initial_source)
             if early_len >= 1200:
                 self._log(f"[Execution Strategy] 初始 DOM 已有足量內容（{early_len} 字），淺滾跳過深度滾動。")
+                url_changed_during_scroll = self._scroll_and_wait_for_full_load(max_scrolls=4, original_url=url)
+            elif self._content_container_known(url):
+                self._log("[Execution Strategy] 內容容器已知（模板/已學選擇器），淺滾跳過深度滾動。")
+                url_changed_during_scroll = self._scroll_and_wait_for_full_load(max_scrolls=4, original_url=url)
+            elif self._discover_selector_on_initial_dom(url, initial_source):
+                self._log("[Execution Strategy] 未知站：滾動前即時學會內容選擇器，淺滾。")
                 url_changed_during_scroll = self._scroll_and_wait_for_full_load(max_scrolls=4, original_url=url)
             else:
                 self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")

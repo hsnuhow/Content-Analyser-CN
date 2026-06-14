@@ -13,6 +13,9 @@ from crawler import HeadlessCrawler, UnsupportedSiteError
 
 JOBS_COLLECTION = "crawl_jobs"
 
+# 批次每爬 N 篇回收（重建）driver，釋放 Chrome 累積記憶體，避免長批次 OOM。
+RECYCLE_EVERY = 6
+
 
 def _update_job(db, job_id: str, **fields):
     try:
@@ -101,6 +104,17 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                 _update_job(db, job_id, status="cancelled",
                             log=f"已取消（完成 {i}/{total}）")
                 return
+            # 每 RECYCLE_EVERY 篇回收 driver，釋放 Chrome 記憶體（防長批次 OOM）。
+            #   學到的選擇器已持久化於 Firestore，重建 driver 不會遺失（下次自動載回）。
+            if i > 0 and i % RECYCLE_EVERY == 0:
+                try:
+                    crawler.close()
+                except Exception:
+                    pass
+                crawler = HeadlessCrawler()
+                if use_gemini and gemini_api_key:
+                    crawler.configure_genai(gemini_api_key)
+                _log(f"已回收並重建 driver（第 {i} 篇前），釋放記憶體")
             url = (url or "").strip()
             if not url:
                 results.append({"status": "failed", "url": url, "error": "Empty URL"})
