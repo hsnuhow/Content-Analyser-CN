@@ -1709,6 +1709,77 @@ class HeadlessCrawler:
             self._log(f"[OG] 社群 UA 抓取失敗：{e}")
             return {"title": "", "description": ""}
 
+    # ──────────────────────────────────────────────────────────────────
+    # YouTube：Tier 1（oEmbed/og 取標題+說明）+ Tier 2（Gemini 影片理解取口白）
+    # ──────────────────────────────────────────────────────────────────
+    def _fetch_youtube_oembed(self, url: str) -> Dict[str, str]:
+        """YouTube oEmbed：取影片標題與頻道名（免 token）。"""
+        import urllib.request
+        import urllib.parse
+        try:
+            api = ("https://www.youtube.com/oembed?url="
+                   + urllib.parse.quote(url, safe="") + "&format=json")
+            with urllib.request.urlopen(api, timeout=12) as r:
+                d = json.loads(r.read().decode("utf-8", "ignore"))
+            return {"title": d.get("title", ""), "author": d.get("author_name", "")}
+        except Exception as e:
+            self._log(f"[YouTube] oEmbed 失敗：{e}")
+            return {"title": "", "author": ""}
+
+    def _youtube_transcript_via_gemini(self, url: str) -> str:
+        """Tier 2：用 Gemini 影片理解取得影片口白/旁白逐字稿。
+
+        需 ENABLE_YOUTUBE_TRANSCRIPT=1 且有 GENAI key（成本控制，預設關閉）。
+        Gemini 2.x 原生支援 YouTube URL：以 file_data(file_uri=YouTube URL) 傳入。
+        """
+        if os.environ.get("ENABLE_YOUTUBE_TRANSCRIPT", "") != "1":
+            return ""
+        if not (HAS_GENAI and self.genai_api_key):
+            return ""
+        try:
+            client = genai.Client(api_key=self.genai_api_key)
+            prompt = ("請將這支影片的口白／旁白完整內容整理成繁體中文純文字逐字稿，"
+                      "包含講者實際說的重點與資訊，不要加任何說明、標題或時間戳。")
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=types.Content(parts=[
+                    types.Part(file_data=types.FileData(file_uri=url)),
+                    types.Part(text=prompt),
+                ]),
+            )
+            text = (getattr(resp, "text", None) or "").strip()
+            self._log(f"[YouTube] Gemini 影片口白 {len(text)} 字")
+            return text
+        except Exception as e:
+            self._log(f"[YouTube] Gemini 影片分析失敗：{e}")
+            return ""
+
+    def _scrape_youtube(self, url: str) -> Dict[str, Any]:
+        """YouTube 影片資料化：標題 + 頻道 + 影片說明（Tier 1）+ 口白（Tier 2 Gemini）。"""
+        self._log(f"[YouTube] 處理影片：{url}")
+        oe = self._fetch_youtube_oembed(url)
+        og = self._fetch_og_meta(url)  # og:description = 影片說明摘要
+        title = (oe.get("title") or og.get("title") or "YouTube 影片").strip()
+        desc = (og.get("description") or "").strip()
+
+        parts = [title]
+        if oe.get("author"):
+            parts.append(f"頻道：{oe['author']}")
+        if desc:
+            parts.append(f"影片說明：\n{desc}")
+
+        transcript = self._youtube_transcript_via_gemini(url)
+        if transcript:
+            parts.append(f"影片口白：\n{transcript}")
+
+        content = self._clean_text("\n\n".join(p for p in parts if p))
+        if len(content) < 20:
+            return {"status": "failed", "url": url,
+                    "error": "YouTube 影片無法取得標題/說明（影片可能私人或不存在）"}
+        return {"status": "success", "url": url, "title": title,
+                "content": content, "length": len(content),
+                "source": "youtube" + ("+transcript" if transcript else "")}
+
     def scrape(self, url: str, hard_timeout_sec: int = 300,
                keep_driver: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
@@ -1723,10 +1794,16 @@ class HeadlessCrawler:
         """
         self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
 
+        url_l = url.lower()
+
+        # ⭐ YouTube 影片：Tier 1 取標題+說明（oEmbed/og，免 token）；
+        #   Tier 2（env ENABLE_YOUTUBE_TRANSCRIPT=1 且有 GENAI key）用 Gemini 影片理解取口白。
+        if any(d in url_l for d in ("youtube.com/watch", "youtu.be/", "youtube.com/shorts", "m.youtube.com/watch")):
+            return self._scrape_youtube(url)
+
         # ⭐ 社群貼文（Threads / Instagram）：用社群爬蟲 UA 抓 og 文案，不啟動 Chrome。
         #   Threads 對 facebookexternalhit 提供 og:description（完整文案）；
         #   Instagram 已封鎖 og（僅 og:type），只能回 skipped 並提示 oEmbed/手動。
-        url_l = url.lower()
         if any(d in url_l for d in ("threads.com", "threads.net", "instagram.com")):
             og = self._fetch_og_meta(url)
             desc = (og.get("description") or "").strip()
