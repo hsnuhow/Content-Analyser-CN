@@ -260,6 +260,33 @@ Phase 0（清理地基）
   → 合併成 `{title, description, transcript/summary}` 當該影片資料。
 **狀態**：研究完成、**未核准開發**。
 
+### 研究項目 5：Tier 3 代理後台開關（2026-06-14 提出）
+**需求**：admin 後台一個滑動開關控制 Tier 3 代理 on/off，不必每次重新部署。
+**現況**：Tier 3 由 crawler 的 env `PROXY_ENABLED` 控制（改它要 `gcloud run update` 重建 revision）。
+**建議架構（Firestore flag）**：
+- Firestore `system/config.tier3_enabled`（bool）為單一真實來源。
+- crawler `load_proxy_config()` 除了 env，再讀此 Firestore flag（crawler 已有 Firebase 連線）；
+  env=0 仍可被 flag 覆寫開啟，反之亦然（決定優先序）。為省成本可加 60s 記憶體快取，不必每次 scrape 都讀。
+- admin 路由 `/admin/settings` + 模板加 toggle，寫入 flag（hmac/CSRF 保護，僅 System Admin）。
+**效益**：不重建即可開關 Tier 3（及未來其他爬蟲旗標如 ENABLE_YOUTUBE_TRANSCRIPT）。
+**狀態**：Tier 3 已先以 env 關閉（2026-06-14）；toggle **未核准開發**。
+
+### 研究項目 6：Cowork 蒐集資料集整合進分析（2026-06-14 提出）
+**需求**：Dcard 等強反爬蟲站改用 Claude Cowork（真實瀏覽器）蒐集，產生的資料要能進分析。
+**現況分析（架構已支援多資料集）**：
+- 分析吃 `contents` 陣列 `[{url,title,text,source_type}]`（`submit_analysis_route` / `analyse_dataset`）。
+- dataset = 已存的 items 集合；`analyse_dataset` 把「單一」dataset 的成功項目轉 contents 送分析。
+- 同專案本來就能有多個 dataset（projects/{pid}/datasets/{did}），各自可一鍵分析。
+- project_detail 已有手動貼 `contents_json` 入口（可直接貼 Cowork 蒐集的 JSON 做一次性分析）。
+**建議整合方式（三選一或併用）**：
+- **A. 手動/上傳建立資料集**：新增 `POST /<pid>/datasets/manual`（貼 JSON 或上傳檔，{url,title,text}）→
+  直接建立 status=completed 的 dataset（不經爬蟲）。Cowork 資料變成一等公民資料集，照常分析。
+- **B. 多資料集合併分析**：讓分析提交可勾選「多個」dataset → 合併 items 成一份 contents → 一次分析。
+  例：CHANEL 分析 = 爬蟲資料集（時尚媒體）+ Cowork 資料集（Dcard）合併。最完整。
+- **C. 直接貼上（已可用）**：把 Cowork 蒐集的 {url,title,text} JSON 貼進現有 contents_json textarea。
+**建議**：先用 C（零開發、立即可用）；正式做 A（手動/上傳資料集）+ B（多資料集合併）。
+**狀態**：研究完成、**未核准開發**。
+
 ---
 
 ## 不在此計畫範圍內（未來版本）
