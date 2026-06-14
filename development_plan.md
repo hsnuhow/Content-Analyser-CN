@@ -233,9 +233,37 @@ Phase 0（清理地基）
 
 ---
 
-## 優化／研究項目（2026-06-14 提出，研究中、尚未核准開發）
+## 優化／研究項目（2026-06-14 提出）
 
-### 研究項目 3：爬蟲研究器（Site Structure Scanner，先掃描再爬取）
+### 待開發功能 7：資料管理 — 刪除/更名 + 孤兒清理（2026-06-14 提出）
+**需求**：資料集與報告可刪除、更名；並清除孤兒資料。
+**範圍**：
+- 刪除資料集 `POST /<pid>/datasets/<did>/delete`（連帶清 crawl_job）；刪除報告 `POST /<pid>/analyses/<aid>/delete`（連帶清 analysis_job）。
+- 更名：資料集 name / 報告 report_title。
+- 孤兒清理（admin 維護）：無 dataset 引用的 crawl_jobs、無 analysis 引用的 analysis_jobs、
+  指向死 job 卻卡 crawling 的 dataset。
+- UI：dataset/analysis 列表加刪除/更名按鈕（CSRF + 權限：Owner/Editor）。
+**狀態**：待開發。
+
+### 待開發功能 8：強制停止爬取／分析（可取消執行階段）（2026-06-14 提出）
+**需求**：使用者可中止進行中的爬取/分析；中止要能**終止執行階段、廢除資料並移除**。
+**難點/設計**：爬取批次（crawl_job.py）與分析（pipeline.py）都是 server 端背景 thread，目前**無取消機制**。
+- 做法：Firestore job 加 `cancel_requested` 旗標；背景 thread 在「每個 URL／每個 Path 階段」之間檢查旗標，
+  命中即中止剩餘工作、把 job/dataset/analysis 標記 cancelled 並刪除其資料。
+- 路由：`POST /<pid>/datasets/<did>/cancel`、`/<pid>/analyses/<aid>/cancel`。
+- 注意：thread 不可硬殺；用協作式取消（檢查點）。Cloud Run 背景 thread 本就可能被 scale-down 殺掉，需穩健。
+**狀態**：待開發（三者中最難，需取消 plumbing）。
+
+### 待開發功能 9：LLM 精緻調配 — 模式/context window/溫度（2026-06-14 提出）
+**需求**：讓用戶精細調 LLM：模式（model 變體）、context window、溫度。
+**範圍**：
+- 擴充 per-project `llm_config`：加 `temperature`、`max_output_tokens`(context)、`thinking`（Gemini 2.5 思考開關，
+  呼應本次 thinking 截斷修正）等。
+- UI：專案設定加溫度 slider、model 下拉、context/thinking 選項。
+- 串接：analysis-pipeline 各 LLM 呼叫吃 llm_config 的這些參數（目前 temperature/max_tokens 寫死在 synthesis/llm_path）。
+**狀態**：待開發。
+
+### 研究項目 3：爬蟲研究器（Site Structure Scanner，先掃描再爬取）— ✅ 已實作（2026-06-14，site_learning.py 持久化學習選擇器 + CMS 指紋）
 **構想**：對不熟悉、無模板的網站，先做一次「結構研究掃描」找出最佳主文選擇器，再正式爬取（並可回寫成新模板）。
 **現況**：crawler 已有 `_ask_gemini_selector()`（置信度低時請 Gemini 建議選擇器）+ `domain_selector_cache`（同網域快取），算是雛形。
 **可發展方向**：
