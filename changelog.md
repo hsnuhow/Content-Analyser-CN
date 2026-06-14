@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-06-14 分析品質強化 + Cowork 整合 + YouTube + Decodo + Tier3 開關（三服務皆部署）
+線上版本：content-crawler 00036 / content-analyser 00013 / analysis-pipeline 00009。
+
+**分析品質（analysis-pipeline）**：
+- **A 延伸關鍵字與內容缺口（新 §7）**：synthesis 新增第 4 次 LLM 呼叫，跳出 dataset 推論
+  「受眾相關但本批未涵蓋」的延伸關鍵字 / 內容缺口（差異化切點）/ 周邊主題。對應產品方法論二。
+- **斷詞三層強化**：jieba 改用繁體 `dict.txt.big`（58 萬詞+詞頻，Dockerfile build 時下載、gitignore）
+  為基底 + 美妝領域詞典（~70 成分/品牌）+ moedict 蒸餾補充（g0v/moedict-data 教育部辭典萃取，
+  精簡為 2-3 字現代詞 10.8 萬，去成語層）。修正「維他命→他命」類切碎。
+- **TF-IDF `ngram_range=(1,2)`**：單詞+雙詞（初生光采、美白精華），對齊 REF 範本。
+- **分群 LLM 描述**：每群加「代表詞彙（群內 TF-IDF Top8）+ LLM 標籤 + 一句話定位」（report §3）。
+
+**Cowork 整合（content-analyser）**：
+- 手動/上傳建資料集（create_manual_dataset）：貼 JSON/上傳檔 → status=completed 資料集，可直接分析。
+- 多資料集合併分析（analyse_combined）：勾選多個 dataset → 合併 contents 一次分析。
+
+**爬蟲（content-crawler）**：
+- **YouTube 影片資料化**：Tier1 oEmbed/og 取標題+說明；Tier2 Gemini 2.5 影片理解取口白逐字稿
+  （env ENABLE_YOUTUBE_TRANSCRIPT）。實測 source=youtube+transcript。
+- **Tier 3 代理 provider-agnostic + 後台開關**：load_proxy_config 讀 Firestore `system/config.tier3_enabled`
+  （admin toggle，60s 快取）覆寫 env。Webshare→Decodo（residential）。
+- 結論：**Decodo 住宅 IP + 無頭 Chrome 仍過不了 Dcard Cloudflare**（指紋偵測，非 IP），
+  正解為 Decodo Site Unblocker/Scraping API 或 Chrome MCP；Tier 3 已關閉。
+
+**CHANEL 資料集重爬**：平行 sync 22 篇（19 成功 5.9 萬字），寫回 Firestore 供分析。
+
+**待辦 B**：另開爬蟲抓 Google 相關搜尋/autocomplete/PAA + Ahrefs/Google Trends，用真實搜尋量驗證 A 的延伸推論。
+
 ## 2026-06-14 adaymag 廣編全頁修正 + Dcard 機制研究（已部署 00032-hgd）
 - **Fix（A Day Magazine 廣編全頁 .fullpage-content）**：Chrome MCP 研究發現 adaymag CHANEL 文章用
   fullPage.js，內文容器 `.fullpage-content`（非標準 `.entry-content`），SSR HTML 即有 1567 字，
