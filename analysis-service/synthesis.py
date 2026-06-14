@@ -121,7 +121,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 語氣精確、有說服力，像是給行銷主管看的一頁式報告開頭。
 直接輸出段落，不要標題。"""
     try:
-        summary = llm.generate(summary_prompt, temperature=0.3, max_tokens=1024)
+        summary = llm.generate(summary_prompt, temperature=0.3, max_tokens=2048)
     except Exception as e:
         print(f"[Synthesis] § 1 摘要生成失敗：{e}", flush=True)
         summary = "（摘要生成失敗，請重新分析）"
@@ -140,7 +140,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 
 直接輸出以上格式，不要前言或後記。"""
     try:
-        search_intent_analysis = llm.generate(intent_prompt, temperature=0.3, max_tokens=2048)
+        search_intent_analysis = llm.generate(intent_prompt, temperature=0.3, max_tokens=3072)
     except Exception as e:
         print(f"[Synthesis] § 4 搜尋情境分析失敗：{e}", flush=True)
         search_intent_analysis = "（搜尋情境分析生成失敗，請重新分析）"
@@ -158,7 +158,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 建議應涵蓋：訴求切角、關鍵字使用、內容格式、標題公式、平台策略等面向。
 直接輸出建議清單，不要前言或後記。"""
     try:
-        recommendations = llm.generate(rec_prompt, temperature=0.3, max_tokens=3072)
+        recommendations = llm.generate(rec_prompt, temperature=0.3, max_tokens=4096)
     except Exception as e:
         print(f"[Synthesis] § 6 建議生成失敗：{e}", flush=True)
         recommendations = "（建議生成失敗，請重新分析）"
@@ -185,7 +185,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 
 註明：本節為基於受眾知識的「推論延伸」，非 dataset 內實際出現，建議再以實際搜尋資料（如 Google 相關搜尋/Trends）驗證。"""
     try:
-        expansion = llm.generate(expansion_prompt, temperature=0.5, max_tokens=2560)
+        expansion = llm.generate(expansion_prompt, temperature=0.5, max_tokens=3072)
     except Exception as e:
         print(f"[Synthesis] § 7 延伸關鍵字生成失敗：{e}", flush=True)
         expansion = "（延伸關鍵字分析生成失敗，請重新分析）"

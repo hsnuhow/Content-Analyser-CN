@@ -60,13 +60,22 @@ class LLMClient:
         client = genai.Client(api_key=self.api_key)
 
         def _generate(model_name):
+            cfg_kwargs = dict(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+            # ⭐ Gemini 2.5 系列預設開啟「thinking」，思考 token 會吃掉 max_output_tokens
+            #   預算，導致實際輸出被嚴重截斷（§摘要/情境/建議只剩百來字）。
+            #   這類結構化生成不需深度思考 → 關閉 thinking（budget=0），全部預算給輸出。
+            if "2.5" in model_name:
+                try:
+                    cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+                except Exception:
+                    pass
             resp = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
+                config=types.GenerateContentConfig(**cfg_kwargs),
             )
             return (resp.text or "").strip()
 
