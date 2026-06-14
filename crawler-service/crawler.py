@@ -1674,6 +1674,33 @@ class HeadlessCrawler:
         self._log("=" * 80)
         return final_content
 
+    def _fetch_og_meta(self, url: str) -> Dict[str, str]:
+        """用社群爬蟲 UA（facebookexternalhit）抓取 og:title / og:description。
+
+        適用 Threads 等對社群 UA 提供 og 文案的站台（連結預覽機制），不需啟動 Chrome。
+        Instagram 已封鎖（僅回 og:type），此函式會回傳空 description。
+        """
+        import urllib.request
+        import html as _html
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+                "Accept-Language": ZH_ACCEPT_LANGUAGE,
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read().decode("utf-8", "ignore")
+
+            def _og(prop: str) -> str:
+                m = re.search(rf'<meta property="{re.escape(prop)}" content="([^"]*)"', raw)
+                if not m:
+                    m = re.search(rf'<meta content="([^"]*)" property="{re.escape(prop)}"', raw)
+                return _html.unescape(m.group(1)) if m else ""
+
+            return {"title": _og("og:title"), "description": _og("og:description")}
+        except Exception as e:
+            self._log(f"[OG] 社群 UA 抓取失敗：{e}")
+            return {"title": "", "description": ""}
+
     def scrape(self, url: str, hard_timeout_sec: int = 300,
                keep_driver: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
@@ -1688,14 +1715,24 @@ class HeadlessCrawler:
         """
         self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
 
-        # ⭐️ [Phase 1] Dcard 直接跳過（需要登入，改用 Chrome MCP 手動蒐集）
-        if "dcard.tw" in url.lower():
-            self._log("[Crawler] Dcard URL detected - skipping (requires login).")
-            return {
-                "status": "skipped",
-                "url": url,
-                "error": "Skipped: Dcard 需要登入，請改用 Claude Cowork Chrome MCP 手動蒐集。"
-            }
+        # ⭐ 社群貼文（Threads / Instagram）：用社群爬蟲 UA 抓 og 文案，不啟動 Chrome。
+        #   Threads 對 facebookexternalhit 提供 og:description（完整文案）；
+        #   Instagram 已封鎖 og（僅 og:type），只能回 skipped 並提示 oEmbed/手動。
+        url_l = url.lower()
+        if any(d in url_l for d in ("threads.com", "threads.net", "instagram.com")):
+            og = self._fetch_og_meta(url)
+            desc = (og.get("description") or "").strip()
+            if len(desc) >= 20:
+                title = (og.get("title") or "").strip() or url
+                content = self._clean_text(f"{title}\n\n{desc}")
+                self._log(f"[Social] 由 og:description 取得貼文文案（{len(content)} 字）")
+                return {"status": "success", "url": url, "title": title,
+                        "content": content, "length": len(content), "source": "og_social"}
+            if "instagram.com" in url_l:
+                self._log("[Social] Instagram 無 og 文案（Meta 已封鎖）")
+                return {"status": "skipped", "url": url,
+                        "error": "Instagram 公開貼文已封鎖 og 抓取，需 oEmbed API（Meta token）或登入瀏覽器手動蒐集。"}
+            # threads 但無 og：往下走一般流程
 
         if self.driver is None:
             self._init_driver()
