@@ -100,6 +100,8 @@ def run_analysis(job_id: str, report_title: str,
                 api_key=llm_config.get("api_key", ""),
                 temperature=llm_config.get("temperature", 0.3),
                 thinking=llm_config.get("thinking", False),
+                max_tokens=llm_config.get("max_output_tokens") or 8192,
+                top_p=llm_config.get("top_p"),
             )
         except ValueError as e:
             _update_job(db, job_id, status="failed", log=f"LLM 設定錯誤：{e}")
@@ -171,6 +173,7 @@ def run_analysis(job_id: str, report_title: str,
                     contents=contents,
                     llm=llm,
                     log_fn=lambda m: _update_job(db, job_id, log=m),
+                    input_scale=llm_config.get("input_scale", "standard"),
                 )
                 llm_results.update(result)
                 n_intents = sum(len(a.get("search_intents", [])) for a in result.get("search_intents", []))

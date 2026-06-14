@@ -232,38 +232,45 @@
     {# 右欄：設定 + 成員 #}
     <div class="col-lg-4">
 
-      {# LLM 設定（Owner） #}
+      {# LLM 設定（Owner）：簡易 / 進階雙模式 #}
       {% if role == 'owner' %}
       <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">LLM 設定</div>
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span>LLM 設定</span>
+          <button type="button" class="btn btn-sm btn-outline-secondary py-0"
+                  data-bs-toggle="collapse" data-bs-target="#advMode">進階模式</button>
+        </div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('project_bp.update_settings', pid=pid) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
             <div class="mb-2">
               <label class="form-label small fw-semibold">提供商</label>
-              <select name="llm_provider" class="form-select form-select-sm">
+              <select name="llm_provider" id="providerSel" class="form-select form-select-sm">
                 <option value="gemini" {% if project.llm_config.provider == 'gemini' %}selected{% endif %}>Gemini</option>
                 <option value="claude" {% if project.llm_config.provider == 'claude' %}selected{% endif %}>Claude</option>
+                <option value="openai" {% if project.llm_config.provider == 'openai' %}selected{% endif %}>ChatGPT (OpenAI)</option>
               </select>
             </div>
+
             <div class="mb-2">
-              <label class="form-label small fw-semibold">模型</label>
-              <input type="text" name="llm_model" class="form-control form-control-sm"
-                     value="{{ project.llm_config.model }}"
-                     placeholder="gemini-2.5-flash">
+              <label class="form-label small fw-semibold d-flex justify-content-between">
+                <span>模型</span>
+                <button type="button" id="refreshModels" class="btn btn-link btn-sm p-0" style="font-size:.78rem">🔄 取得最新模型</button>
+              </label>
+              <select id="modelSel" class="form-select form-select-sm mb-1"></select>
+              <input type="text" id="modelCustom" class="form-control form-control-sm d-none" placeholder="自填模型名稱">
+              <input type="hidden" name="llm_model" id="modelHidden" value="{{ project.llm_config.model }}">
+              <div class="form-text" id="modelMsg"></div>
             </div>
+
             <div class="mb-3">
               <label class="form-label small fw-semibold">API Key</label>
               <input type="password" name="llm_api_key" class="form-control form-control-sm"
                      placeholder="{% if project.llm_config.api_key %}（已設定，留空則不變）{% else %}請填入 API Key{% endif %}">
-              <div class="form-text">
-                {% if project.llm_config.api_key %}
-                  ✅ 已設定
-                {% else %}
-                  ⚠️ 尚未設定
-                {% endif %}
-              </div>
+              <div class="form-text">{% if project.llm_config.api_key %}✅ 已設定{% else %}⚠️ 尚未設定{% endif %}</div>
             </div>
+
             <div class="mb-2">
               <label class="form-label small fw-semibold d-flex justify-content-between">
                 <span>溫度（創意度）</span>
@@ -274,26 +281,92 @@
                      oninput="document.getElementById('tempVal').textContent=this.value">
               <div class="form-text">低=精準保守、高=發散有創意（建議分析用 0.2–0.5）</div>
             </div>
-            <div class="mb-3 form-check">
-              <input type="checkbox" name="thinking" class="form-check-input" id="thinkingChk"
-                     {% if project.llm_config.thinking %}checked{% endif %}>
-              <label class="form-check-label small" for="thinkingChk">
-                啟用 Gemini 2.5 思考模式
-                <span class="text-muted d-block">推理更深，但較長章節可能被截斷（預設關閉以確保報告完整）</span>
-              </label>
+
+            {# 進階模式 #}
+            <div class="collapse" id="advMode">
+              <hr>
+              <div class="mb-2">
+                <label class="form-label small fw-semibold">輸出長度上限（max output tokens）</label>
+                <input type="number" name="max_output_tokens" class="form-control form-control-sm"
+                       min="256" max="32768" step="256"
+                       value="{{ project.llm_config.max_output_tokens|default(8192) }}">
+                <div class="form-text">每段最多產出 token 數（預設 8192，調大可避免長章節截斷）。</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small fw-semibold">輸入內容量</label>
+                <select name="input_scale" class="form-select form-select-sm">
+                  <option value="standard" {% if (project.llm_config.input_scale|default('standard')) == 'standard' %}selected{% endif %}>標準（每篇~2500字／30篇）</option>
+                  <option value="large" {% if project.llm_config.input_scale == 'large' %}selected{% endif %}>加大（每篇~5000字／60篇）</option>
+                  <option value="max" {% if project.llm_config.input_scale == 'max' %}selected{% endif %}>最大（每篇~12000字／100篇，適合大 context 模型）</option>
+                </select>
+                <div class="form-text">餵進 LLM 的原文量；大 context window 模型可選加大／最大。</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small fw-semibold">top_p（留空用預設）</label>
+                <input type="number" name="top_p" class="form-control form-control-sm" min="0" max="1" step="0.05"
+                       value="{% if project.llm_config.top_p is not none %}{{ project.llm_config.top_p }}{% endif %}"
+                       placeholder="例如 0.95">
+              </div>
+              <div class="mb-2 form-check">
+                <input type="checkbox" name="thinking" class="form-check-input" id="thinkingChk"
+                       {% if project.llm_config.thinking %}checked{% endif %}>
+                <label class="form-check-label small" for="thinkingChk">啟用 Gemini 2.5 思考模式
+                  <span class="text-muted d-block">推理更深，較長章節可能被截斷（預設關）</span></label>
+              </div>
+              <div class="mb-2 form-check">
+                <input type="checkbox" name="search_extent" class="form-check-input" id="searchExtentChk"
+                       {% if project.llm_config.get('search_extent', True) %}checked{% endif %}>
+                <label class="form-check-label small" for="searchExtentChk">啟用搜尋延伸接地（search-extent）
+                  <span class="text-muted d-block">§7 改用 Google 真實搜尋量佐證（預設開）</span></label>
+              </div>
             </div>
-            <div class="mb-3 form-check">
-              <input type="checkbox" name="search_extent" class="form-check-input" id="searchExtentChk"
-                     {% if project.llm_config.get('search_extent', True) %}checked{% endif %}>
-              <label class="form-check-label small" for="searchExtentChk">
-                啟用搜尋延伸接地（search-extent）
-                <span class="text-muted d-block">§7 延伸關鍵字改用 Google 真實搜尋量佐證；服務未部署時自動略過（預設開啟）</span>
-              </label>
-            </div>
-            <button type="submit" class="btn btn-sm btn-primary w-100">儲存設定</button>
+
+            <button type="submit" class="btn btn-sm btn-primary w-100 mt-2">儲存設定</button>
           </form>
         </div>
       </div>
+      <script>
+      (function(){
+        const CURATED = {
+          gemini: ["gemini-2.5-pro","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"],
+          claude: ["claude-sonnet-4-5","claude-opus-4-1","claude-3-5-haiku-latest"],
+          openai: ["gpt-4o","gpt-4o-mini","gpt-4.1","o4-mini","o3"]
+        };
+        const CUSTOM = "__custom__";
+        const providerSel = document.getElementById('providerSel');
+        const modelSel = document.getElementById('modelSel');
+        const modelCustom = document.getElementById('modelCustom');
+        const modelHidden = document.getElementById('modelHidden');
+        const modelMsg = document.getElementById('modelMsg');
+
+        function toggleCustom(show){ modelCustom.classList.toggle('d-none', !show); }
+        function syncHidden(){ modelHidden.value = (modelSel.value===CUSTOM) ? modelCustom.value.trim() : modelSel.value; }
+        function populate(list, selected){
+          modelSel.innerHTML = "";
+          (list||[]).forEach(function(m){
+            const o=document.createElement('option'); o.value=m; o.textContent=m; modelSel.appendChild(o);
+          });
+          const oc=document.createElement('option'); oc.value=CUSTOM; oc.textContent="其他（自填）"; modelSel.appendChild(oc);
+          if (selected && (list||[]).indexOf(selected)>=0){ modelSel.value=selected; toggleCustom(false); }
+          else if (selected){ modelSel.value=CUSTOM; modelCustom.value=selected; toggleCustom(true); }
+          else { modelSel.value=(list&&list[0])||CUSTOM; toggleCustom(modelSel.value===CUSTOM); }
+          syncHidden();
+        }
+        modelSel.addEventListener('change', function(){ toggleCustom(modelSel.value===CUSTOM); syncHidden(); });
+        modelCustom.addEventListener('input', syncHidden);
+        providerSel.addEventListener('change', function(){ populate(CURATED[providerSel.value], ''); modelMsg.textContent=''; });
+        populate(CURATED[providerSel.value], modelHidden.value);
+
+        document.getElementById('refreshModels').addEventListener('click', function(){
+          modelMsg.textContent='取得中…';
+          fetch("{{ url_for('project_bp.list_models', pid=pid) }}?provider="+encodeURIComponent(providerSel.value))
+            .then(r=>r.json()).then(d=>{
+              if (d.models && d.models.length){ populate(d.models, modelHidden.value); modelMsg.textContent='已更新為最新模型清單'; }
+              else { modelMsg.textContent = d.error || '無法取得'; }
+            }).catch(()=>{ modelMsg.textContent='取得失敗'; });
+        });
+      })();
+      </script>
       {% endif %}
 
       {# 成員管理（Owner） #}

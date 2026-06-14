@@ -122,18 +122,32 @@ def analyse():
     thinking = bool(data.get("thinking", False))
     search_extent = bool(data.get("search_extent", True))  # 預設開（可關）
 
+    # 進階參數：輸出長度上限(A)、top_p、輸入內容量(B)
+    try:
+        max_output_tokens = int(data.get("max_output_tokens") or 8192)
+        max_output_tokens = max(256, min(32768, max_output_tokens))
+    except (TypeError, ValueError):
+        max_output_tokens = 8192
+    top_p = data.get("top_p")
+    if top_p is not None:
+        try:
+            top_p = max(0.0, min(1.0, float(top_p)))
+        except (TypeError, ValueError):
+            top_p = None
+    input_scale = str(data.get("input_scale", "standard")).strip().lower()
+    if input_scale not in ("standard", "large", "max"):
+        input_scale = "standard"
+
     if not llm_api_key:
         return jsonify({"status": "failed",
                         "error": "缺少 llm_api_key。請在 Project 設定中配置 LLM API Key。"}), 400
 
-    if llm_provider not in ("gemini", "claude"):
+    if llm_provider not in ("gemini", "claude", "openai"):
         return jsonify({"status": "failed",
-                        "error": f"不支援的 llm_provider：'{llm_provider}'。請使用 'gemini' 或 'claude'。"}), 400
+                        "error": f"不支援的 llm_provider：'{llm_provider}'。請使用 'gemini'、'claude' 或 'openai'。"}), 400
 
-    _VALID_MODEL_PREFIXES = ("gemini-", "claude-")
-    if not any(llm_model.startswith(p) for p in _VALID_MODEL_PREFIXES):
-        return jsonify({"status": "failed",
-                        "error": f"不合法的 llm_model：'{llm_model}'。模型名稱須以 'gemini-' 或 'claude-' 開頭。"}), 400
+    if not llm_model:
+        return jsonify({"status": "failed", "error": "缺少 llm_model。"}), 400
 
     # ── 建立 Firestore job 文件 ──
     job_id = str(uuid.uuid4())
@@ -161,6 +175,9 @@ def analyse():
         "temperature": temperature,
         "thinking": thinking,
         "search_extent": search_extent,
+        "max_output_tokens": max_output_tokens,
+        "top_p": top_p,
+        "input_scale": input_scale,
     }
     t = threading.Thread(
         target=run_analysis,

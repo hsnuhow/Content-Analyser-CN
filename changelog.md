@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-14 LLM 設定介面改版：三家提供商 + 模型下拉 + 進階參數（待部署）
+分析模型選擇介面強化（簡易/進階雙模式）。
+
+- **三家提供商**：Gemini / Claude / **ChatGPT(OpenAI)**。`llm_client.py` 加 OpenAI 分支
+  （chat.completions，o 系列自動改用 max_completion_tokens 重試）；requirements 加 `openai`。
+- **模型下拉**：內建精選清單（依提供商切換）+「其他（自填）」逃生口 + 🔄「取得最新模型」按鈕
+  （新端點 `GET /<pid>/models?provider=`，用專案 key REST 抓各家 list-models）。
+- **進階參數（A+B）**：簡易模式只露 提供商/模型/Key/溫度；進階模式露：
+  - (A) **輸出長度上限** max_output_tokens（256–32768，預設 8192；LLMClient 可設、synthesis 各段用此上限）。
+  - (B) **輸入內容量** input_scale（標準/加大/最大；放寬 llm_path 每篇字數與篇數，利用大 context window）。
+  - top_p、Gemini thinking、search-extent 開關（搬進進階）。
+- 串接：project 設定 → llm_config → submit_analysis → /api/analyse → pipeline → LLMClient/llm_path。
+- `llm_config` 新增欄位：max_output_tokens / top_p / input_scale。
+
 ## 2026-06-14 專案操作：編輯/更名 + 封存 + 刪除 + 強制刪除（待部署）
 content-analyser 專案層級操作補強（Owner/Admin）。
 

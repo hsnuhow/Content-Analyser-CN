@@ -46,6 +46,8 @@ def submit_analysis(report_title: str, contents: list,
                     llm_provider: str, llm_model: str, llm_api_key: str,
                     temperature: float = 0.3, thinking: bool = False,
                     search_extent: bool = True,
+                    max_output_tokens: int = 8192, top_p=None,
+                    input_scale: str = "standard",
                     timeout: int = DEFAULT_TIMEOUT) -> dict:
     """提交分析任務（非同步）。
 
@@ -65,6 +67,9 @@ def submit_analysis(report_title: str, contents: list,
         "temperature": temperature,
         "thinking": thinking,
         "search_extent": search_extent,
+        "max_output_tokens": max_output_tokens,
+        "top_p": top_p,
+        "input_scale": input_scale,
     }
     try:
         resp = requests.post(

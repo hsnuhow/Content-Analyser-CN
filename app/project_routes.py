@@ -19,6 +19,7 @@ Blueprint：project_bp（prefix /projects）
 """
 import json
 import re
+import requests
 from functools import wraps
 from flask import (Blueprint, render_template, request, jsonify,
                    session, redirect, url_for, flash, send_file, abort)
@@ -234,6 +235,23 @@ def update_settings(pid, project, role):
     # 搜尋延伸（search-extent）開關：表單有 checkbox；勾選才開（預設值由 UI 決定）
     search_extent = bool(request.form.get('search_extent'))
 
+    # 進階參數：輸出長度上限(A)、top_p、輸入內容量(B)
+    try:
+        max_output_tokens = int(request.form.get('max_output_tokens') or 8192)
+        max_output_tokens = max(256, min(32768, max_output_tokens))
+    except (TypeError, ValueError):
+        max_output_tokens = 8192
+    top_p_raw = request.form.get('top_p', '').strip()
+    top_p = None
+    if top_p_raw:
+        try:
+            top_p = max(0.0, min(1.0, float(top_p_raw)))
+        except (TypeError, ValueError):
+            top_p = None
+    input_scale = request.form.get('input_scale', 'standard').strip().lower()
+    if input_scale not in ('standard', 'large', 'max'):
+        input_scale = 'standard'
+
     update = {
         'updated_at': firestore.SERVER_TIMESTAMP,
         'llm_config.provider': llm_provider,
@@ -241,6 +259,9 @@ def update_settings(pid, project, role):
         'llm_config.temperature': temperature,
         'llm_config.thinking': thinking,
         'llm_config.search_extent': search_extent,
+        'llm_config.max_output_tokens': max_output_tokens,
+        'llm_config.top_p': top_p,
+        'llm_config.input_scale': input_scale,
     }
     if llm_api_key:  # 只在有填寫時才更新 key（空白代表不變）
         update['llm_config.api_key'] = llm_api_key
@@ -248,6 +269,65 @@ def update_settings(pid, project, role):
     db.collection('projects').document(pid).update(update)
     flash('LLM 設定已更新。', 'success')
     return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
+def _fetch_provider_models(provider: str, api_key: str) -> list:
+    """用 API key 即時抓取各家可用模型清單（REST，不依賴 SDK）。失敗回傳 []。"""
+    provider = (provider or '').lower().strip()
+    if not api_key:
+        return []
+    try:
+        if provider == 'gemini':
+            r = requests.get(
+                'https://generativelanguage.googleapis.com/v1beta/models',
+                params={'key': api_key}, timeout=10)
+            if r.status_code != 200:
+                return []
+            out = []
+            for m in r.json().get('models', []):
+                methods = m.get('supportedGenerationMethods', [])
+                if 'generateContent' in methods:
+                    out.append(m.get('name', '').replace('models/', ''))
+            return [x for x in out if x]
+        elif provider == 'openai':
+            r = requests.get('https://api.openai.com/v1/models',
+                             headers={'Authorization': f'Bearer {api_key}'}, timeout=10)
+            if r.status_code != 200:
+                return []
+            ids = [d.get('id', '') for d in r.json().get('data', [])]
+            # 只留對話型模型（gpt / o 系列 / chatgpt）
+            return sorted(i for i in ids if i and (i.startswith('gpt') or i.startswith('o') or i.startswith('chatgpt')))
+        elif provider == 'claude':
+            r = requests.get('https://api.anthropic.com/v1/models',
+                             headers={'x-api-key': api_key,
+                                      'anthropic-version': '2023-06-01'}, timeout=10)
+            if r.status_code != 200:
+                return []
+            return [d.get('id', '') for d in r.json().get('data', []) if d.get('id')]
+    except Exception as e:
+        print(f"[models] {provider} 抓取失敗：{e}", flush=True)
+    return []
+
+
+@bp.route('/<pid>/models')
+@project_access_required(min_role='editor')
+def list_models(pid, project, role):
+    """回傳指定提供商的可用模型清單（用專案已儲存的 API key 即時抓取）。
+
+    Query: ?provider=gemini|claude|openai
+    回傳：{"models": [...]} 或 {"models": [], "error": "..."}
+    """
+    provider = request.args.get('provider', '').lower().strip()
+    if provider not in ('gemini', 'claude', 'openai'):
+        return jsonify({'models': [], 'error': '不支援的提供商'}), 400
+    api_key = (project.get('llm_config', {}) or {}).get('api_key', '')
+    if not api_key:
+        return jsonify({'models': [], 'error': '尚未設定 API Key（請先儲存該提供商的 Key）'}), 200
+    models = _fetch_provider_models(provider, api_key)
+    if not models:
+        return jsonify({'models': [],
+                        'error': '無法取得模型清單（API Key 可能非此提供商，或暫時無法連線）'}), 200
+    return jsonify({'models': models}), 200
 
 
 @bp.route('/<pid>/members', methods=['POST'])
@@ -459,6 +539,9 @@ def submit_analysis_route(pid, project, role):
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
         search_extent=llm_config.get('search_extent', True),
+        max_output_tokens=llm_config.get('max_output_tokens', 8192),
+        top_p=llm_config.get('top_p'),
+        input_scale=llm_config.get('input_scale', 'standard'),
     )
 
     if 'error' in result:
@@ -897,6 +980,9 @@ def analyse_dataset(pid, did, project, role):
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
         search_extent=llm_config.get('search_extent', True),
+        max_output_tokens=llm_config.get('max_output_tokens', 8192),
+        top_p=llm_config.get('top_p'),
+        input_scale=llm_config.get('input_scale', 'standard'),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')
@@ -982,6 +1068,9 @@ def analyse_combined(pid, project, role):
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
         search_extent=llm_config.get('search_extent', True),
+        max_output_tokens=llm_config.get('max_output_tokens', 8192),
+        top_p=llm_config.get('top_p'),
+        input_scale=llm_config.get('input_scale', 'standard'),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')

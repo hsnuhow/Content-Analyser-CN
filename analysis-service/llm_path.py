@@ -32,21 +32,33 @@ def _parse_llm_json(raw: str) -> str:
     if match:
         return match.group(0)
     return raw
-MAX_TEXT_FOR_INTENT = 2000   # 逐篇意圖萃取時，每篇最多取前 N 字
-MAX_TEXT_FOR_QUAL = 2500     # 跨篇質化分析時，每篇最多取前 N 字
-MAX_ARTICLES_FOR_QUAL = 30   # 質化分析最多取前 N 篇（避免超出 context window）
+MAX_TEXT_FOR_INTENT = 2000   # 逐篇意圖萃取時，每篇最多取前 N 字（標準）
+MAX_TEXT_FOR_QUAL = 2500     # 跨篇質化分析時，每篇最多取前 N 字（標準）
+MAX_ARTICLES_FOR_QUAL = 30   # 質化分析最多取前 N 篇（標準）
+
+# 輸入內容量分級（B）：放寬截斷字數與篇數，讓大 context window 模型吃更多原文。
+INPUT_SCALE_PRESETS = {
+    "standard": {"intent_chars": 2000, "qual_chars": 2500,  "max_articles": 30},
+    "large":    {"intent_chars": 4000, "qual_chars": 5000,  "max_articles": 60},
+    "max":      {"intent_chars": 8000, "qual_chars": 12000, "max_articles": 100},
+}
+
+
+def _resolve_limits(input_scale: str) -> dict:
+    return INPUT_SCALE_PRESETS.get((input_scale or "standard"), INPUT_SCALE_PRESETS["standard"])
 
 
 # ──────────────────────────────────────────────────────────────────────
 # 2a：逐篇搜尋意圖萃取
 # ──────────────────────────────────────────────────────────────────────
 
-def _extract_intent_batch(batch: List[Dict], llm: LLMClient) -> List[Dict]:
+def _extract_intent_batch(batch: List[Dict], llm: LLMClient,
+                          intent_chars: int = MAX_TEXT_FOR_INTENT) -> List[Dict]:
     """對一批文章呼叫 LLM，萃取每篇的搜尋意圖。回傳 list of article dicts。"""
     articles_block = ""
     for i, c in enumerate(batch, 1):
         title = c.get("title", "無標題")
-        text = (c.get("text") or c.get("content") or "")[:MAX_TEXT_FOR_INTENT]
+        text = (c.get("text") or c.get("content") or "")[:intent_chars]
         src = c.get("source_type", "未知來源")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n內容：{text}\n"
 
@@ -84,7 +96,8 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient) -> List[Dict]:
 
 
 def run_search_intent(contents: List[Dict], llm: LLMClient,
-                      log_fn: Optional[Callable] = None) -> List[Dict]:
+                      log_fn: Optional[Callable] = None,
+                      intent_chars: int = MAX_TEXT_FOR_INTENT) -> List[Dict]:
     """逐批萃取每篇文章的搜尋意圖。
 
     回傳：[{url, title, search_intents: [{scenario, keywords, label}]}]
@@ -100,7 +113,7 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
             except Exception:
                 pass
 
-        batch_results = _extract_intent_batch(batch, llm)
+        batch_results = _extract_intent_batch(batch, llm, intent_chars=intent_chars)
 
         for j in range(len(batch)):
             article_result = batch_results[j] if j < len(batch_results) else {}
@@ -118,17 +131,19 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
 # 2b：跨文章六面向質化分析
 # ──────────────────────────────────────────────────────────────────────
 
-def run_qualitative_analysis(contents: List[Dict], llm: LLMClient) -> str:
-    """跨文章六面向質化分析（最多取前 MAX_ARTICLES_FOR_QUAL 篇）。
+def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
+                             qual_chars: int = MAX_TEXT_FOR_QUAL,
+                             max_articles: int = MAX_ARTICLES_FOR_QUAL) -> str:
+    """跨文章六面向質化分析（最多取前 max_articles 篇）。
 
     回傳：Markdown 格式的分析文字（六個 ### 段落）
     """
-    analysis_set = contents[:MAX_ARTICLES_FOR_QUAL]
+    analysis_set = contents[:max_articles]
 
     articles_block = ""
     for i, c in enumerate(analysis_set, 1):
         title = c.get("title", "無標題")
-        text = (c.get("text") or c.get("content") or "")[:MAX_TEXT_FOR_QUAL]
+        text = (c.get("text") or c.get("content") or "")[:qual_chars]
         src = c.get("source_type", "未知")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n{text}\n"
 
@@ -170,8 +185,13 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def run(contents: List[Dict], llm: LLMClient,
-        log_fn: Optional[Callable] = None) -> Dict[str, Any]:
-    """Path 2 主函式：搜尋意圖萃取 + 六面向質化分析。"""
+        log_fn: Optional[Callable] = None,
+        input_scale: str = "standard") -> Dict[str, Any]:
+    """Path 2 主函式：搜尋意圖萃取 + 六面向質化分析。
+
+    input_scale（B 輸入內容量）：standard / large / max，放寬每篇字數與篇數上限。
+    """
+    limits = _resolve_limits(input_scale)
 
     def _log(msg: str):
         print(msg, flush=True)
@@ -181,13 +201,16 @@ def run(contents: List[Dict], llm: LLMClient,
             except Exception:
                 pass
 
-    _log(f"[Path 2a] 開始逐篇搜尋意圖萃取（{len(contents)} 篇）...")
-    search_intents = run_search_intent(contents, llm, log_fn=log_fn)
+    _log(f"[Path 2a] 開始逐篇搜尋意圖萃取（{len(contents)} 篇，輸入量={input_scale}）...")
+    search_intents = run_search_intent(contents, llm, log_fn=log_fn,
+                                       intent_chars=limits["intent_chars"])
     total_intents = sum(len(a["search_intents"]) for a in search_intents)
     _log(f"[Path 2a] 完成，共萃取 {total_intents} 個搜尋情境")
 
-    _log(f"[Path 2b] 開始跨文章六面向質化分析（取前 {min(len(contents), MAX_ARTICLES_FOR_QUAL)} 篇）...")
-    qualitative = run_qualitative_analysis(contents, llm)
+    _log(f"[Path 2b] 開始跨文章六面向質化分析（取前 {min(len(contents), limits['max_articles'])} 篇）...")
+    qualitative = run_qualitative_analysis(contents, llm,
+                                           qual_chars=limits["qual_chars"],
+                                           max_articles=limits["max_articles"])
     _log(f"[Path 2b] 完成（{len(qualitative)} 字）")
 
     return {
