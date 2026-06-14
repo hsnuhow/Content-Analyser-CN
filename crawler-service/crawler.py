@@ -1736,10 +1736,14 @@ class HeadlessCrawler:
             if self._is_listing_page(initial_soup):
                 # ⭐ 否決誤判：現代媒體（Vogue/GQ 等）的單篇文章頁 JS 渲染後會載入多張
                 #   關聯文章 <article> 卡片，觸發「多個 article = 列表頁」誤判。
-                #   若頁面有 JSON-LD NewsArticle articleBody（≥200 字），代表是單篇文章，不跳過。
+                #   單篇文章的可靠信號：(a) JSON-LD NewsArticle articleBody ≥200 字，或
+                #   (b) og:type=article（內文在 RSC、JSON-LD 為空時的後備信號）。
                 jld_check = self._extract_from_json_ld(initial_source)
-                if len(jld_check) >= 200:
-                    self._log(f"[Execution Strategy] 列表頁判斷被 JSON-LD 文章內容（{len(jld_check)} 字）否決，視為單篇文章。")
+                is_article_og = ('og:type" content="article' in initial_source
+                                 or "og:type' content='article" in initial_source)
+                if len(jld_check) >= 200 or is_article_og:
+                    reason = f"JSON-LD {len(jld_check)} 字" if len(jld_check) >= 200 else "og:type=article"
+                    self._log(f"[Execution Strategy] 列表頁判斷被「{reason}」否決，視為單篇文章。")
                 else:
                     self._log("[Execution Strategy] Detected a listing page. Skipping.")
                     return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
