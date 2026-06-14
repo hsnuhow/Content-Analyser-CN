@@ -1711,6 +1711,14 @@ class HeadlessCrawler:
             dom_snapshot_source = self.driver.page_source
             self._log(f"[Snapshot] DOMContentLoaded 後立即取得初始 DOM 快照（{len(dom_snapshot_source)} chars）")
 
+            # ⭐ 早期偵測 Chrome 連線錯誤頁（<body class="neterror">）：站台連不上時
+            #   快速判失敗，避免在錯誤頁上白跑滾動/Gemini 直到逾時，並讓 Tier 3 提早接手。
+            if 'class="neterror"' in dom_snapshot_source or 'id="main-frame-error"' in dom_snapshot_source:
+                self._log("[Crawler] 偵測到 Chrome 連線錯誤頁（neterror），快速判失敗")
+                return {"status": "failed", "url": url,
+                        "error": "瀏覽器錯誤頁（站台無法連線，可能 HTTP-only 或被封鎖）",
+                        "browser_error": True}
+
             self._wait_for_content_load()
 
             if time.time() > deadline:
@@ -1802,6 +1810,12 @@ class HeadlessCrawler:
                             partial_content = block
                     if len(partial_content or "") >= 200:
                         title = self.driver.title or "No Title"
+                        # 逾時的部分內容也可能是瀏覽器錯誤頁（站台連不上），同樣判失敗讓 Tier 3 接手
+                        if self._looks_like_browser_error_page(partial_content, title):
+                            self._log(f"[Crawler] 逾時部分內容為瀏覽器錯誤頁，判定失敗：{title}")
+                            return {"status": "failed", "url": url,
+                                    "error": "瀏覽器錯誤頁（站台無法連線，可能 HTTP-only 或被封鎖）",
+                                    "browser_error": True}
                         partial_content = self._trim_trailing_boilerplate(partial_content)
                         self._log(f"[Crawler] 時限超過但保留 {len(partial_content)} 字部分內容")
                         return {
