@@ -1040,9 +1040,10 @@ class HeadlessCrawler:
             acc += len(ls)
         return "\n".join(kept).strip()
 
-    # 瀏覽器（Chrome）連線錯誤頁的特徵字串。命中代表站台無法連線（非真正內容），
-    # 應視為失敗，讓分層 fallback（Tier 3 代理）有機會接手。
+    # 瀏覽器錯誤頁 / 反爬蟲挑戰頁（Cloudflare 等）的特徵字串。命中代表抓到的不是真正內容
+    # （站台連不上，或被反爬蟲攔下顯示驗證頁），應視為失敗，讓分層 fallback（Tier 3 代理）接手。
     _BROWSER_ERROR_MARKERS = (
+        # Chrome 連線錯誤頁
         "This site can’t be reached", "This site can't be reached",
         "refused to connect", "took too long to respond",
         "ERR_CONNECTION", "ERR_NAME_NOT_RESOLVED", "ERR_TIMED_OUT",
@@ -1050,6 +1051,11 @@ class HeadlessCrawler:
         "DNS_PROBE_FINISHED", "ERR_SSL", "ERR_CERT", "ERR_EMPTY_RESPONSE",
         "無法連上這個網站", "拒絕連線", "回應時間過長", "找不到該網頁的位址",
         "no proxy", "Checking the proxy",
+        # Cloudflare / 反爬蟲挑戰頁（Dcard 等）
+        "需要確認您的連線是安全的", "Enable JavaScript and cookies to continue",
+        "Checking your connection", "Verifying you are human",
+        "Just a moment", "DDoS protection by Cloudflare", "cf-browser-verification",
+        "請稍候，並依據指示", "Verify you are human", "Performance & security by Cloudflare",
     )
 
     def _looks_like_browser_error_page(self, content: str, title: str = "") -> bool:
