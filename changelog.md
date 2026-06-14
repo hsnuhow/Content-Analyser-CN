@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-14 新增：網址清單容錯解析（修正貼入被編碼黏成一坨，待部署）
+資料集網址清單貼入時，若換行被編碼（%0A%0A）會被當成單一超長網址（job 1/1）。
+- `parse_url_list()`：還原 %0A/%0D/%20、用空白/換行切、lookahead 拆開黏在一起的連續 http(s)://、去重保序、只留 http(s)。
+- `create_dataset` 改用此解析（取代 splitlines）。涵蓋真換行/編碼換行/空白分隔/完全黏住。
+
 ## 2026-06-14 修正：爬蟲 OOM — 模板判別優先 + 批次回收 driver（待部署 crawler）
 香港/時尚 listicle 批次爬到一半 Worker SIGKILL（OOM）→ 整批中斷。診斷：批次重用單一 driver，
 Chrome 記憶體隨頁數累積；HK 站（hk.news.yahoo/popbee 無模板）深滾整頁加速膨脹。

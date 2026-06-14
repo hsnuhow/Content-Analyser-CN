@@ -41,6 +41,27 @@ def current_user_email() -> str:
     return session.get('user', {}).get('email', '')
 
 
+def parse_url_list(raw: str) -> list:
+    """容錯解析網址清單，回傳去重保序的 http(s) 網址。
+
+    處理：真換行、被 URL 編碼的換行/空白（%0A/%0D/%20）、空白分隔、
+    以及多個網址黏成一坨（用 lookahead 在每個 http(s):// 前切開）。
+    """
+    if not raw:
+        return []
+    raw = (raw.replace('%0D', '\n').replace('%0d', '\n')
+              .replace('%0A', '\n').replace('%0a', '\n')
+              .replace('%20', ' ').replace('%09', ' '))
+    seen, out = set(), []
+    for tok in re.split(r'\s+', raw.strip()):
+        for part in re.split(r'(?=https?://)', tok):
+            p = part.strip().strip('<>"\'，。、')
+            if p.startswith(('http://', 'https://')) and p not in seen:
+                seen.add(p)
+                out.append(p)
+    return out
+
+
 def is_admin() -> bool:
     admin = get_admin_email()
     return bool(admin and current_user_email().lower() == admin.lower())
@@ -727,10 +748,9 @@ def delete_analysis(pid, aid, project, role):
 def create_dataset(pid, project, role):
     """提交 URL 清單，建立資料集並啟動 content-crawler 非同步爬取。"""
     name = request.form.get('name', '').strip()
-    urls_raw = request.form.get('urls', '').strip()
     use_gemini = bool(request.form.get('use_gemini'))
 
-    urls = [u.strip() for u in urls_raw.splitlines() if u.strip()]
+    urls = parse_url_list(request.form.get('urls', ''))
     if not name:
         flash('請填寫資料集名稱。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
