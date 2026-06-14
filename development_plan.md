@@ -233,11 +233,40 @@ Phase 0（清理地基）
 
 ---
 
+## 優化／研究項目（2026-06-14 提出，研究中、尚未核准開發）
+
+### 研究項目 3：爬蟲研究器（Site Structure Scanner，先掃描再爬取）
+**構想**：對不熟悉、無模板的網站，先做一次「結構研究掃描」找出最佳主文選擇器，再正式爬取（並可回寫成新模板）。
+**現況**：crawler 已有 `_ask_gemini_selector()`（置信度低時請 Gemini 建議選擇器）+ `domain_selector_cache`（同網域快取），算是雛形。
+**可發展方向**：
+- 獨立「research」模式：給定網域，抓 1–2 篇樣本 → Gemini 分析 DOM 摘要 → 產出建議的 SITE_TEMPLATE（indicators + selectors）→ 人工確認後寫入。
+- 自我修復：某網域連續 N 次落入啟發式（未命中模板），自動觸發研究並回寫候選模板。
+- 結構指紋：判斷 CMS 類型（WordPress / Next.js RSC / Hearst / fullPage.js / JSON-LD-only）後套對應抽取策略。
+**效益**：降低新站台維護成本（目前是人工 curl+分析+加模板，如本次 CHANEL 實測）。
+**風險/成本**：每次研究多耗 Gemini token；回寫模板需人工把關避免污染。
+**狀態**：列入優化，**未核准開發**。
+
+### 研究項目 4：YouTube 影片資料化（Tier 1 說明 + Tier 2 Gemini 口白）
+**問題**：能否用 Tier 1 取得影片說明、用 Tier 2 Gemini 取得影片口白內容，組成該影片的分析資料？
+**研究結論（技術可行）**：
+- **Tier 1（影片說明）**：YouTube 頁面的 og:description / meta 含影片標題與部分說明；完整說明與標題可從頁面或 oEmbed
+  （`youtube.com/oembed?url=...`，免 token）取得。純文字說明可爬。
+- **Tier 2（影片口白/內容）**：**Gemini 2.x 原生支援 YouTube URL 影片理解**——API 以 `fileData`(fileUri=YouTube URL)
+  傳入，模型可分析影片畫面+音訊，產出口白摘要/逐字稿/重點。這正好對應現有 Tier 2 的 `gemini_url_read` 概念，
+  改用 video 輸入即可。
+- **限制**：需公開影片；單次有長度/解析度上限（長片可能要分段或取摘要）；耗 Gemini token（影片比文字貴）；
+  字幕若存在可優先抓字幕（更省）。
+**建議架構**：YouTube URL → (a) oEmbed/og 取標題+說明（便宜）→ (b) 有字幕則抓字幕；無字幕才用 Gemini video 理解口白
+  → 合併成 `{title, description, transcript/summary}` 當該影片資料。
+**狀態**：研究完成、**未核准開發**。
+
+---
+
 ## 不在此計畫範圍內（未來版本）
 
 以下功能確認存在但不在當前計畫中：
 
-- YouTube 分析（Gemini API 直接分析影片）
+- YouTube 分析（Gemini API 直接分析影片）→ 見上方「研究項目 4」已細化
 - 報告 PDF 匯出
 - Email 通知（任務完成時）
 - Admin 查看所有 Project 列表
