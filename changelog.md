@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-14 修正（重大）：爬蟲防卡死機制 — 單頁看門狗 + 連續卡死中止 + 批次總時限
+嚴重 bug：單頁在某步驟「內部」hang（如 voguehk 通用後備遮罩處理），checkpoint 式 300s 硬時限攔不住
+→ 整批永久凍住、持續耗時與費用。完整三層防護（crawl_job.py）：
+
+1. **單頁看門狗**：每篇在獨立 thread 跑（`_scrape_with_watchdog`），超過 `PAGE_WATCHDOG=360s`（內部硬時限 300+緩衝）
+   仍未回 → 判卡死、**砍掉並重建 driver**（解除卡住的 Chrome、abandon hang 中的 thread）、標記 failed、續下一篇。
+2. **連續卡死中止**：連續 `MAX_CONSECUTIVE_HANGS=3` 篇看門狗逾時 → 疑系統性問題，提前中止整批、剩餘標未爬。
+3. **批次總時限**：整批超過 `BATCH_MAX_SECONDS=1800`（30 分）即收尾，剩餘標未爬。
+- 註：同步 /api/scrape 由 Cloud Run request timeout(300s) 界定；非同步批次（背景 thread 無 request timeout）才是漏洞，故守衛置於 crawl_job。
+
 ## 2026-06-14 新增：網址清單容錯解析（修正貼入被編碼黏成一坨，待部署）
 資料集網址清單貼入時，若換行被編碼（%0A%0A）會被當成單一超長網址（job 1/1）。
 - `parse_url_list()`：還原 %0A/%0D/%20、用空白/換行切、lookahead 拆開黏在一起的連續 http(s)://、去重保序、只留 http(s)。
