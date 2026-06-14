@@ -87,11 +87,13 @@ MAIN_CONTENT_SELECTORS = [
 
 SITE_TEMPLATES = {
     # ── A Day Magazine（WordPress + #infinite-article 無限捲動換頁）──
-    # 注意：頁面使用 auto-advance JS，數秒後自動替換 DOM 並改 URL（pushState）
-    # 必須搭配 dom_snapshot_source 才能取到正確文章
+    # 注意：頁面使用 auto-advance JS，數秒後自動替換 DOM 並改 URL（pushState）。
+    #   廣編/全頁格式用 fullPage.js，內文容器為 .fullpage-content（非標準 .entry-content）；
+    #   且 JS 渲染後會清空內容，故需搭配 dom_snapshot_source（DOMContentLoaded 快照，SSR 內容）。
     'adaymag': {
         'indicators': ['adaymag.com'],
         'selectors': [
+            '.fullpage-content',
             '.post-content.entry-content', '.post-content-container',
             'article.blog-post .entry-content', 'article .entry-content',
             '.entry-content', '.post-content', 'article',
@@ -1832,6 +1834,13 @@ class HeadlessCrawler:
                     if len(block_content) > len(content or ''):
                         self._log(f"[Block Payload] 抽到 {len(block_content)} 字（優於 DOM {len(content or '')} 字），採用")
                         content = block_content
+                # 2.5) DOMContentLoaded 初始快照（SSR 內容）：A Day Magazine 等用 fullPage.js /
+                #     auto-advance 的站台，JS 渲染後會清空內容，但初始快照保有 SSR 原文。
+                if len(content or '') < 500 and dom_snapshot_source and dom_snapshot_source != final_source:
+                    snap_content = self._extract_main_text(dom_snapshot_source, url)
+                    if len(snap_content) > len(content or ''):
+                        self._log(f"[Snapshot] 從 DOMContentLoaded 初始快照抽到 {len(snap_content)} 字（優於 {len(content or '')} 字），採用")
+                        content = snap_content
                 # 3) 仍過短才補 meta description（對齊 Colab v3.8）
                 if len(content or '') < 200:
                     content = self._apply_meta_fallback(content or '', final_source)
