@@ -120,14 +120,15 @@ def build_proxy_auth_extension(proxy: Dict[str, str]) -> Optional[str]:
         "minimum_chrome_version": "76.0.0",
     }
 
+    # ⭐ 值一律以 json.dumps 編碼後嵌入 JS，避免帳密含 " / \\ / </script> 等字元破壞腳本。
     background_js = """
 var config = {
     mode: "fixed_servers",
     rules: {
         singleProxy: {
             scheme: "http",
-            host: "%(host)s",
-            port: parseInt("%(port)s")
+            host: %(host)s,
+            port: parseInt(%(port)s)
         },
         bypassList: ["localhost"]
     }
@@ -136,8 +137,8 @@ chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
 function callbackFn(details) {
     return {
         authCredentials: {
-            username: "%(user)s",
-            password: "%(pass)s"
+            username: %(user)s,
+            password: %(pass)s
         }
     };
 }
@@ -147,10 +148,10 @@ chrome.webRequest.onAuthRequired.addListener(
     ["blocking"]
 );
 """ % {
-        "host": proxy["host"],
-        "port": proxy["port"],
-        "user": proxy["user"],
-        "pass": proxy["pass"],
+        "host": json.dumps(str(proxy["host"])),
+        "port": json.dumps(str(proxy["port"])),
+        "user": json.dumps(str(proxy["user"])),
+        "pass": json.dumps(str(proxy["pass"])),
     }
 
     ext_dir = tempfile.mkdtemp(prefix="webshare_proxy_ext_")

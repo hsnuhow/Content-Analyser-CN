@@ -434,6 +434,7 @@ class HeadlessCrawler:
         self.domain_selector_cache = {}
         self.genai_api_key = None
         self.log_callback = log_callback
+        self._proxy_ext_dir = None  # Tier3 代理 auth 擴充臨時目錄（關 driver 時清理）
 
         # ⭐ Tier 3：是否使用 Webshare 代理（預設 False；僅 use_proxy=True
         #    且環境變數有設定憑證時才生效，否則為 None = 不掛代理）。
@@ -497,11 +498,13 @@ class HeadlessCrawler:
         # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
         options.page_load_strategy = "eager"
 
-        # ⭐ Tier 3：掛載 Webshare 代理（僅 self.proxy_config 有值時；預設不執行）
+        # ⭐ Tier 3：掛載代理（僅 self.proxy_config 有值時；預設不執行）。
+        #   保存擴充目錄路徑，driver 關閉時清理（避免 temp 目錄累積）。
         if self.proxy_config:
             try:
                 from tiered_fallback import apply_proxy_to_options
-                apply_proxy_to_options(options, self.proxy_config, log_fn=self._log)
+                self._proxy_ext_dir = apply_proxy_to_options(
+                    options, self.proxy_config, log_fn=self._log)
             except Exception as e:
                 self._log(f"[Tier3] 代理掛載失敗（改用直連）：{e}")
 
@@ -2022,6 +2025,16 @@ class HeadlessCrawler:
             if self.driver and not keep_driver:
                 self._force_close_driver()
 
+    def _cleanup_proxy_ext(self):
+        """清理 Tier3 代理 auth 擴充的臨時目錄（避免累積）。"""
+        if self._proxy_ext_dir:
+            try:
+                import shutil
+                shutil.rmtree(self._proxy_ext_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._proxy_ext_dir = None
+
     def _force_close_driver(self):
         if self.driver:
             try:
@@ -2029,6 +2042,7 @@ class HeadlessCrawler:
             except Exception:
                 pass
             self.driver = None
+        self._cleanup_proxy_ext()
 
     def close(self):
         if self.driver:
@@ -2037,3 +2051,4 @@ class HeadlessCrawler:
             except Exception:
                 pass
             self.driver = None
+        self._cleanup_proxy_ext()

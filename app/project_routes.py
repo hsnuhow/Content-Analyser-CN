@@ -498,11 +498,16 @@ def create_manual_dataset(pid, project, role):
     """
     name = request.form.get('name', '').strip()
     raw = request.form.get('items_json', '').strip()
-    # 上傳檔優先
+    # 上傳檔優先（限大小，避免大檔讀進記憶體 OOM）
     up = request.files.get('file')
     if up and up.filename:
         try:
-            raw = up.read().decode('utf-8', 'ignore').strip()
+            _MAX_UPLOAD = 3 * 1024 * 1024  # 3MB
+            blob = up.read(_MAX_UPLOAD + 1)
+            if len(blob) > _MAX_UPLOAD:
+                flash('上傳檔過大（上限 3MB），請拆分後再匯入。', 'danger')
+                return redirect(url_for('project_bp.project_detail', pid=pid))
+            raw = blob.decode('utf-8', 'ignore').strip()
         except Exception:
             flash('上傳檔讀取失敗，請確認為 UTF-8 JSON。', 'danger')
             return redirect(url_for('project_bp.project_detail', pid=pid))
@@ -545,6 +550,13 @@ def create_manual_dataset(pid, project, role):
         })
     if not items:
         flash('沒有可用項目（每筆需有 text/content）。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    # Firestore 單文件上限 1MB（items 全存在 dataset 文件內）→ 守衛總量，留餘裕。
+    total_chars = sum(it['length'] for it in items)
+    if total_chars > 900_000:
+        flash(f'匯入內容總量過大（約 {total_chars:,} 字，上限約 90 萬字）。'
+              '請拆成多個資料集，或減少每筆內文。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
     succeeded = len(items)
