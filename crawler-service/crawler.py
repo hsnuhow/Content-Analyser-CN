@@ -1780,6 +1780,40 @@ class HeadlessCrawler:
                 "content": content, "length": len(content),
                 "source": "youtube" + ("+transcript" if transcript else "")}
 
+    # Cloudflare 挑戰頁特徵（標題/內文）。命中代表正在「請稍候」驗證，需等待自動通過。
+    _CF_CHALLENGE_MARKERS = (
+        "請稍候", "Just a moment", "Checking your browser", "Checking your connection",
+        "需要確認您的連線是安全的", "Verifying you are human", "Attention Required",
+        "Enable JavaScript and cookies",
+    )
+
+    def _wait_for_cloudflare_clearance(self, max_wait: int = 18) -> bool:
+        """偵測 Cloudflare 挑戰頁，等待 undetected-chromedriver 自動通過。
+
+        挑戰頁（「請稍候」/「Just a moment」）會在 JS 挑戰通過後自動跳轉真內容。
+        residential proxy（Tier 3）+ 真實瀏覽器指紋時最可能通過；datacenter IP 多半過不了。
+        回傳 True = 偵測到挑戰且已通過（內容已變）；False = 無挑戰或未通過。
+        """
+        def _is_challenge() -> bool:
+            try:
+                title = self.driver.title or ""
+                src = (self.driver.page_source or "")[:6000]
+            except Exception:
+                return False
+            return any(m in title or m in src for m in self._CF_CHALLENGE_MARKERS)
+
+        if not _is_challenge():
+            return False
+        self._log("[Cloudflare] 偵測到挑戰頁，等待自動通過（最多 %ds）..." % max_wait)
+        end = time.time() + max_wait
+        while time.time() < end:
+            time.sleep(3)
+            if not _is_challenge():
+                self._log("[Cloudflare] ✓ 挑戰已通過，取得真實內容")
+                return True
+        self._log("[Cloudflare] ⚠️ 挑戰未在時限內通過（可能 IP 被封或需互動驗證）")
+        return False
+
     def scrape(self, url: str, hard_timeout_sec: int = 300,
                keep_driver: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
@@ -1843,6 +1877,11 @@ class HeadlessCrawler:
                         "browser_error": True}
 
             self._wait_for_content_load()
+
+            # ⭐ Cloudflare 挑戰頁（Dcard 等）：給 undetected-chromedriver 時間自動通過 JS 挑戰
+            #   （挑戰頁數秒後自動跳轉真內容）。通過後重取快照。residential proxy（Tier 3）時最有效。
+            if self._wait_for_cloudflare_clearance():
+                dom_snapshot_source = self.driver.page_source
 
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（載入階段後）")
