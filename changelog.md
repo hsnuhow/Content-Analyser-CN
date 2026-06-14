@@ -8,7 +8,15 @@
 - **補強（尾部樣板裁切）**: 新增 `_trim_trailing_boilerplate()`，累積 150 字正文後遇到「支持中央社/下載APP/非經授權/一手掌握/點我訂閱/你可能有興趣/支持鏡週刊」等尾部樣板即截斷。保守設計只裁尾部。Chrome MCP 實測 CNA/LTN：正文正確結束，樣板全裁切。
 - **Feature（分層爬取 Tier 2/3 骨架）**: 新增 `tiered_fallback.py`：Tier 2（Gemini URL 直讀，env `ENABLE_GEMINI_URL_FALLBACK`）、Tier 3（Webshare 住宅 IP 代理 + proxy auth 擴充，env `WEBSHARE_PROXY_ENABLED`+憑證）。`app.py` `_run_scrape` 改為 Tier 1→2→3 協調器。**全部 env 控制、預設關閉**，未設定時行為與單純 Tier 1 完全相同，等使用者填入憑證才啟用。async 批次（crawl_job.py）暫不走 Tier 2/3（保留 driver 重用），列為後續。
 - **文件**: 新增 `crawler-service/CRAWLER_STRATEGY.md`：抽取流程、25+ 站台選擇器對照表、分層策略與 Webshare 成本評估。
-- ✅ **已部署**：content-crawler 部署至 GCP asia-east1（revision content-crawler-00021-xrt 起；第二次部署補入尾部裁切）。
+- **重構（Tier 2/3 共用化）**：`tiered_fallback.py` 抽出 `run_tier23()`，app.py 與 crawl_job.py 共用；
+  async 批次 `/api/crawl/batch` 也接上分層 fallback（Tier 3 用獨立代理 crawler，與重用 driver 分開）。
+- ⚠️ **部署踩雷（重要）**：前 3 次以 `--tag gcr.io/.../content-crawler`（隱含 `:latest`）部署，
+  Cloud Build 吃到 layer 快取，`COPY . .` 沒帶入新 crawler.py → 線上跑舊碼（log 顯示舊 `Matched template: 'news'`，
+  中央社抓到 cookie 橫幅＋相關新聞）。**解法：改用唯一 tag（`specfix-20260614`）強制全新建置**，revision 00024-gvc 才生效。
+- ✅ **已部署並線上驗證**：content-crawler revision **00024-gvc**（asia-east1）。X-API-Key 實測 4 站台：
+  中央社 1000 字 / 鏡週刊 1689 字（JSON-LD）/ 自由時報 1008 字 / 科技新報 1395 字，皆純正文、尾部樣板已裁。
+  log 確認 `Matched template: 'cna' (specificity=1010)` 新碼運行。
+- ✅ **已 push GitHub**（main，含本批全部 commit）。
 
 ## 2026-06-14 Code-review 修正：5 項 bug／安全問題（deploy-20260614-8，三服務）
 - **Fix (crawler dead code)**: `_scroll_and_wait_for_full_load` 的 scrollTo/sleep 移到 return 前，修正 lazy 渲染等待永遠不執行的問題。
