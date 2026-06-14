@@ -136,7 +136,8 @@ SITE_TEMPLATES = {
     # Hearst 新版 CMS 主文容器為 .listicle-body-content / .content-container / [class*=body-content]，
     # 舊版為 .article__body-content（保留為 fallback）。
     'elle_tw': {
-        'indicators': ['elle.com.tw'],
+        # elle.com.tw = 台灣站（HTTP-only）；elle.com/tw = Hearst 國際站台灣版（HTTPS）。兩者同 CMS。
+        'indicators': ['elle.com.tw', 'elle.com/tw'],
         'selectors': [
             '.standard-article-content',
             '.listicle-body-content',
@@ -156,7 +157,7 @@ SITE_TEMPLATES = {
         ]
     },
     'cosmopolitan_tw': {
-        'indicators': ['cosmopolitan.com.tw', 'cosmo.com.tw'],
+        'indicators': ['cosmopolitan.com.tw', 'cosmo.com.tw', 'cosmopolitan.com/tw'],
         'selectors': [
             '.standard-article-content',
             '.listicle-body-content',
@@ -172,7 +173,7 @@ SITE_TEMPLATES = {
         ]
     },
     'harpersbazaar_tw': {
-        'indicators': ['harpersbazaar.com.tw'],
+        'indicators': ['harpersbazaar.com.tw', 'harpersbazaar.com/tw'],
         'selectors': [
             '.standard-article-content',
             '.listicle-body-content',
@@ -1733,8 +1734,15 @@ class HeadlessCrawler:
             initial_source = self.driver.page_source
             initial_soup = BeautifulSoup(initial_source, 'html.parser')
             if self._is_listing_page(initial_soup):
-                self._log("[Execution Strategy] Detected a listing page. Skipping.")
-                return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
+                # ⭐ 否決誤判：現代媒體（Vogue/GQ 等）的單篇文章頁 JS 渲染後會載入多張
+                #   關聯文章 <article> 卡片，觸發「多個 article = 列表頁」誤判。
+                #   若頁面有 JSON-LD NewsArticle articleBody（≥200 字），代表是單篇文章，不跳過。
+                jld_check = self._extract_from_json_ld(initial_source)
+                if len(jld_check) >= 200:
+                    self._log(f"[Execution Strategy] 列表頁判斷被 JSON-LD 文章內容（{len(jld_check)} 字）否決，視為單篇文章。")
+                else:
+                    self._log("[Execution Strategy] Detected a listing page. Skipping.")
+                    return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
 
             self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
             url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
