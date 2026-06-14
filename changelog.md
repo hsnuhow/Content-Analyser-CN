@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-14 Webshare Tier 3 實測 + Hearst CMS 模板修正 + 瀏覽器錯誤頁偵測（已部署 00027-8vs）
+- **Tier 3 實測通過**：用 Webshare 免費 Rotating Proxy Endpoint（`p.webshare.io:80`，10 datacenter IP）實測：
+  curl 驗證 IP 輪換（38.x→84.x）；爬蟲端 log 確認 `[Tier3] Webshare proxy（含驗證）已掛載`、
+  Tier 1 內容過短時自動觸發代理重抓、proxy auth 擴充在 headless Chrome 成功運作。
+  憑證存 gitignored `.env`、Cloud Run env var（測試用，非 Secret Manager）。
+  ⚠️ 免費 datacenter proxy 無法繞過強反爬蟲（需 residential 付費）。
+- **Fix（ELLE/Cosmo/Bazaar 為 HTTP-only）**：DNS 指向 Fastly `nonssl` 端點，**https 連線一律失敗**，必須用 `http://`。
+- **Fix（Hearst 新版 CMS 選擇器）**：Hearst 改版，主文容器從 `.article__body-content` 改為
+  `.listicle-body-content` / `.content-container` / `[class*=body-content]`。elle_tw/cosmopolitan_tw/
+  harpersbazaar_tw 前置新選擇器。實測 ELLE 清單文從 580 字（推薦區）→ **2325 字正文**。
+- **Fix（瀏覽器錯誤頁誤判為成功）**：站台連不上時 Chrome 渲染 neterror 頁，原本被當正文回 `success`。
+  新增 `_looks_like_browser_error_page()`（偵測 "site can't be reached"/"refused to connect"/ERR_*）；
+  套用至正常路徑、逾時部分內容路徑；並在 `_open` 後早期偵測 `<body class="neterror">` 快速判失敗
+  （避免白等逾時、讓 Tier 3 提早接手）。實測 https ELLE 從假 success(567字錯誤頁) → 正確 `failed`。
+- 部署沿用「唯一 tag 強制全新建置」（避開 `:latest` 快取）：00024→00027。
+
 ## 2026-06-14 站台模板擴充 + 模板比對修正 + 尾部裁切 + Tier 2/3 骨架（content-crawler 已部署）
 - **Feature（4 個新站台模板）**: 新增 ltn（自由時報，含 news/ec/m 子域）、cna（中央社）、mirrormedia（鏡週刊）、technews（科技新報）。
 - **Feature（JSON-LD 萃取）**: 新增 `_extract_from_json_ld()`，從 JSON-LD `NewsArticle.articleBody` 萃取主文（MirrorMedia 等 Next.js styled-components 站台的最可靠來源）。Chrome MCP 實測鏡週刊：JSON-LD 1689 字 = 文章正文，且不含尾部雜訊。
