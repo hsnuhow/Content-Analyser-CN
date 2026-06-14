@@ -48,6 +48,16 @@ def _is_cancelled(db, job_id: str) -> bool:
         return False
 
 
+def _write_result(db, job_id: str, idx: int, result: dict) -> None:
+    """單篇結果寫入子集合 crawl_jobs/{job_id}/results/{idx}，避免 job 文件超過 1MB
+    （內嵌全部結果會在約 100 篇內文時撐爆單文件上限）。idx 補零以維持排序。"""
+    try:
+        (db.collection(JOBS_COLLECTION).document(job_id)
+         .collection("results").document(f"{idx:05d}").set(result))
+    except Exception as e:
+        print(f"[CrawlJob] 寫入 result {idx} 失敗: {e}", flush=True)
+
+
 def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                     gemini_api_key: str, db) -> None:
     """背景執行：逐一爬取 urls，結果寫入 crawl_jobs/{job_id}。
@@ -117,10 +127,22 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
 
     try:
         total = len(urls)
-        _update_job(db, job_id, status="running", progress=2,
+        _update_job(db, job_id, status="running", progress=2, total=total,
                     log=f"開始爬取 {total} 個網址...")
 
-        results = []
+        # 結果寫入子集合（不再內嵌於 job 文件）→ 無單文件 1MB 上限，批次數量不受限。
+        counts = {"success": 0, "skipped": 0, "failed": 0}
+        idx = 0
+
+        def _record(result: dict) -> dict:
+            nonlocal idx
+            _write_result(db, job_id, idx, result)
+            st = result.get("status")
+            if st in counts:
+                counts[st] += 1
+            idx += 1
+            return result
+
         start_ts = time.time()
         consecutive_hangs = 0
         aborted = None  # 提前中止原因（連續卡死 / 總時限）
@@ -130,14 +152,14 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             if _is_cancelled(db, job_id):
                 _log("收到取消請求，停止爬取")
                 _update_job(db, job_id, status="cancelled",
-                            log=f"已取消（完成 {i}/{total}）")
+                            log=f"已取消（完成 {idx}/{total}）")
                 return
 
             # 批次總時限 backstop：超過即收尾，剩餘標未爬取。
             if time.time() - start_ts > BATCH_MAX_SECONDS:
                 aborted = f"批次超過 {BATCH_MAX_SECONDS}s 總時限"
                 for u in urls[i:]:
-                    results.append({"status": "failed", "url": u, "error": aborted + "，未爬取"})
+                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取"})
                 break
 
             # 每 RECYCLE_EVERY 篇回收 driver，釋放 Chrome 記憶體（防長批次 OOM）。
@@ -152,10 +174,10 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
 
             url = (url or "").strip()
             if not url:
-                results.append({"status": "failed", "url": url, "error": "Empty URL"})
+                result = _record({"status": "failed", "url": url, "error": "Empty URL"})
                 consecutive_hangs = 0
             elif not (url.startswith("http://") or url.startswith("https://")):
-                results.append({"status": "failed", "url": url, "error": "Invalid URL"})
+                result = _record({"status": "failed", "url": url, "error": "Invalid URL"})
                 consecutive_hangs = 0
             else:
                 _log(f"({i+1}/{total}) {url}")
@@ -171,28 +193,24 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                     consecutive_hangs += 1
                 else:
                     consecutive_hangs = 0
-                results.append(result)
+                _record(result)
 
             prog = 2 + int((i + 1) / total * 95)
-            last = results[-1]
             _update_job(
                 db, job_id,
                 progress=prog,
-                log=f"({i+1}/{total}) {last.get('status')}: {last.get('title') or url}",
-                results=results,
+                log=f"({i+1}/{total}) {result.get('status')}: {result.get('title') or url}",
             )
 
             # 連續卡死中止：疑系統性問題（Chrome 壞 / 代理掛 / 站台全無回應），省費用。
             if consecutive_hangs >= MAX_CONSECUTIVE_HANGS:
                 aborted = f"連續 {consecutive_hangs} 篇看門狗逾時，疑系統性問題"
                 for u in urls[i + 1:]:
-                    results.append({"status": "failed", "url": u, "error": aborted + "，未爬取"})
+                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取"})
                 break
 
-        succeeded = sum(1 for r in results if r.get("status") == "success")
-        skipped = sum(1 for r in results if r.get("status") == "skipped")
-        failed = sum(1 for r in results if r.get("status") == "failed")
-        done_log = f"完成：成功 {succeeded}、略過 {skipped}、失敗 {failed}"
+        done_log = (f"完成：成功 {counts['success']}、略過 {counts['skipped']}、"
+                    f"失敗 {counts['failed']}")
         if aborted:
             done_log = f"提前中止（{aborted}）。{done_log}"
 
@@ -201,10 +219,9 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             status="completed",
             progress=100,
             log=done_log,
-            results=results,
-            succeeded=succeeded,
-            skipped=skipped,
-            failed=failed,
+            succeeded=counts["success"],
+            skipped=counts["skipped"],
+            failed=counts["failed"],
             completed_at=firestore.SERVER_TIMESTAMP,
         )
         _log(f"✅ 批次爬取結束：{done_log}")

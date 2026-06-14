@@ -232,8 +232,8 @@ def crawl_batch():
     urls = data.get("urls") or []
     if not isinstance(urls, list) or not urls:
         return jsonify({"status": "failed", "error": "Missing or empty 'urls' list"}), 400
-    if len(urls) > 100:
-        return jsonify({"status": "failed", "error": "Maximum 100 URLs per crawl job"}), 400
+    if len(urls) > 1000:
+        return jsonify({"status": "failed", "error": "Maximum 1000 URLs per crawl job"}), 400
     # C1: 先過濾掉不安全 URL，回報給呼叫端
     safe_urls, blocked = [], []
     for u in urls:
@@ -288,7 +288,20 @@ def get_crawl_job(job_id):
         return jsonify({"status": "failed", "error": f"Firestore 查詢失敗: {e}"}), 500
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
-    return jsonify(doc.to_dict()), 200
+    data = doc.to_dict()
+    # 結果存於 results 子集合（避免單文件 1MB 上限）；組裝回傳。後備：舊格式內嵌 results。
+    try:
+        sub = (db.collection(JOBS_COLLECTION).document(job_id)
+               .collection("results").order_by("__name__").stream())
+        results = [r.to_dict() for r in sub]
+        if results:
+            data["results"] = results
+        else:
+            data.setdefault("results", [])
+    except Exception as e:
+        print(f"[Crawler] 讀取 results 子集合失敗: {e}", flush=True)
+        data.setdefault("results", [])
+    return jsonify(data), 200
 
 
 @app.route("/api/crawl/<job_id>/cancel", methods=["POST"])
@@ -340,8 +353,13 @@ def cleanup_crawl_jobs():
             if d.get("status") not in ("completed", "failed", "cancelled"):
                 continue
             updated = d.get("updated_at") or d.get("completed_at")
-            # 無時間戳或早於 cutoff → 刪除
+            # 無時間戳或早於 cutoff → 刪除（含 results 子集合）
             if updated is None or updated < cutoff:
+                try:
+                    for r in doc.reference.collection("results").stream():
+                        r.reference.delete()
+                except Exception:
+                    pass
                 doc.reference.delete()
                 deleted += 1
     except Exception as e:

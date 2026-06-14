@@ -32,6 +32,18 @@
       <button type="submit" class="btn btn-sm btn-danger">⏹ 強制停止並刪除</button>
     </form>
     {% else %}
+    <form method="POST" action="{{ url_for('project_bp.recrawl_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('重爬未成功的項目（失敗/未爬），保留已成功項並合併？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="mode" value="failed">
+      <button type="submit" class="btn btn-sm btn-outline-primary">🔄 重爬未完成/失敗項</button>
+    </form>
+    <form method="POST" action="{{ url_for('project_bp.recrawl_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('整份重爬全部項目？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="mode" value="all">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">↻ 重爬全部</button>
+    </form>
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
           onsubmit="return confirm('確定刪除此資料集？此操作不可還原。');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

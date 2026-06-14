@@ -456,6 +456,7 @@ def _cascade_delete_project(pid: str, cancel: bool = False) -> None:
                 cancel_crawl(data['crawl_job_id'])
             except Exception:
                 pass
+        _delete_dataset_items(pid, d.id)  # 連同 items 子集合
         d.reference.delete()
     for a in base.collection('analyses').stream():
         data = a.to_dict() or {}
@@ -757,8 +758,8 @@ def create_dataset(pid, project, role):
     if not urls:
         flash('請至少輸入一個網址。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
-    if len(urls) > 100:
-        flash('每個資料集最多 100 個網址。', 'danger')
+    if len(urls) > 1000:
+        flash('單次最多 1000 個網址（如需更多請分次或用重爬續加）。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
     # 爬蟲 selector 輔助用 Project 的 LLM Key（若為 gemini）
@@ -781,7 +782,6 @@ def create_dataset(pid, project, role):
         'progress': 0,
         'log': '已提交爬取任務...',
         'item_count': len(urls),
-        'items': [],
         'created_by': current_user_email(),
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP,
@@ -827,8 +827,8 @@ def create_manual_dataset(pid, project, role):
         data = json.loads(raw)
         if not isinstance(data, list) or not data:
             raise ValueError('內容必須是非空 JSON 陣列')
-        if len(data) > 100:
-            raise ValueError('每個資料集最多 100 筆')
+        if len(data) > 1000:
+            raise ValueError('每個資料集最多 1000 筆')
     except Exception as e:
         flash(f'JSON 解析失敗：{e}', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
@@ -856,13 +856,7 @@ def create_manual_dataset(pid, project, role):
         flash('沒有可用項目（每筆需有 text/content）。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
-    # Firestore 單文件上限 1MB（items 全存在 dataset 文件內）→ 守衛總量，留餘裕。
-    total_chars = sum(it['length'] for it in items)
-    if total_chars > 900_000:
-        flash(f'匯入內容總量過大（約 {total_chars:,} 字，上限約 90 萬字）。'
-              '請拆成多個資料集，或減少每筆內文。', 'danger')
-        return redirect(url_for('project_bp.project_detail', pid=pid))
-
+    # items 改存子集合（無 1MB 上限），dataset 文件只放 metadata。
     succeeded = len(items)
     ds_ref = db.collection('projects').document(pid).collection('datasets').document()
     ds_ref.set({
@@ -876,15 +870,77 @@ def create_manual_dataset(pid, project, role):
         'item_count': succeeded,
         'succeeded': succeeded,
         'failed': 0,
-        'items': items,
         'origin': 'manual',
         'created_by': current_user_email(),
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
+    _save_dataset_items(pid, ds_ref.id, items)
     log_usage('manual_import', detail=name, count=succeeded, project_id=pid)
     flash(f'資料集「{name}」已匯入 {succeeded} 筆，可直接分析。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 資料集 items 子集合（projects/{pid}/datasets/{did}/items）
+# 內文存子集合而非內嵌於 dataset 文件 → 無單文件 1MB 上限、筆數不受限。
+# 每筆用 auto-id 文件 + `_seq` 單調遞增欄位（刪除後 append 不撞 id），讀取依 `_seq` 排序。
+# ──────────────────────────────────────────────────────────────────────
+
+def _items_ref(pid: str, did: str):
+    return (db.collection('projects').document(pid)
+            .collection('datasets').document(did).collection('items'))
+
+
+def _load_dataset_items(pid: str, did: str) -> list:
+    try:
+        return [d.to_dict() for d in _items_ref(pid, did).order_by('_seq').stream()]
+    except Exception as e:
+        print(f"[items] 讀取失敗 {did}: {e}", flush=True)
+        return []
+
+
+def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -> int:
+    """寫入 items。append=False 先清空既有。回傳寫入後的 _next_seq。"""
+    ref = _items_ref(pid, did)
+    ds_ref = db.collection('projects').document(pid).collection('datasets').document(did)
+    if not append:
+        for d in ref.stream():
+            d.reference.delete()
+        seq = 0
+    else:
+        snap = ds_ref.get()
+        seq = (snap.to_dict() or {}).get('_next_seq', 0) if snap.exists else 0
+    batch = db.batch()
+    n = 0
+    for it in items:
+        batch.set(ref.document(), {**it, '_seq': seq})
+        seq += 1
+        n += 1
+        if n % 400 == 0:
+            batch.commit()
+            batch = db.batch()
+    if n % 400 != 0:
+        batch.commit()
+    ds_ref.update({'_next_seq': seq})
+    return seq
+
+
+def _delete_dataset_items(pid: str, did: str) -> None:
+    try:
+        for d in _items_ref(pid, did).stream():
+            d.reference.delete()
+    except Exception:
+        pass
+
+
+def _replace_items_by_url(pid: str, did: str, urls_set: set, new_items: list) -> None:
+    """recrawl-failed：刪除 url 在 urls_set 的舊 item，再 append new_items（保留已成功項）。"""
+    ref = _items_ref(pid, did)
+    for d in ref.stream():
+        if (d.to_dict() or {}).get('url') in urls_set:
+            d.reference.delete()
+    _save_dataset_items(pid, did, new_items, append=True)
 
 
 def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
@@ -919,11 +975,18 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
         'updated_at': firestore.SERVER_TIMESTAMP,
     }
     if jstatus == 'completed':
-        results = job.get('results', [])
-        update['items'] = results
+        results = job.get('results', []) or []
+        # 寫入 items 子集合：recrawl-failed 只替換指定 url（保留已成功項）；否則整批寫入。
+        recrawl_urls = dataset.get('recrawl_urls')
+        if recrawl_urls:
+            _replace_items_by_url(pid, did, set(recrawl_urls), results)
+            update['recrawl_urls'] = firestore.DELETE_FIELD
+        else:
+            _save_dataset_items(pid, did, results, append=False)
+        items = _load_dataset_items(pid, did)
         update['status'] = 'completed'
-        update['item_count'] = len(results)
-        update['succeeded'] = sum(1 for r in results if r.get('status') == 'success')
+        update['item_count'] = len(items)
+        update['succeeded'] = sum(1 for it in items if it.get('status') == 'success')
     elif jstatus == 'failed':
         update['status'] = 'failed'
         update['log'] = job.get('log', '爬取失敗')
@@ -939,6 +1002,7 @@ def dataset_detail(pid, did, project, role):
     if dataset is None:
         abort(404)
     dataset['id'] = did
+    dataset['items'] = _load_dataset_items(pid, did)  # items 改存子集合
     return render_template('dataset_detail.html',
                            project=project, pid=pid, dataset=dataset, role=role)
 
@@ -970,7 +1034,7 @@ def analyse_dataset(pid, did, project, role):
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
     # 取成功項目，轉成 analysis 的 contents（爬蟲回傳 content 欄位）
-    items = dataset.get('items', [])
+    items = _load_dataset_items(pid, did)
     contents = [
         {
             'url': it.get('url', ''),
@@ -1032,6 +1096,64 @@ def analyse_dataset(pid, did, project, role):
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
 
+@bp.route('/<pid>/datasets/<did>/recrawl', methods=['POST'])
+@project_access_required(min_role='editor')
+def recrawl_dataset(pid, did, project, role):
+    """重啟/續爬一個資料集：
+      mode=failed（預設）：只重爬未成功（失敗/未爬）的項，保留已成功項並合併。
+      mode=all：整份重爬。
+    解決批次被時限切掉、或部分站台失敗後不必整批重來。
+    """
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        abort(404)
+    dataset = ds_doc.to_dict()
+    if dataset.get('status') == 'crawling':
+        flash('資料集正在爬取中，請先等待完成或強制停止。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    mode = request.form.get('mode', 'failed')
+    items = _load_dataset_items(pid, did)
+    all_urls = dataset.get('source_urls') or [it.get('url') for it in items if it.get('url')]
+    success_urls = {it.get('url') for it in items
+                    if it.get('status') == 'success' and it.get('content')}
+    if mode == 'all':
+        target_urls = [u for u in all_urls if u]
+    else:
+        target_urls = [u for u in all_urls if u and u not in success_urls]
+    target_urls = list(dict.fromkeys(target_urls))  # 去重保序
+    if not target_urls:
+        flash('沒有需要重爬的項目（全部已成功）。', 'info')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    llm_config = project.get('llm_config', {})
+    gemini_key = llm_config.get('api_key') if llm_config.get('provider') == 'gemini' else None
+    result = submit_crawl_batch(target_urls, use_gemini=bool(gemini_key),
+                                gemini_api_key=gemini_key)
+    if 'error' in result:
+        flash(f'啟動重爬失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    update = {
+        'crawl_job_id': result.get('job_id'),
+        'status': 'crawling',
+        'progress': 0,
+        'log': f'重新爬取 {len(target_urls)} 項（{mode}）...',
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    }
+    if mode == 'all':
+        update['recrawl_urls'] = firestore.DELETE_FIELD  # 完成時整批替換
+    else:
+        update['recrawl_urls'] = target_urls  # 完成時只替換這些 url，保留已成功項
+    (db.collection('projects').document(pid)
+     .collection('datasets').document(did).update(update))
+    log_usage('recrawl', detail=f"{dataset.get('name', '')}({mode})",
+              count=len(target_urls), project_id=pid)
+    flash(f'已啟動重爬 {len(target_urls)} 項，完成後{"整批替換" if mode == "all" else "合併保留已成功項"}。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
 @bp.route('/<pid>/analyses/combined', methods=['POST'])
 @project_access_required(min_role='editor')
 def analyse_combined(pid, project, role):
@@ -1056,7 +1178,7 @@ def analyse_combined(pid, project, role):
         if ds.get('status') != 'completed':
             continue
         used_names.append(ds.get('name', did))
-        for it in ds.get('items', []):
+        for it in _load_dataset_items(pid, did):
             if it.get('status') == 'success' and it.get('content'):
                 contents.append({
                     'url': it.get('url', ''),
@@ -1177,6 +1299,7 @@ def _get_completed_dataset_or_redirect(pid: str, did: str):
     if dataset.get('status') != 'completed':
         flash('資料集尚未爬取完成，無法下載。', 'warning')
         return None, redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    dataset['items'] = _load_dataset_items(pid, did)  # items 改存子集合
     return dataset, None
 
 
@@ -1248,6 +1371,7 @@ def delete_dataset(pid, did, project, role):
         stopped = 'error' not in res
         log_usage('stop_crawl', detail=dataset.get('name', ''), project_id=pid)
 
+    _delete_dataset_items(pid, did)  # 先刪 items 子集合
     ref.delete()
     log_usage('delete_dataset', detail=dataset.get('name', ''), project_id=pid)
     if stopped:

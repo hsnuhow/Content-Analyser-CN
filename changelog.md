@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-14 重構：批次無數量上限（items 子集合）+ 重啟續爬（待部署 crawler+analyser）
+解除「批次數量上限」與「永遠卡住/被切掉就得重來」：
+
+- **③a crawler results 子集合**：`crawl_jobs/{id}/results/{idx}`（不再內嵌於 job 文件）→ 無 1MB 上限。
+  job 文件保持輕量；get_crawl_job 依 `__name__` 組裝；cleanup 連同子集合刪除。crawl_batch 上限 100→1000。
+- **③b dataset items 子集合**：`projects/{pid}/datasets/{did}/items/{auto-id}`（`_seq` 排序）→ 無 1MB 上限、筆數不限。
+  新 helper `_load/_save/_delete_dataset_items`、`_replace_items_by_url`。所有讀 items 點（詳情/一鍵分析/合併/下載/刪除）改讀子集合。
+  create_dataset/manual 上限 100→1000，移除舊 90 萬字守衛。**分析端不受影響（contents 仍經 HTTP 傳入，與儲存解耦）。**
+- **④ 重啟續爬** `POST /<pid>/datasets/<did>/recrawl`：mode=failed（只重爬未成功、保留已成功項並合併，靠 `recrawl_urls` + _replace_items_by_url）
+  / mode=all（整份重爬）。dataset_detail 加「🔄 重爬未完成/失敗項」「↻ 重爬全部」鈕。→ 批次被時限切掉的部分按一下續爬。
+- 註：分析仍「單次最多 100 篇」（既有保護，與爬取無上限分離）。
+
 ## 2026-06-14 補強：縮短爬蟲時限 + 403偵測 + 4個HK站模板（待部署 crawler）
 針對 HK 站 batch 卡死後續優化（第一段，crawler-only）：
 - **縮短單頁時限**：內部 300→120s、看門狗 360→160s（正常頁 <90s 不受影響；hang 早砍，省下時間讓更多頁爬得到）。
