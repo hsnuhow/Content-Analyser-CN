@@ -132,9 +132,16 @@ SITE_TEMPLATES = {
     },
     # ── Hearst Asia CMS（ELLE / Cosmopolitan / Harper's Bazaar 台灣版）──
     # 均使用同一套 Hearst Digital CMS，class 命名一致。
+    # 注意：ELLE/Cosmo/Bazaar 台灣為 HTTP-only 站（Fastly nonssl 端點，https 連線失敗）。
+    # Hearst 新版 CMS 主文容器為 .listicle-body-content / .content-container / [class*=body-content]，
+    # 舊版為 .article__body-content（保留為 fallback）。
     'elle_tw': {
         'indicators': ['elle.com.tw'],
         'selectors': [
+            '.standard-article-content',
+            '.listicle-body-content',
+            '[class*="body-content"]',
+            '.content-container',
             '.article__body-content',
             '.article__body',
             '.article-content',
@@ -151,6 +158,10 @@ SITE_TEMPLATES = {
     'cosmopolitan_tw': {
         'indicators': ['cosmopolitan.com.tw', 'cosmo.com.tw'],
         'selectors': [
+            '.standard-article-content',
+            '.listicle-body-content',
+            '[class*="body-content"]',
+            '.content-container',
             '.article__body-content',
             '.article__body',
             '.article-content',
@@ -163,6 +174,10 @@ SITE_TEMPLATES = {
     'harpersbazaar_tw': {
         'indicators': ['harpersbazaar.com.tw'],
         'selectors': [
+            '.standard-article-content',
+            '.listicle-body-content',
+            '[class*="body-content"]',
+            '.content-container',
             '.article__body-content',
             '.article__body',
             '.article-content',
@@ -1024,6 +1039,32 @@ class HeadlessCrawler:
             acc += len(ls)
         return "\n".join(kept).strip()
 
+    # 瀏覽器（Chrome）連線錯誤頁的特徵字串。命中代表站台無法連線（非真正內容），
+    # 應視為失敗，讓分層 fallback（Tier 3 代理）有機會接手。
+    _BROWSER_ERROR_MARKERS = (
+        "This site can’t be reached", "This site can't be reached",
+        "refused to connect", "took too long to respond",
+        "ERR_CONNECTION", "ERR_NAME_NOT_RESOLVED", "ERR_TIMED_OUT",
+        "ERR_CONNECTION_REFUSED", "ERR_CONNECTION_TIMED_OUT", "ERR_ADDRESS_UNREACHABLE",
+        "DNS_PROBE_FINISHED", "ERR_SSL", "ERR_CERT", "ERR_EMPTY_RESPONSE",
+        "無法連上這個網站", "拒絕連線", "回應時間過長", "找不到該網頁的位址",
+        "no proxy", "Checking the proxy",
+    )
+
+    def _looks_like_browser_error_page(self, content: str, title: str = "") -> bool:
+        """判斷抽取到的內容是否為瀏覽器連線錯誤頁（而非真正文章）。
+
+        條件（保守，避免誤判真文章）：內容偏短（< 1500 字）且命中錯誤特徵字串。
+        錯誤頁通常很短且 title 僅為網域名稱。
+        """
+        if not content:
+            return False
+        if len(content) >= 1500:
+            return False  # 長內容幾乎不可能是錯誤頁
+        hits = sum(1 for m in self._BROWSER_ERROR_MARKERS if m in content)
+        # 命中 1 個強特徵即可（這些字串幾乎不會出現在正常文章正文）
+        return hits >= 1
+
     def _css_path(self, el) -> str:
         try:
             parts = []
@@ -1734,6 +1775,14 @@ class HeadlessCrawler:
 
             if not content:
                 return {"status": "failed", "url": url, "error": "Extracted content is empty after full analysis."}
+
+            # 偵測瀏覽器連線錯誤頁（站台連不上時 Chrome 會渲染錯誤頁，不是真內容）。
+            # 視為失敗，讓上層分層 fallback（Tier 3 代理）有機會接手。
+            if self._looks_like_browser_error_page(content, title):
+                self._log(f"[Crawler] 偵測到瀏覽器錯誤頁（站台無法連線），判定失敗：{title}")
+                return {"status": "failed", "url": url,
+                        "error": "瀏覽器錯誤頁（站台無法連線，可能 HTTP-only 或被封鎖）",
+                        "browser_error": True}
 
             # 裁掉尾部樣板（贊助／APP／版權），所有萃取路徑統一套用
             content = self._trim_trailing_boilerplate(content)
