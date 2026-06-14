@@ -1,5 +1,7 @@
 .git
 .gitignore
+.claude
+REF
 __pycache__
 *.pyc
 .venv

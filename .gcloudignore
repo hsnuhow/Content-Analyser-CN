@@ -1,0 +1,38 @@
+# Cloud Build 上傳忽略清單。
+# 注意：本檔存在時 gcloud 不再 fallback 到 .gitignore，
+# 故機密檔（.env / setup_secret.sh 等）必須在此明確列出，避免上傳到 Cloud Build。
+
+# 版本控制與工具
+.git/
+.gitignore
+.claude/
+
+# 本地參考資料（含 gold-standard 報告，不入映像）
+REF/
+
+# 機密與設定腳本（嚴禁上傳）
+.env
+.env.*
+setup_secret.sh
+setup_secret.sh.local
+setup_admin.sh
+
+# 虛擬環境與快取
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build 產物與 logs
+*.log
+dist/
+build/
+analysis-service/dict.txt.big
