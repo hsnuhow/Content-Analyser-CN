@@ -86,6 +86,25 @@ MAIN_CONTENT_SELECTORS = [
 ]
 
 SITE_TEMPLATES = {
+    # ── 香港時尚站（Chrome MCP 實測 2026-06：皆 SSR、無遮罩；headless 卡死主因是廣告/追蹤 script 拖住 page-load）──
+    'voguehk': {
+        'indicators': ['voguehk.com'],
+        'selectors': ['.article__body-main', '.editor__content', 'article'],
+    },
+    'popbee': {
+        'indicators': ['popbee.com'],
+        'selectors': ['article.post-body-article', '.post-body-content', 'article'],
+    },
+    # ELLE HK 與 Esquire HK 同屬 Hearst HK（eZ/Ibexa CMS + Tailwind）；段落在 .ezrichtext-field，
+    #   外層 Tailwind utility class 為建構期雜湊、不穩定，只用 <article> 容器。
+    'ellehk': {
+        'indicators': ['elle.com.hk'],
+        'selectors': ['article.ArticleItem', 'article', '.ezrichtext-field'],
+    },
+    'esquirehk': {
+        'indicators': ['esquirehk.com'],
+        'selectors': ['article.article-wrapper', 'article', '.ezrichtext-field'],
+    },
     # ── A Day Magazine（WordPress + #infinite-article 無限捲動換頁）──
     # 注意：頁面使用 auto-advance JS，數秒後自動替換 DOM 並改 URL（pushState）。
     #   廣編/全頁格式用 fullPage.js，內文容器為 .fullpage-content（非標準 .entry-content）；
@@ -1096,6 +1115,20 @@ class HeadlessCrawler:
         # 命中 1 個強特徵即可（這些字串幾乎不會出現在正常文章正文）
         return hits >= 1
 
+    _HTTP_ERROR_MARKERS = (
+        "403 forbidden", "404 not found", "error 403", "error 404",
+        "access denied", "forbidden", "not found", "503 service",
+        "拒絕存取", "找不到網頁", "頁面不存在", "請求被拒絕", "禁止存取",
+    )
+
+    def _looks_like_http_error_page(self, content: str, title: str = "") -> bool:
+        """偵測 HTTP 錯誤頁（403/404/503 等）：站台回錯誤頁但被當成短內文。
+
+        保守：僅在內容很短（< 150 字）時才判定，避免長文提到 forbidden/not found 被誤殺。
+        """
+        blob = f"{title}\n{content}".lower().strip()
+        return any(m in blob for m in self._HTTP_ERROR_MARKERS)
+
     def _css_path(self, el) -> str:
         try:
             parts = []
@@ -2083,6 +2116,14 @@ class HeadlessCrawler:
                 self._log(f"[Crawler] 偵測到瀏覽器錯誤頁（站台無法連線），判定失敗：{title}")
                 return {"status": "failed", "url": url,
                         "error": "瀏覽器錯誤頁（站台無法連線，可能 HTTP-only 或被封鎖）",
+                        "browser_error": True}
+
+            # HTTP 錯誤頁偵測（如 403 Forbidden / 404）：內容極短且符合錯誤特徵 → 判失敗，
+            # 不讓「403 Forbidden」這種 28 字錯誤頁被當成功污染分析。
+            if len(content) < 150 and self._looks_like_http_error_page(content, title):
+                self._log(f"[Crawler] 偵測到 HTTP 錯誤頁（{(title or content)[:40]}），判定失敗")
+                return {"status": "failed", "url": url,
+                        "error": f"HTTP 錯誤頁：{(title or content)[:60]}",
                         "browser_error": True}
 
             # 裁掉尾部樣板（贊助／APP／版權），所有萃取路徑統一套用

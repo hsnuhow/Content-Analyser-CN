@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-14 補強：縮短爬蟲時限 + 403偵測 + 4個HK站模板（待部署 crawler）
+針對 HK 站 batch 卡死後續優化（第一段，crawler-only）：
+- **縮短單頁時限**：內部 300→120s、看門狗 360→160s（正常頁 <90s 不受影響；hang 早砍，省下時間讓更多頁爬得到）。
+  批次總時限 1800→2700s（搭配重啟續爬）。
+- **403/HTTP 錯誤頁偵測**：`_looks_like_http_error_page`，內容極短且符合 403/404/forbidden 等特徵 → 判 failed
+  （修 skm.com.tw 回「403 Forbidden」28 字卻被當 success）。
+- **4 個 HK 站模板**（Chrome MCP 實測驗證）：voguehk `.article__body-main`、popbee `article.post-body-article`、
+  ellehk/esquirehk（Hearst HK eZ/Ibexa）`article`。皆 SSR 無遮罩；卡死主因是廣告 script 拖住 page-load，
+  模板命中→容器已知→淺滾，配合縮短時限緩解。
+
 ## 2026-06-14 修正（重大）：爬蟲防卡死機制 — 單頁看門狗 + 連續卡死中止 + 批次總時限
 嚴重 bug：單頁在某步驟「內部」hang（如 voguehk 通用後備遮罩處理），checkpoint 式 300s 硬時限攔不住
 → 整批永久凍住、持續耗時與費用。完整三層防護（crawl_job.py）：
