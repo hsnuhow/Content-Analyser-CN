@@ -27,26 +27,37 @@ from typing import Optional, Dict
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Tier 3：Webshare 住宅 IP 代理
+# Tier 3：住宅/資料中心代理（provider-agnostic：Decodo / Webshare 等）
 # ──────────────────────────────────────────────────────────────────────
 
 def load_proxy_config() -> Optional[Dict[str, str]]:
-    """從環境變數載入 Webshare 代理設定。
+    """從環境變數載入 Tier 3 代理設定（provider-agnostic）。
 
     回傳 None 表示未啟用（預設）；否則回傳 {host, port, user, pass}。
-    只有 WEBSHARE_PROXY_ENABLED == "1" 且 host/port 齊全才回傳設定。
+    優先讀通用 `PROXY_*`（適用 Decodo 等任何 provider），找不到才回退 `WEBSHARE_*`（相容）。
+    需 `PROXY_ENABLED`（或 `WEBSHARE_PROXY_ENABLED`）== "1" 且 host/port 齊全。
+
+    Decodo（residential）範例：
+      PROXY_ENABLED=1
+      PROXY_HOST=gate.decodo.com   PROXY_PORT=7000   （輪換端點，依方案調整）
+      PROXY_USER=<decodo 帳號>      PROXY_PASS=<decodo 密碼>
     """
-    if os.environ.get("WEBSHARE_PROXY_ENABLED", "") != "1":
+    def _get(generic: str, legacy: str) -> str:
+        return (os.environ.get(generic) or os.environ.get(legacy) or "").strip()
+
+    enabled = _get("PROXY_ENABLED", "WEBSHARE_PROXY_ENABLED")
+    if enabled != "1":
         return None
-    host = os.environ.get("WEBSHARE_PROXY_HOST", "").strip()
-    port = os.environ.get("WEBSHARE_PROXY_PORT", "").strip()
+    host = _get("PROXY_HOST", "WEBSHARE_PROXY_HOST")
+    port = _get("PROXY_PORT", "WEBSHARE_PROXY_PORT")
     if not host or not port:
         return None
     return {
         "host": host,
         "port": port,
-        "user": os.environ.get("WEBSHARE_PROXY_USER", "").strip(),
-        "pass": os.environ.get("WEBSHARE_PROXY_PASS", "").strip(),
+        "user": _get("PROXY_USER", "WEBSHARE_PROXY_USER"),
+        "pass": _get("PROXY_PASS", "WEBSHARE_PROXY_PASS"),
+        "provider": os.environ.get("PROXY_PROVIDER", "decodo" if os.environ.get("PROXY_HOST") else "webshare"),
     }
 
 
