@@ -1440,8 +1440,17 @@ class HeadlessCrawler:
         self._log("\n[Phase 1.1b] Removing CMP / cookie-consent containers (OneTrust / Fides)")
         self._remove_cmp_containers(soup)
 
-        # Phase 2: 檢查緩存
+        # Phase 2: 檢查緩存（含 Firestore 持久化的「已學選擇器」，跨重啟/實例記住）
         domain = urlparse(url).netloc
+        if domain and domain not in self.domain_selector_cache:
+            try:
+                from site_learning import load_learned_selectors
+                learned = load_learned_selectors().get(domain)
+                if learned:
+                    self.domain_selector_cache[domain] = learned
+                    self._log(f"[SiteLearning] 載入已學選擇器：{domain} → {learned}")
+            except Exception:
+                pass
         if domain in self.domain_selector_cache:
             sel = self.domain_selector_cache[domain]
             self._log(f"\n[Phase 2] Cache Hit! Using cached selector for domain '{domain}'")
@@ -1692,6 +1701,14 @@ class HeadlessCrawler:
                     self._log(f"\n  → ✅ Using Gemini's choice (score {best_llm_score:.1f} > {best_score:.1f}): '{best_llm_selector}'")
                     if domain:
                         self.domain_selector_cache[domain] = best_llm_selector
+                        # ⭐ 爬蟲研究器：把 Gemini 學到的有效選擇器持久化到 Firestore，
+                        #   下次（含重啟/其他實例）直接命中，不必再請 Gemini（自我修復）。
+                        try:
+                            from site_learning import save_learned_selector, detect_cms
+                            save_learned_selector(domain, best_llm_selector, url,
+                                                  len(best_llm_text), detect_cms(html))
+                        except Exception:
+                            pass
                     return best_llm_text
                 else:
                     self._log(f"  → Gemini's suggestions did not improve the result")
