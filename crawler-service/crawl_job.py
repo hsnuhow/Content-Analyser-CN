@@ -17,8 +17,8 @@ JOBS_COLLECTION = "crawl_jobs"
 
 # ── 防卡死 / 成本守衛常數 ──
 RECYCLE_EVERY = 6            # 每爬 N 篇回收重建 driver，釋放 Chrome 記憶體（防 OOM）
-PAGE_HARD_TIMEOUT = 120      # 傳入 scrape 的內部（檢查點式）硬時限；正常頁多 <90s 完成
-PAGE_WATCHDOG = 160          # 單頁看門狗：> 內部時限 + 緩衝；超過代表卡在步驟內，強制中止
+PAGE_HARD_TIMEOUT = 240      # 傳入 scrape 的內部（檢查點式）硬時限；重站(Hearst listicle/gallery)需此時間抽完
+PAGE_WATCHDOG = 290          # 單頁看門狗：> 內部時限 + 緩衝；超過代表卡在步驟內，強制中止
 MAX_CONSECUTIVE_HANGS = 3    # 連續 N 篇看門狗逾時 → 疑系統性問題，提前中止整批
 BATCH_MAX_SECONDS = 2700     # 整批總時限（45 分）backstop，避免長批次無限耗時/費用（搭配重啟續爬）
 
