@@ -317,7 +317,7 @@
                 <input type="checkbox" name="search_extent" class="form-check-input" id="searchExtentChk"
                        {% if project.llm_config.get('search_extent', True) %}checked{% endif %}>
                 <label class="form-check-label small" for="searchExtentChk">啟用搜尋延伸接地（search-extent）
-                  <span class="text-muted d-block">§7 改用 Google 真實搜尋量佐證（預設開）</span></label>
+                  <span class="text-muted d-block">在 §7 延伸關鍵字「額外疊加」Google 真實搜尋量佐證；不取代 LLM 分析，僅作驗證（預設開）</span></label>
               </div>
             </div>
 
