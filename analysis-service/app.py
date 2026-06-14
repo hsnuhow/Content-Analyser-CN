@@ -120,6 +120,7 @@ def analyse():
     except (TypeError, ValueError):
         temperature = 0.3
     thinking = bool(data.get("thinking", False))
+    search_extent = bool(data.get("search_extent", True))  # 預設開（可關）
 
     if not llm_api_key:
         return jsonify({"status": "failed",
@@ -159,6 +160,7 @@ def analyse():
         "api_key": llm_api_key,
         "temperature": temperature,
         "thinking": thinking,
+        "search_extent": search_extent,
     }
     t = threading.Thread(
         target=run_analysis,

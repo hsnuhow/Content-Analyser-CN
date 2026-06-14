@@ -225,6 +225,8 @@ def update_settings(pid, project, role):
     except (TypeError, ValueError):
         temperature = 0.3
     thinking = bool(request.form.get('thinking'))
+    # 搜尋延伸（search-extent）開關：表單有 checkbox；勾選才開（預設值由 UI 決定）
+    search_extent = bool(request.form.get('search_extent'))
 
     update = {
         'updated_at': firestore.SERVER_TIMESTAMP,
@@ -232,6 +234,7 @@ def update_settings(pid, project, role):
         'llm_config.model': llm_model,
         'llm_config.temperature': temperature,
         'llm_config.thinking': thinking,
+        'llm_config.search_extent': search_extent,
     }
     if llm_api_key:  # 只在有填寫時才更新 key（空白代表不變）
         update['llm_config.api_key'] = llm_api_key
@@ -343,6 +346,7 @@ def submit_analysis_route(pid, project, role):
         llm_api_key=llm_api_key,
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
+        search_extent=llm_config.get('search_extent', True),
     )
 
     if 'error' in result:
@@ -780,6 +784,7 @@ def analyse_dataset(pid, did, project, role):
         llm_api_key=llm_config.get('api_key'),
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
+        search_extent=llm_config.get('search_extent', True),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')
@@ -864,6 +869,7 @@ def analyse_combined(pid, project, role):
         llm_api_key=llm_config.get('api_key'),
         temperature=llm_config.get('temperature', 0.3),
         thinking=llm_config.get('thinking', False),
+        search_extent=llm_config.get('search_extent', True),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')

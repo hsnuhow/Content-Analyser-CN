@@ -77,6 +77,24 @@ def _fmt_clusters(clusters: Dict) -> str:
     return "\n".join(lines)
 
 
+def _fmt_search_extent(search_extent_results: Dict) -> str:
+    """把 search-extent 真實關聯關鍵字整理成 prompt 區塊（依群分組）。"""
+    if not search_extent_results:
+        return ""
+    lines = []
+    for cid in sorted(search_extent_results.keys()):
+        data = search_extent_results[cid]
+        label = data.get("label") or f"群 {cid + 1}"
+        seeds = "、".join(data.get("seeds", []))
+        lines.append(f"\n【{label}】（種子：{seeds}）")
+        for idea in data.get("ideas", [])[:20]:
+            vol = idea.get("avg_monthly_searches")
+            comp = idea.get("competition") or "-"
+            vol_s = f"{vol:,}/月" if isinstance(vol, int) else "量級未知"
+            lines.append(f"  - {idea.get('text', '')}（{vol_s}，競爭 {comp}）")
+    return "\n".join(lines)
+
+
 def _fmt_intents(search_intents: List[Dict]) -> str:
     lines = []
     for a in search_intents[:MAX_INTENT_SUMMARY]:
@@ -88,12 +106,16 @@ def _fmt_intents(search_intents: List[Dict]) -> str:
 
 def run(nlp_results: Dict, llm_results: Dict,
         report_title: str, n_articles: int,
-        llm: LLMClient) -> Dict[str, str]:
+        llm: LLMClient, search_extent_results: Dict = None) -> Dict[str, str]:
     """
-    呼叫 Synthesis LLM 生成三個詮釋性章節。
+    呼叫 Synthesis LLM 生成詮釋性章節。
 
-    回傳：{summary, search_intent_analysis, recommendations}
+    search_extent_results：{cluster_id: {label, seeds, ideas}}，由 search-extent 提供的
+    真實 Google 關聯關鍵字 + 搜尋量。有資料時 §7 改走「真實資料接地」版本。
+
+    回傳：{summary, search_intent_analysis, recommendations, expansion}
     """
+    search_extent_results = search_extent_results or {}
     tfidf_summary = _fmt_tfidf(nlp_results.get("tfidf", {}))
     cluster_summary = _fmt_clusters(nlp_results.get("clusters", {}))
     intent_summary = _fmt_intents(llm_results.get("search_intents", []))
@@ -163,9 +185,36 @@ def run(nlp_results: Dict, llm_results: Dict,
         print(f"[Synthesis] § 6 建議生成失敗：{e}", flush=True)
         recommendations = "（建議生成失敗，請重新分析）"
 
-    # ── § 7 延伸關鍵字與內容缺口（語意延伸，dataset 之外的差異化機會）──
-    # 對應產品方法論二：找「閱聽眾在意、但現有內容沒說好」的 gap。
-    expansion_prompt = f"""{base_context}
+    # ── § 7 延伸關鍵字與內容缺口（對應方法論二：找差異化 gap）──
+    # 有 search-extent 真實資料 → 走「真實資料接地」版；否則退回純語意推論版。
+    se_block = _fmt_search_extent(search_extent_results)
+    if se_block:
+        expansion_prompt = f"""{base_context}
+
+【真實搜尋接地資料（Google Ads Keyword Planner，依語意群分組）】
+以下是用各語意群的核心關鍵字向 Google 查得的「真實關聯關鍵字 + 月均搜尋量 + 競爭度」。\
+這是市場端真實的需求訊號（不是推論）：
+{se_block}
+
+請結合「本批內容的分析」與「上述真實搜尋資料」，產出延伸建議。\
+務必以真實搜尋資料為證據，標出搜尋量，並判斷哪些是本批內容「沒涵蓋但有真實需求」的缺口。
+
+請用以下三段格式輸出（正體中文，直接輸出，不要前言後記）：
+
+### 延伸關鍵字（有真實搜尋需求、但本批內容未涵蓋或著墨不足）
+列出 10–15 個，每個用 `- 關鍵字（約 X/月）— 為何相關、本批是否已涵蓋` 格式。\
+優先列「真實搜尋量高 + 本批沒寫到」的詞，這些是最值得補的流量機會。
+
+### 內容缺口（差異化切點，以真實需求為證）
+找出 4–6 個「真實搜尋資料顯示受眾在意、但現有內容沒切到」的角度，引用具體關鍵字與搜尋量佐證。
+
+### 可延伸的周邊主題
+列出 3–5 個與核心主題相鄰、可擴展成內容矩陣的周邊主題（可參考真實關聯詞），簡述延伸邏輯。
+
+註明：本節延伸關鍵字含 Google 真實搜尋量佐證；周邊主題部分含推論。"""
+        expansion_temp = 0.4
+    else:
+        expansion_prompt = f"""{base_context}
 
 以上是本批內容「內部」的分析。現在請你跳出這批 dataset，運用你對此主題與受眾的知識，\
 推論「這批內容之外、但與同一群受眾高度相關、值得延伸經營」的內容機會。\
@@ -184,8 +233,9 @@ def run(nlp_results: Dict, llm_results: Dict,
 列出 3–5 個與核心主題相鄰、可擴展成內容矩陣的周邊主題，並簡述延伸邏輯。
 
 註明：本節為基於受眾知識的「推論延伸」，非 dataset 內實際出現，建議再以實際搜尋資料（如 Google 相關搜尋/Trends）驗證。"""
+        expansion_temp = 0.5
     try:
-        expansion = llm.generate(expansion_prompt, temperature=0.5, max_tokens=3072)
+        expansion = llm.generate(expansion_prompt, temperature=expansion_temp, max_tokens=3072)
     except Exception as e:
         print(f"[Synthesis] § 7 延伸關鍵字生成失敗：{e}", flush=True)
         expansion = "（延伸關鍵字分析生成失敗，請重新分析）"

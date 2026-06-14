@@ -282,6 +282,14 @@
                 <span class="text-muted d-block">推理更深，但較長章節可能被截斷（預設關閉以確保報告完整）</span>
               </label>
             </div>
+            <div class="mb-3 form-check">
+              <input type="checkbox" name="search_extent" class="form-check-input" id="searchExtentChk"
+                     {% if project.llm_config.get('search_extent', True) %}checked{% endif %}>
+              <label class="form-check-label small" for="searchExtentChk">
+                啟用搜尋延伸接地（search-extent）
+                <span class="text-muted d-block">§7 延伸關鍵字改用 Google 真實搜尋量佐證；服務未部署時自動略過（預設開啟）</span>
+              </label>
+            </div>
             <button type="submit" class="btn btn-sm btn-primary w-100">儲存設定</button>
           </form>
         </div>

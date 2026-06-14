@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-06-14 B2：search-extent 接入分析報告 §7（真實搜尋接地，待部署）
+把 search-extent 串進 analysis-pipeline，報告 §7 延伸關鍵字改用 Google 真實搜尋量佐證。
+
+**analysis-pipeline**：
+- 新 `search_extent_client.py`（HTTP 呼叫 search-extent /api/expand；URL/Key 未設或失敗則靜默略過，不影響報告）。
+- `pipeline.py`：Path 1 分群後，用各群 top 關鍵字（最多 6 群×5 詞）呼叫 search-extent，**與 Path 2 並行**；
+  結果 `search_extent_results` 傳入 synthesis 與 report。開關 `search_extent`（預設開）+ 須 URL/Key 已設定。
+- `synthesis.py` §7：有真實資料時改走「真實資料接地」prompt（標搜尋量、判斷未涵蓋缺口）；否則退回純語意推論版。
+- `report.py`：§7 標題依是否接地調整；新增「附錄：真實搜尋延伸資料」表（依群列關聯詞+月均搜尋量+競爭度）。
+- `app.py`：接收 `search_extent`（預設 True）→ llm_config。requirements 加 `requests`。
+
+**content-analyser**：
+- `analysis_client.submit_analysis` 加 `search_extent` 參數；3 個提交點傳 `llm_config.search_extent`。
+- `update_settings` 讀 checkbox；專案設定 UI 新增「啟用搜尋延伸接地」開關（預設開）。
+
+**部署相依**：analysis-pipeline 需注入 `SEARCH_EXTENT_SERVICE_URL` + `SEARCH_EXTENT_API_KEY`（先部署 search-extent 取 URL）。
+未注入時 pipeline 自動略過，報告照常產出（純 LLM §7）。
+
 ## 2026-06-14 新增第 4 微服務 search-extent（B1：Ads Keyword Planner 關鍵字延伸，待部署）
 延伸服務 B 第一階段。獨立 Cloud Run 服務，尚未部署，等 Google Ads API Basic access 核准補 dev token。
 

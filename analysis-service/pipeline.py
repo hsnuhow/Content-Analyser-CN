@@ -22,9 +22,14 @@ from nlp_path import run as run_nlp
 from llm_path import run as run_llm
 import synthesis
 import report
+import search_extent_client
 
 # Firestore collection 名稱（analysis-pipeline 自管）
 JOBS_COLLECTION = "analysis_jobs"
+
+# search-extent：每次分析最多展開幾個語意群（控制 Ads API 配額）、每群取幾個種子詞。
+MAX_SEARCH_EXTENT_CLUSTERS = 6
+SEARCH_EXTENT_SEEDS_PER_CLUSTER = 5
 
 
 def _update_job(db, job_id: str, **fields):
@@ -100,11 +105,42 @@ def run_analysis(job_id: str, report_title: str,
             _update_job(db, job_id, status="failed", log=f"LLM 設定錯誤：{e}")
             return
 
+        # ── search-extent 開關：URL/Key 已設定 + 本次未停用（預設開）──
+        se_enabled = (search_extent_client.is_enabled()
+                      and bool(llm_config.get("search_extent", True)))
+        search_extent_results: Dict[int, Any] = {}
+
         # ── 兩路平行執行 ──
         nlp_results: Dict[str, Any] = {}
         llm_results: Dict[str, Any] = {}
         nlp_error: list = []
         llm_error: list = []
+
+        def _run_search_extent(clusters: Dict):
+            """用各語意群 top 關鍵字呼叫 search-extent，取真實關聯關鍵字。
+            在 Path 1 thread 內、分群後執行（與 Path 2 並行）。失敗只記 log、不影響報告。"""
+            groups = clusters.get("clusters", [])
+            if not groups:
+                return
+            done = 0
+            for g in groups[:MAX_SEARCH_EXTENT_CLUSTERS]:
+                seeds = [k for k in (g.get("keywords") or [])[:SEARCH_EXTENT_SEEDS_PER_CLUSTER] if k]
+                if not seeds:
+                    continue
+                res = search_extent_client.expand(seeds, limit=60)
+                if not isinstance(res, dict) or "error" in res:
+                    _log(f"[search-extent] 群 {g.get('cluster_id', 0) + 1} 略過：{(res or {}).get('error')}")
+                    continue
+                ideas = res.get("ideas", []) or []
+                if ideas:
+                    search_extent_results[g["cluster_id"]] = {
+                        "label": g.get("label", ""),
+                        "seeds": seeds,
+                        "ideas": ideas[:30],
+                    }
+                    done += 1
+            if done:
+                _log(f"[search-extent] 完成 {done} 群真實關聯關鍵字接地")
 
         def _run_path1():
             try:
@@ -116,6 +152,13 @@ def run_analysis(job_id: str, report_title: str,
                 )
                 nlp_results.update(result)
                 _progress(40, f"Path 1 完成：{result['clusters'].get('n_clusters', 0)} 個語意群組")
+                # 分群完成 → 接 search-extent 真實搜尋接地（與 Path 2 並行）
+                if se_enabled:
+                    try:
+                        _progress(45, "search-extent：取真實關聯關鍵字（Google Ads Keyword Planner）...")
+                        _run_search_extent(result.get("clusters", {}))
+                    except Exception as e:
+                        _log(f"[search-extent] 整體略過（不影響報告）：{e}")
             except Exception as e:
                 nlp_error.append(str(e))
                 _log(f"Path 1 失敗：{e}")
@@ -183,6 +226,7 @@ def run_analysis(job_id: str, report_title: str,
             report_title=report_title,
             n_articles=len(contents),
             llm=llm,
+            search_extent_results=search_extent_results,
         )
 
         if _cancelled_stop():
@@ -198,6 +242,7 @@ def run_analysis(job_id: str, report_title: str,
             synthesis_parts=synthesis_parts,
             llm_provider=llm_config.get("provider", "gemini"),
             llm_model=llm_config.get("model", "gemini-2.5-flash"),
+            search_extent_results=search_extent_results,
         )
 
         _update_job(

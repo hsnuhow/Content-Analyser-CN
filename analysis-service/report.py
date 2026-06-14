@@ -94,6 +94,36 @@ def _section_clusters(clusters: Dict) -> str:
     return "\n".join(lines)
 
 
+def _section_search_extent(search_extent_results: Dict) -> str:
+    """真實搜尋延伸資料附錄：依語意群列出 Google 關聯關鍵字 + 月均搜尋量 + 競爭度。"""
+    if not search_extent_results:
+        return ""
+    lines = [
+        "## 附錄：真實搜尋延伸資料（Google Ads Keyword Planner）",
+        "",
+        "依各語意群核心關鍵字向 Google 查得的真實關聯關鍵字與月均搜尋量，"
+        "為 §7 延伸建議的接地證據。",
+        "",
+    ]
+    for cid in sorted(search_extent_results.keys()):
+        data = search_extent_results[cid]
+        label = data.get("label") or f"群 {cid + 1}"
+        seeds = "、".join(data.get("seeds", []))
+        lines.append(f"### {label}")
+        lines.append("")
+        lines.append(f"*種子關鍵字：{seeds}*")
+        lines.append("")
+        lines.append("| 關聯關鍵字 | 月均搜尋量 | 競爭度 |")
+        lines.append("| :--- | ---: | :--- |")
+        for idea in data.get("ideas", [])[:20]:
+            vol = idea.get("avg_monthly_searches")
+            vol_s = f"{vol:,}" if isinstance(vol, int) else "-"
+            comp = idea.get("competition") or "-"
+            lines.append(f"| {idea.get('text', '')} | {vol_s} | {comp} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _section_appendix(tfidf_per_article: List[Dict],
                        search_intents: List[Dict]) -> str:
     # 建立 search_intent 查詢 dict
@@ -147,14 +177,17 @@ def assemble(report_title: str,
              llm_results: Dict,
              synthesis_parts: Dict,
              llm_provider: str,
-             llm_model: str) -> str:
+             llm_model: str,
+             search_extent_results: Dict = None) -> str:
     """組裝最終 Markdown 報告。
 
     Args:
-        synthesis_parts: {summary, search_intent_analysis, recommendations}
+        synthesis_parts: {summary, search_intent_analysis, recommendations, expansion}
         nlp_results:     {tfidf, clusters}
         llm_results:     {search_intents, qualitative}
+        search_extent_results: {cluster_id: {label, seeds, ideas}}（真實搜尋延伸，可空）
     """
+    search_extent_results = search_extent_results or {}
     n = len(contents)
     source_counts: Dict[str, int] = {}
     for c in contents:
@@ -206,14 +239,26 @@ def assemble(report_title: str,
         + synthesis_parts.get("recommendations", "（無法生成）")
     )
 
-    # § 7 延伸關鍵字與內容缺口（語意延伸，Synthesis LLM）
+    # § 7 延伸關鍵字與內容缺口（Synthesis LLM）；有 search-extent 真實資料則標註已接地
     if synthesis_parts.get("expansion"):
+        grounded = bool(search_extent_results)
+        intro = (
+            "本節結合本批內容分析與 **Google 真實搜尋資料**（Ads Keyword Planner），"
+            "找出與同一群受眾相關、但這批 dataset 未涵蓋、有真實搜尋需求的延伸關鍵字與內容缺口。"
+            if grounded else
+            "本節跳出本批內容，推論與同一群受眾相關、但這批 dataset 未直接涵蓋、"
+            "可延伸經營的關鍵字、內容缺口與周邊主題。"
+        )
         sections.append(
             "## 7. 延伸關鍵字與內容缺口（dataset 之外的相關機會）\n\n"
-            "本節跳出本批內容，推論與同一群受眾相關、但這批 dataset 未直接涵蓋、"
-            "可延伸經營的關鍵字、內容缺口與周邊主題。\n\n"
+            + intro + "\n\n"
             + synthesis_parts.get("expansion", "")
         )
+
+    # 真實搜尋延伸資料附錄（有 search-extent 結果時）
+    se_section = _section_search_extent(search_extent_results)
+    if se_section:
+        sections.append(se_section)
 
     # 附錄（程式直接生成）
     sections.append(

@@ -907,6 +907,8 @@ analysis_jobs/{job_id}            非同步任務狀態
 |------|------|
 | `ANALYSIS_API_KEY` | API 驗證金鑰 |
 | `GOOGLE_CLOUD_PROJECT` | Vertex AI Embedding + Firestore |
+| `SEARCH_EXTENT_SERVICE_URL` | （選用）search-extent URL；設定才啟用 §7 真實接地 |
+| `SEARCH_EXTENT_API_KEY` | （選用）呼叫 search-extent 金鑰 |
 
 ## search-extent
 
