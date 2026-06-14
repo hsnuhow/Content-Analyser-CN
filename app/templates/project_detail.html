@@ -240,6 +240,24 @@
                 {% endif %}
               </div>
             </div>
+            <div class="mb-2">
+              <label class="form-label small fw-semibold d-flex justify-content-between">
+                <span>溫度（創意度）</span>
+                <span class="text-muted" id="tempVal">{{ '%.2f'|format(project.llm_config.temperature|default(0.3)) }}</span>
+              </label>
+              <input type="range" name="temperature" class="form-range" min="0" max="1" step="0.05"
+                     value="{{ project.llm_config.temperature|default(0.3) }}"
+                     oninput="document.getElementById('tempVal').textContent=this.value">
+              <div class="form-text">低=精準保守、高=發散有創意（建議分析用 0.2–0.5）</div>
+            </div>
+            <div class="mb-3 form-check">
+              <input type="checkbox" name="thinking" class="form-check-input" id="thinkingChk"
+                     {% if project.llm_config.thinking %}checked{% endif %}>
+              <label class="form-check-label small" for="thinkingChk">
+                啟用 Gemini 2.5 思考模式
+                <span class="text-muted d-block">推理更深，但較長章節可能被截斷（預設關閉以確保報告完整）</span>
+              </label>
+            </div>
             <button type="submit" class="btn btn-sm btn-primary w-100">儲存設定</button>
           </form>
         </div>

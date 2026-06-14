@@ -44,6 +44,7 @@ def check_health(timeout: int = POLL_TIMEOUT) -> dict:
 
 def submit_analysis(report_title: str, contents: list,
                     llm_provider: str, llm_model: str, llm_api_key: str,
+                    temperature: float = 0.3, thinking: bool = False,
                     timeout: int = DEFAULT_TIMEOUT) -> dict:
     """提交分析任務（非同步）。
 
@@ -60,6 +61,8 @@ def submit_analysis(report_title: str, contents: list,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "llm_api_key": llm_api_key,
+        "temperature": temperature,
+        "thinking": thinking,
     }
     try:
         resp = requests.post(

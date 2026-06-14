@@ -68,6 +68,8 @@ def run_analysis(job_id: str, report_title: str,
                 provider=llm_config.get("provider", "gemini"),
                 model=llm_config.get("model", "gemini-2.5-flash"),
                 api_key=llm_config.get("api_key", ""),
+                temperature=llm_config.get("temperature", 0.3),
+                thinking=llm_config.get("thinking", False),
             )
         except ValueError as e:
             _update_job(db, job_id, status="failed", log=f"LLM 設定錯誤：{e}")

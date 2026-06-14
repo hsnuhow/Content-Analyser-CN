@@ -115,6 +115,11 @@ def analyse():
     llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
     llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
     llm_api_key = (data.get("llm_api_key") or "").strip()
+    try:
+        temperature = max(0.0, min(1.0, float(data.get("temperature", 0.3))))
+    except (TypeError, ValueError):
+        temperature = 0.3
+    thinking = bool(data.get("thinking", False))
 
     if not llm_api_key:
         return jsonify({"status": "failed",
@@ -152,6 +157,8 @@ def analyse():
         "provider": llm_provider,
         "model": llm_model,
         "api_key": llm_api_key,
+        "temperature": temperature,
+        "thinking": thinking,
     }
     t = threading.Thread(
         target=run_analysis,

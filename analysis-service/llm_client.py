@@ -21,7 +21,9 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    def __init__(self, provider: str, model: str, api_key: str):
+    def __init__(self, provider: str, model: str, api_key: str,
+                 temperature: float = DEFAULT_TEMPERATURE,
+                 thinking: bool = False):
         provider = provider.lower().strip()
         if provider not in SUPPORTED_PROVIDERS:
             raise ValueError(f"不支援的 LLM 提供商：'{provider}'。請使用 'gemini' 或 'claude'。")
@@ -31,11 +33,16 @@ class LLMClient:
         self.provider = provider
         self.model = model
         self.api_key = api_key.strip()
+        # 用戶可調：預設溫度 + Gemini 2.5 thinking 開關（預設關，避免思考吃掉輸出截斷）
+        self.temperature = temperature
+        self.thinking = bool(thinking)
 
     def generate(self, prompt: str,
-                 temperature: float = DEFAULT_TEMPERATURE,
+                 temperature: float = None,
                  max_tokens: int = DEFAULT_MAX_TOKENS) -> str:
         """呼叫 LLM，回傳生成的文字。失敗或逾時時拋出 LLMError。"""
+        if temperature is None:
+            temperature = self.temperature  # 用戶設定的預設溫度
         def _call():
             if self.provider == "gemini":
                 return self._call_gemini(prompt, temperature, max_tokens)
@@ -64,10 +71,9 @@ class LLMClient:
                 temperature=temperature,
                 max_output_tokens=max_tokens,
             )
-            # ⭐ Gemini 2.5 系列預設開啟「thinking」，思考 token 會吃掉 max_output_tokens
-            #   預算，導致實際輸出被嚴重截斷（§摘要/情境/建議只剩百來字）。
-            #   這類結構化生成不需深度思考 → 關閉 thinking（budget=0），全部預算給輸出。
-            if "2.5" in model_name:
+            # ⭐ Gemini 2.5 預設開啟 thinking，思考 token 吃掉 max_output_tokens → 輸出被截斷。
+            #   預設關閉（budget=0）全部預算給輸出；用戶可在專案設定開啟 thinking（self.thinking）。
+            if "2.5" in model_name and not self.thinking:
                 try:
                     cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
                 except Exception:

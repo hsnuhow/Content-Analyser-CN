@@ -195,10 +195,20 @@ def update_settings(pid, project, role):
     llm_model = request.form.get('llm_model', 'gemini-2.5-flash').strip()
     llm_api_key = request.form.get('llm_api_key', '').strip()
 
+    # 溫度（0–1，預設 0.3）與 thinking 開關（Gemini 2.5）
+    try:
+        temperature = float(request.form.get('temperature', 0.3))
+        temperature = max(0.0, min(1.0, temperature))
+    except (TypeError, ValueError):
+        temperature = 0.3
+    thinking = bool(request.form.get('thinking'))
+
     update = {
         'updated_at': firestore.SERVER_TIMESTAMP,
         'llm_config.provider': llm_provider,
         'llm_config.model': llm_model,
+        'llm_config.temperature': temperature,
+        'llm_config.thinking': thinking,
     }
     if llm_api_key:  # 只在有填寫時才更新 key（空白代表不變）
         update['llm_config.api_key'] = llm_api_key
@@ -308,6 +318,8 @@ def submit_analysis_route(pid, project, role):
         llm_provider=llm_config.get('provider', 'gemini'),
         llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_api_key,
+        temperature=llm_config.get('temperature', 0.3),
+        thinking=llm_config.get('thinking', False),
     )
 
     if 'error' in result:
@@ -692,6 +704,8 @@ def analyse_dataset(pid, did, project, role):
         llm_provider=llm_config.get('provider', 'gemini'),
         llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_config.get('api_key'),
+        temperature=llm_config.get('temperature', 0.3),
+        thinking=llm_config.get('thinking', False),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')
@@ -773,6 +787,8 @@ def analyse_combined(pid, project, role):
         llm_provider=llm_config.get('provider', 'gemini'),
         llm_model=llm_config.get('model', 'gemini-2.5-flash'),
         llm_api_key=llm_config.get('api_key'),
+        temperature=llm_config.get('temperature', 0.3),
+        thinking=llm_config.get('thinking', False),
     )
     if 'error' in result:
         flash(f'提交分析失敗：{result["error"]}', 'danger')
