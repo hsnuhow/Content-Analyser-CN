@@ -39,14 +39,39 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
     if use_gemini and gemini_api_key:
         crawler.configure_genai(gemini_api_key)
 
-    def _scrape_one(url: str) -> dict:
+    def _proxied_scrape(url: str) -> dict:
+        """Tier 3：用獨立的代理 crawler 重試（與重用的直連 driver 分開）。"""
+        pc = HeadlessCrawler(use_proxy=True)
+        if use_gemini and gemini_api_key:
+            pc.configure_genai(gemini_api_key)
         try:
-            # keep_driver=True：批次重用，不在每篇結束時 quit driver。
-            return crawler.scrape(url, hard_timeout_sec=300, keep_driver=True)
+            return pc.scrape(url, hard_timeout_sec=300)
         except UnsupportedSiteError as e:
             return {"status": "skipped", "url": url, "error": str(e)}
         except Exception as e:
             return {"status": "failed", "url": url, "error": str(e)}
+        finally:
+            try:
+                pc.close()
+            except Exception:
+                pass
+
+    def _scrape_one(url: str) -> dict:
+        try:
+            # Tier 1：keep_driver=True，批次重用直連 driver，不在每篇結束時 quit。
+            result = crawler.scrape(url, hard_timeout_sec=300, keep_driver=True)
+        except UnsupportedSiteError as e:
+            return {"status": "skipped", "url": url, "error": str(e)}
+        except Exception as e:
+            return {"status": "failed", "url": url, "error": str(e)}
+        # Tier 2/3：env 控制、預設關閉；未設定時直接回傳 Tier 1 結果。
+        try:
+            from tiered_fallback import run_tier23
+            return run_tier23(url, result, gemini_api_key,
+                              proxied_scrape_fn=_proxied_scrape, log_fn=_log)
+        except Exception as e:
+            _log(f"[Tier2/3] 協調失敗（回退 Tier1）：{e}")
+            return result
 
     try:
         total = len(urls)

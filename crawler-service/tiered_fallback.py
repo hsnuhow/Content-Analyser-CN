@@ -147,6 +147,60 @@ def is_gemini_url_fallback_enabled() -> bool:
     return os.environ.get("ENABLE_GEMINI_URL_FALLBACK", "") == "1"
 
 
+# 視為「需要升級到下一層」的條件：失敗，或成功但內文過短（疑似只抓到導語）
+TIER_UPGRADE_MIN_LEN = 200
+
+
+def needs_upgrade(result: dict, min_len: int = TIER_UPGRADE_MIN_LEN) -> bool:
+    if not result:
+        return True
+    if result.get("status") == "skipped":
+        return False  # skip（需登入等）升級也沒用
+    if result.get("status") != "success":
+        return True
+    return len(result.get("content") or "") < min_len
+
+
+def run_tier23(url: str, tier1_result: dict, gemini_api_key: str,
+               proxied_scrape_fn=None, log_fn=None) -> dict:
+    """分層協調（Tier 2 → 3）。輸入 Tier 1 結果，需要時依序升級。
+
+    - Tier 2：Gemini URL 直讀（env ENABLE_GEMINI_URL_FALLBACK + 有 key）。
+    - Tier 3：呼叫 proxied_scrape_fn(url)（由呼叫端提供，內部用 use_proxy=True 的 crawler）。
+
+    Tier 2/3 皆 env 控制、預設關閉：未設定時直接回傳 Tier 1 結果，行為不變。
+    """
+    if not needs_upgrade(tier1_result):
+        return tier1_result
+
+    # ── Tier 2 ──
+    try:
+        if is_gemini_url_fallback_enabled() and gemini_api_key:
+            text = gemini_url_read(url, gemini_api_key, log_fn=log_fn)
+            if len(text) >= TIER_UPGRADE_MIN_LEN:
+                return {"status": "success", "url": url,
+                        "title": (tier1_result or {}).get("title") or "(Tier2 Gemini)",
+                        "content": text, "length": len(text), "tier": 2}
+    except Exception as e:
+        if log_fn:
+            log_fn(f"[Tier2] 協調失敗：{e}")
+
+    # ── Tier 3 ──
+    try:
+        if load_proxy_config() is not None and proxied_scrape_fn is not None:
+            if log_fn:
+                log_fn(f"[Tier3] Tier1/2 未達標，改用 Webshare 代理重試：{url}")
+            proxied = proxied_scrape_fn(url)
+            if not needs_upgrade(proxied):
+                proxied["tier"] = 3
+                return proxied
+    except Exception as e:
+        if log_fn:
+            log_fn(f"[Tier3] 協調失敗：{e}")
+
+    return tier1_result
+
+
 def gemini_url_read(url: str, api_key: str, log_fn=None) -> str:
     """Tier 2：把 URL 交給 Gemini，請其回傳該頁面的正文純文字。
 
