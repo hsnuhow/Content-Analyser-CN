@@ -52,19 +52,33 @@
         </div>
       </div>
 
-      {# 資料集列表 #}
+      {# 資料集列表（可勾選 → 合併分析）#}
+      <form method="POST" action="{{ url_for('project_bp.analyse_combined', pid=pid) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">② 資料集 → 一鍵分析（{{ datasets|length }}）</div>
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+          <span>② 資料集 → 一鍵分析（{{ datasets|length }}）</span>
+          <small class="text-muted fw-normal">勾選多個可合併分析</small>
+        </div>
         <div class="list-group list-group-flush">
           {% if datasets %}
           {% for ds in datasets %}
           <div class="list-group-item">
             <div class="d-flex justify-content-between align-items-center">
-              <div>
-                <a href="{{ url_for('project_bp.dataset_detail', pid=pid, did=ds.id) }}"
-                   class="text-decoration-none fw-bold">{{ ds.name }}</a>
-                <div class="text-muted small">
-                  {{ ds.item_count }} 個網址{% if ds.succeeded is defined %} · 成功 {{ ds.succeeded }}{% endif %}
+              <div class="d-flex align-items-center gap-2">
+                {% if ds.status == 'completed' %}
+                <input class="form-check-input mt-0" type="checkbox" name="dataset_ids" value="{{ ds.id }}"
+                       title="勾選以合併分析">
+                {% else %}
+                <span style="width:1rem;display:inline-block"></span>
+                {% endif %}
+                <div>
+                  <a href="{{ url_for('project_bp.dataset_detail', pid=pid, did=ds.id) }}"
+                     class="text-decoration-none fw-bold">{{ ds.name }}</a>
+                  {% if ds.origin == 'manual' %}<span class="badge bg-info text-dark">手動</span>{% endif %}
+                  <div class="text-muted small">
+                    {{ ds.item_count }} 筆{% if ds.succeeded is defined %} · 成功 {{ ds.succeeded }}{% endif %}
+                  </div>
                 </div>
               </div>
               <div class="d-flex align-items-center gap-2">
@@ -82,8 +96,51 @@
           </div>
           {% endfor %}
           {% else %}
-          <div class="list-group-item text-muted text-center py-4">尚無資料集。先在上方輸入網址爬取。</div>
+          <div class="list-group-item text-muted text-center py-4">尚無資料集。先在上方輸入網址爬取，或下方手動匯入。</div>
           {% endif %}
+        </div>
+        {% if datasets %}
+        <div class="card-footer d-flex align-items-center gap-2">
+          <input type="text" name="report_title" class="form-control form-control-sm" style="max-width:280px"
+                 placeholder="合併分析報告標題（可留空）">
+          <button type="submit" class="btn btn-sm btn-primary"
+                  {% if not project.llm_config.api_key %}disabled{% endif %}>勾選的資料集 → 合併分析</button>
+          {% if not project.llm_config.api_key %}<small class="text-warning">需先設定 LLM Key</small>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+      </form>
+
+      {# 手動 / 上傳匯入資料集（Cowork 蒐集內容）#}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <a class="text-decoration-none text-dark" data-bs-toggle="collapse" href="#manualImport">
+            ▸ 手動匯入資料集（Claude Cowork / 外部蒐集）
+          </a>
+        </div>
+        <div class="collapse" id="manualImport">
+          <div class="card-body">
+            <p class="text-muted small mb-3">
+              貼上或上傳 JSON 陣列，每筆 <code>{"url","title","text"}</code>，直接建立資料集（不經爬蟲），可照常分析。
+              適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。
+            </p>
+            <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
+                  enctype="multipart/form-data">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="mb-2">
+                <input type="text" name="name" class="form-control" placeholder="資料集名稱" required>
+              </div>
+              <div class="mb-2">
+                <textarea name="items_json" class="form-control font-monospace" rows="5"
+                          placeholder='[{"url":"https://...","title":"標題","text":"內文..."}]'></textarea>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small text-muted mb-1">或上傳 JSON 檔（擇一）</label>
+                <input type="file" name="file" accept=".json,application/json" class="form-control form-control-sm">
+              </div>
+              <button type="submit" class="btn btn-outline-primary btn-sm">匯入資料集</button>
+            </form>
+          </div>
         </div>
       </div>
 

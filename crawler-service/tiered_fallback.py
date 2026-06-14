@@ -30,23 +30,58 @@ from typing import Optional, Dict
 # Tier 3：住宅/資料中心代理（provider-agnostic：Decodo / Webshare 等）
 # ──────────────────────────────────────────────────────────────────────
 
+# Firestore flag 快取（避免每次 scrape 都讀 Firestore）
+_tier3_flag_cache = {"val": None, "ts": 0.0}
+
+
+def _read_tier3_firestore_flag() -> Optional[bool]:
+    """讀 Firestore `system/config.tier3_enabled`（admin 後台開關），60s 快取。
+
+    回傳 True/False = 後台明確設定；None = 未設定（交給 env 決定）。
+    讀取失敗（Firestore 不可用）回 None，不影響既有 env 行為。
+    """
+    import time as _time
+    now = _time.time()
+    if now - _tier3_flag_cache["ts"] < 60:
+        return _tier3_flag_cache["val"]
+    val: Optional[bool] = None
+    try:
+        from firebase_admin import firestore as _fs
+        doc = _fs.client().collection("system").document("config").get()
+        if doc.exists:
+            v = doc.to_dict().get("tier3_enabled")
+            if isinstance(v, bool):
+                val = v
+    except Exception:
+        val = None
+    _tier3_flag_cache["val"] = val
+    _tier3_flag_cache["ts"] = now
+    return val
+
+
 def load_proxy_config() -> Optional[Dict[str, str]]:
-    """從環境變數載入 Tier 3 代理設定（provider-agnostic）。
+    """載入 Tier 3 代理設定（provider-agnostic）。
 
-    回傳 None 表示未啟用（預設）；否則回傳 {host, port, user, pass}。
-    優先讀通用 `PROXY_*`（適用 Decodo 等任何 provider），找不到才回退 `WEBSHARE_*`（相容）。
-    需 `PROXY_ENABLED`（或 `WEBSHARE_PROXY_ENABLED`）== "1" 且 host/port 齊全。
+    開關（on/off）優先序：Firestore `system/config.tier3_enabled`（admin 後台 toggle）
+      > env `PROXY_ENABLED` / `WEBSHARE_PROXY_ENABLED`。憑證一律來自 env。
+    回傳 None = 未啟用；否則 {host, port, user, pass, provider}。
 
-    Decodo（residential）範例：
-      PROXY_ENABLED=1
-      PROXY_HOST=gate.decodo.com   PROXY_PORT=7000   （輪換端點，依方案調整）
-      PROXY_USER=<decodo 帳號>      PROXY_PASS=<decodo 密碼>
+    Decodo（residential）範例 env：
+      PROXY_HOST=gate.decodo.com  PROXY_PORT=10001  PROXY_USER=...  PROXY_PASS=...
+    （開關可由後台 toggle 控制，不必重建 revision。）
     """
     def _get(generic: str, legacy: str) -> str:
         return (os.environ.get(generic) or os.environ.get(legacy) or "").strip()
 
-    enabled = _get("PROXY_ENABLED", "WEBSHARE_PROXY_ENABLED")
-    if enabled != "1":
+    env_enabled = _get("PROXY_ENABLED", "WEBSHARE_PROXY_ENABLED") == "1"
+    flag = _read_tier3_firestore_flag()
+    if flag is True:
+        enabled = True
+    elif flag is False:
+        enabled = False
+    else:
+        enabled = env_enabled  # 後台未設定 → 用 env
+    if not enabled:
         return None
     host = _get("PROXY_HOST", "WEBSHARE_PROXY_HOST")
     port = _get("PROXY_PORT", "WEBSHARE_PROXY_PORT")

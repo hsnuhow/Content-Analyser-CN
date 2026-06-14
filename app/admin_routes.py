@@ -16,12 +16,21 @@ from flask import (Blueprint, render_template, session, redirect,
                    url_for, request, flash, jsonify)
 
 from .services import (
-    get_secret, set_secret, get_admin_email,
+    db, get_secret, set_secret, get_admin_email,
     list_all_users, approve_user, reject_user,
     create_api_key, list_api_keys, revoke_api_key, reactivate_api_key,
 )
 from .crawler_client import check_crawler_health
 from .analysis_client import check_health as check_analysis_health
+
+
+def _get_tier3_enabled() -> bool:
+    """讀 Firestore system/config.tier3_enabled（爬蟲 Tier 3 代理開關），預設 False。"""
+    try:
+        doc = db.collection('system').document('config').get()
+        return bool(doc.exists and doc.to_dict().get('tier3_enabled'))
+    except Exception:
+        return False
 
 bp = Blueprint('admin_bp', __name__, url_prefix='/admin')
 
@@ -69,7 +78,26 @@ def admin_dashboard():
         crawler_health=crawler_health,
         analysis_health=analysis_health,
         pending_count=len(pending_users),
+        tier3_enabled=_get_tier3_enabled(),
     )
+
+
+@bp.route('/tier3-toggle', methods=['POST'])
+@admin_required
+def tier3_toggle():
+    """切換爬蟲 Tier 3 代理開關（寫 Firestore system/config.tier3_enabled）。
+
+    crawler 端 load_proxy_config 會讀此 flag（60s 快取），不必重建 revision。
+    注意：開啟後仍需 crawler env 有代理憑證（PROXY_HOST/PORT/USER/PASS）才實際生效。
+    """
+    enable = request.form.get('enable') == '1'
+    try:
+        db.collection('system').document('config').set(
+            {'tier3_enabled': enable}, merge=True)
+        flash(f'Tier 3 代理已{"開啟" if enable else "關閉"}（最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'切換失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.admin_dashboard'))
 
 
 # ──────────────────────────────────────────────────────────────────────

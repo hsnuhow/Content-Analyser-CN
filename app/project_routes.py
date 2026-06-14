@@ -487,6 +487,89 @@ def create_dataset(pid, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
 
+@bp.route('/<pid>/datasets/manual', methods=['POST'])
+@project_access_required(min_role='editor')
+def create_manual_dataset(pid, project, role):
+    """手動/上傳建立資料集（不經爬蟲）：供 Claude Cowork 等外部蒐集的內容匯入。
+
+    輸入：name + items_json（貼上）或上傳檔 file（皆為 JSON 陣列）。
+    每筆格式：{"url","title","text"}（text 亦相容 content）。
+    直接建立 status=completed 的資料集，items 與爬蟲結果同 schema，可照常一鍵分析。
+    """
+    name = request.form.get('name', '').strip()
+    raw = request.form.get('items_json', '').strip()
+    # 上傳檔優先
+    up = request.files.get('file')
+    if up and up.filename:
+        try:
+            raw = up.read().decode('utf-8', 'ignore').strip()
+        except Exception:
+            flash('上傳檔讀取失敗，請確認為 UTF-8 JSON。', 'danger')
+            return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    if not name:
+        flash('請填寫資料集名稱。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if not raw:
+        flash('請貼上 JSON 或上傳檔案。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list) or not data:
+            raise ValueError('內容必須是非空 JSON 陣列')
+        if len(data) > 100:
+            raise ValueError('每個資料集最多 100 筆')
+    except Exception as e:
+        flash(f'JSON 解析失敗：{e}', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    items = []
+    for i, it in enumerate(data):
+        if not isinstance(it, dict):
+            flash(f'第 {i+1} 筆不是物件。', 'danger')
+            return redirect(url_for('project_bp.project_detail', pid=pid))
+        text = str(it.get('text') or it.get('content') or '').strip()
+        title = str(it.get('title') or '').strip() or f'項目 {i+1}'
+        url = str(it.get('url') or '').strip()
+        if not text:
+            continue  # 跳過無內文的項目
+        text = text[:50000]
+        items.append({
+            'url': url,
+            'title': title,
+            'content': text,
+            'length': len(text),
+            'status': 'success',
+            'source': 'manual',
+        })
+    if not items:
+        flash('沒有可用項目（每筆需有 text/content）。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    succeeded = len(items)
+    ds_ref = db.collection('projects').document(pid).collection('datasets').document()
+    ds_ref.set({
+        'id': ds_ref.id,
+        'name': name,
+        'source_urls': [it['url'] for it in items if it['url']],
+        'crawl_job_id': None,
+        'status': 'completed',
+        'progress': 100,
+        'log': f'手動匯入 {succeeded} 筆',
+        'item_count': succeeded,
+        'succeeded': succeeded,
+        'failed': 0,
+        'items': items,
+        'origin': 'manual',
+        'created_by': current_user_email(),
+        'created_at': firestore.SERVER_TIMESTAMP,
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    })
+    flash(f'資料集「{name}」已匯入 {succeeded} 筆，可直接分析。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
+
+
 def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
     """若 dataset 仍在 crawling，向 crawler 拉 job 最新狀態並同步回 Firestore。
     回傳最新 dataset dict（含 id）；找不到回傳 None。
@@ -622,6 +705,87 @@ def analyse_dataset(pid, did, project, role):
         'source_dataset': did,
     })
     flash(f'已從資料集「{dataset.get("name")}」提交分析（{len(contents)} 篇）。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
+
+
+@bp.route('/<pid>/analyses/combined', methods=['POST'])
+@project_access_required(min_role='editor')
+def analyse_combined(pid, project, role):
+    """合併多個資料集的成功項目，提交一份分析。
+
+    例：爬蟲時尚媒體資料集 + Cowork 蒐集的 Dcard 資料集合併分析。
+    form: dataset_ids（多選）+ report_title。
+    """
+    dataset_ids = request.form.getlist('dataset_ids')
+    if not dataset_ids:
+        flash('請至少勾選一個資料集。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    contents = []
+    used_names = []
+    for did in dataset_ids:
+        doc = (db.collection('projects').document(pid)
+               .collection('datasets').document(did).get())
+        if not doc.exists:
+            continue
+        ds = doc.to_dict()
+        if ds.get('status') != 'completed':
+            continue
+        used_names.append(ds.get('name', did))
+        for it in ds.get('items', []):
+            if it.get('status') == 'success' and it.get('content'):
+                contents.append({
+                    'url': it.get('url', ''),
+                    'title': it.get('title', ''),
+                    'text': it.get('content', ''),
+                    'source_type': 'media',
+                })
+    if not contents:
+        flash('勾選的資料集中沒有可分析的成功項目（或尚未完成）。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if len(contents) > 100:
+        flash(f'合併後共 {len(contents)} 篇，超過單次分析上限 100 篇，請減少資料集。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    llm_config = project.get('llm_config', {})
+    if not llm_config.get('api_key'):
+        flash('尚未設定 LLM API Key，請先至專案設定填入。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    report_title = (request.form.get('report_title', '').strip()
+                    or f'合併分析：{"、".join(used_names)[:50]}')
+
+    result = submit_analysis(
+        report_title=report_title,
+        contents=contents,
+        llm_provider=llm_config.get('provider', 'gemini'),
+        llm_model=llm_config.get('model', 'gemini-2.5-flash'),
+        llm_api_key=llm_config.get('api_key'),
+    )
+    if 'error' in result:
+        flash(f'提交分析失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    job_id = result.get('job_id')
+    analysis_ref = (db.collection('projects').document(pid)
+                    .collection('analyses').document())
+    analysis_ref.set({
+        'id': analysis_ref.id,
+        'job_id': job_id,
+        'report_title': report_title,
+        'status': 'pending',
+        'progress': 0,
+        'log': '任務已提交，等待分析引擎處理...',
+        'n_articles': len(contents),
+        'llm_provider': llm_config.get('provider', 'gemini'),
+        'llm_model': llm_config.get('model', 'gemini-2.5-flash'),
+        'submitted_by': current_user_email(),
+        'submitted_at': firestore.SERVER_TIMESTAMP,
+        'completed_at': None,
+        'result_markdown': None,
+        'source_dataset': ','.join(dataset_ids),
+    })
+    flash(f'已合併 {len(used_names)} 個資料集提交分析（{len(contents)} 篇）。', 'success')
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
 
