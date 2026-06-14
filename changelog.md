@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-14 CHANEL 資料集實測修正：Hearst 國際網域 + Vogue 列表頁誤判（已部署 00029-zsh）
+- 重爬 test 專案 CHANEL 資料集（22 網址）找實際錯誤，修正並線上驗證：
+- **Fix（Hearst 國際網域 indicator）**：CHANEL 用 `www.elle.com/tw`、`cosmopolitan.com/tw`、
+  `harpersbazaar.com/tw`（Hearst 國際站 HTTPS）≠ 模板 indicator `*.com.tw`（台灣站）→ 不命中、落啟發式過短。
+  三個 Hearst 模板補國際網域 indicator。線上實測：elle 542→**5068**、cosmo 1742→**6288**、bazaar 714→**8369**。
+- **Fix（Vogue 文章誤判列表頁被跳過）**：Vogue/GQ 單篇文章 JS 渲染後載入多張關聯 `<article>` 卡片，
+  觸發「≥5 article = 列表頁」誤判 → 整篇 skip。scrape() 列表判定後若有 JSON-LD articleBody（≥200 字）
+  或 `og:type=article` 則否決，視為單篇。線上實測 3 篇 vogue：oaoabeauty 1868、2026-apr 2489、
+  content-38996 579（原本 skip/fail → 全 success）。
+- **已知未修（待決策）**：Instagram ×4 回假 success（登入牆 ~400 字「Instagram」頁，非貼文）；
+  threads 57 字（登入牆）；adaymag Chrome crash「session not created」（重頁面不穩定，crawler 會 recover 報 failed）；
+  dcard ×3 正常 skip（需登入）。
+- 部署 00027→00029（皆唯一 tag）。Tier 3（Webshare）維持啟用。
+
 ## 2026-06-14 Webshare Tier 3 實測 + Hearst CMS 模板修正 + 瀏覽器錯誤頁偵測（已部署 00027-8vs）
 - **Tier 3 實測通過**：用 Webshare 免費 Rotating Proxy Endpoint（`p.webshare.io:80`，10 datacenter IP）實測：
   curl 驗證 IP 輪換（38.x→84.x）；爬蟲端 log 確認 `[Tier3] Webshare proxy（含驗證）已掛載`、
