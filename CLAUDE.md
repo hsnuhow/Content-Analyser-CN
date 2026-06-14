@@ -859,7 +859,9 @@ users/{email}
 projects/{project_id}             頂層，多人協作
   title / description / owner: string
   members: map                    {email: "editor"|"viewer"}
-  llm_config: map                 {provider, model, api_key}（Owner 設定）
+  llm_config: map                 {provider, model, api_key, temperature, thinking, search_extent}（Owner 設定）
+  archived: bool                  封存（Editor/Viewer 不可進入，僅 Owner/Admin）
+  archived_at: timestamp
   analyses/{analysis_id}
     report_title / status / progress / log
     job_id                        對應 analysis-pipeline 的 job

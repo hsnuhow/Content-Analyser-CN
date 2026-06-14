@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-14 專案操作：編輯/更名 + 封存 + 刪除 + 強制刪除（待部署）
+content-analyser 專案層級操作補強（Owner/Admin）。
+
+- **編輯/更名**：`POST /<pid>/edit` 改 title + description。
+- **封存/還原**：`POST /<pid>/archive`（`archived` 旗標）。封存後 **Editor/Viewer 無法進入**
+  （`project_access_required` 加 gate），Owner/Admin 仍可進入；列表中**灰階呈現**+「已封存」標記+還原鈕。
+- **刪除**：`POST /<pid>/delete`（Owner/Admin）。**先檢查無執行中相依工作**（dataset crawling / analysis pending|running）；
+  有則擋下提示，無則級聯刪除（datasets + analyses + 專案）。
+- **強制刪除**：`POST /<pid>/force-delete`（**僅系統 Admin**）。處理卡住的專案：先取消所有執行中工作再整個刪除。
+- Firestore：`projects/{pid}` 加 `archived`(bool) / `archived_at`。usage_log 記 edit/archive/unarchive/delete/force_delete_project。
+- UI：project_detail 新增「專案管理」卡（編輯/封存/刪除/強制刪除）；projects 列表封存灰階+還原。
+
 ## 2026-06-14 B2：search-extent 接入分析報告 §7（真實搜尋接地，待部署）
 把 search-extent 串進 analysis-pipeline，報告 §7 延伸關鍵字改用 Google 真實搜尋量佐證。
 

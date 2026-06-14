@@ -338,6 +338,49 @@
       </div>
       {% endif %}
 
+      {# 專案管理（Owner/Admin）：編輯/更名、封存、刪除、強制刪除 #}
+      {% if role == 'owner' %}
+      <div class="card shadow-sm mt-4 border-warning">
+        <div class="card-header fw-semibold">專案管理</div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('project_bp.edit_project', pid=pid) }}" class="mb-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-label small fw-semibold mb-1">專案名稱</label>
+            <input type="text" name="title" class="form-control form-control-sm mb-2"
+                   value="{{ project.title }}" maxlength="200" required>
+            <label class="form-label small fw-semibold mb-1">描述</label>
+            <textarea name="description" class="form-control form-control-sm mb-2" rows="2"
+                      maxlength="2000">{{ project.description }}</textarea>
+            <button type="submit" class="btn btn-sm btn-primary w-100">儲存名稱與描述</button>
+          </form>
+          <hr>
+          <form method="POST" action="{{ url_for('project_bp.archive_project', pid=pid) }}" class="mb-1">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="archive" value="{% if project.archived %}0{% else %}1{% endif %}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary w-100">
+              {% if project.archived %}↩ 還原專案{% else %}📦 封存專案{% endif %}
+            </button>
+          </form>
+          <div class="form-text mb-3">封存後 Editor/Viewer 無法進入，僅 Owner/管理員可存取與還原。</div>
+          <form method="POST" action="{{ url_for('project_bp.delete_project', pid=pid) }}" class="mb-1"
+                onsubmit="return confirm('確定刪除整個專案？將連同所有資料集與分析一併刪除，不可還原。');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-danger w-100">🗑 刪除整個專案</button>
+          </form>
+          <div class="form-text">有執行中的爬取/分析時無法刪除（需先停止）。</div>
+          {% if is_admin %}
+          <hr>
+          <form method="POST" action="{{ url_for('project_bp.force_delete_project', pid=pid) }}" class="mb-1"
+                onsubmit="return confirm('【管理員強制刪除】將取消所有執行中工作並刪除整個專案，不可還原。確定？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-danger w-100">⚠ 強制刪除（管理員）</button>
+          </form>
+          <div class="form-text text-danger">用於卡住的專案：強制取消執行中工作並刪除。</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
     </div>
   </div>
 </div>

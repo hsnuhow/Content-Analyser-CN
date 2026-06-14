@@ -109,6 +109,10 @@ def project_access_required(min_role: str = 'viewer'):
             role = get_user_role(project, current_user_email())
             if not role or ROLE_LEVEL.get(role, 0) < ROLE_LEVEL.get(min_role, 1):
                 abort(403)
+            # 封存 gate：封存後僅 Owner/Admin（role=='owner'）可進入，Editor/Viewer 擋下。
+            if project.get('archived') and role != 'owner':
+                flash('此專案已封存，僅 Owner 或管理員可存取。', 'warning')
+                return redirect(url_for('project_bp.list_projects'))
             kwargs['project'] = project
             kwargs['role'] = role
             return f(*args, **kwargs)
@@ -138,9 +142,10 @@ def list_projects():
         if d.id not in seen_ids and email in data.get('members', {}):
             projects.append(data)
 
-    # 按建立時間排序
+    # 按建立時間排序；封存的排到最後（穩定排序，仍灰階顯示於同一列表）
     projects.sort(key=lambda p: p.get('created_at') or '', reverse=True)
-    return render_template('projects.html', projects=projects)
+    projects.sort(key=lambda p: 1 if p.get('archived') else 0)
+    return render_template('projects.html', projects=projects, is_admin=is_admin())
 
 
 @bp.route('/new', methods=['GET'])
@@ -208,7 +213,8 @@ def project_detail(pid, project, role):
 
     return render_template('project_detail.html',
                            project=project, pid=pid,
-                           analyses=analyses, datasets=datasets, role=role)
+                           analyses=analyses, datasets=datasets, role=role,
+                           is_admin=is_admin())
 
 
 @bp.route('/<pid>/settings', methods=['POST'])
@@ -282,6 +288,112 @@ def remove_member(pid, project, role):
         })
         flash(f'已移除成員 {member_email}。', 'success')
     return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 專案操作：編輯/更名、封存/還原、刪除、強制刪除
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/<pid>/edit', methods=['POST'])
+@project_access_required(min_role='owner')
+def edit_project(pid, project, role):
+    """編輯專案名稱與描述（更名即改 title）。"""
+    title = request.form.get('title', '').strip()
+    description = request.form.get('description', '').strip()
+    if not title:
+        flash('專案名稱不可空白。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    db.collection('projects').document(pid).update({
+        'title': title[:200],
+        'description': description[:2000],
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    })
+    log_usage('edit_project', detail=title, project_id=pid)
+    flash('專案資料已更新。', 'success')
+    return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
+@bp.route('/<pid>/archive', methods=['POST'])
+@project_access_required(min_role='owner')
+def archive_project(pid, project, role):
+    """封存或還原專案（Owner/Admin）。封存不刪資料，僅限制 Editor/Viewer 進入。"""
+    archive = request.form.get('archive') == '1'
+    update = {'archived': archive, 'updated_at': firestore.SERVER_TIMESTAMP}
+    if archive:
+        update['archived_at'] = firestore.SERVER_TIMESTAMP
+    db.collection('projects').document(pid).update(update)
+    log_usage('archive_project' if archive else 'unarchive_project',
+              detail=project.get('title', ''), project_id=pid)
+    flash('專案已封存。' if archive else '專案已還原。', 'success')
+    if archive:
+        return redirect(url_for('project_bp.list_projects'))
+    return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
+def _project_active_jobs(pid: str) -> list:
+    """列出專案內執行中的相依工作（dataset crawling / analysis pending|running）。"""
+    base = db.collection('projects').document(pid)
+    active = []
+    for d in base.collection('datasets').stream():
+        data = d.to_dict() or {}
+        if data.get('status') == 'crawling':
+            active.append(('資料集', data.get('name', d.id), data.get('crawl_job_id')))
+    for a in base.collection('analyses').stream():
+        data = a.to_dict() or {}
+        if data.get('status') in ('pending', 'running'):
+            active.append(('分析', data.get('report_title', a.id), data.get('job_id')))
+    return active
+
+
+def _cascade_delete_project(pid: str, cancel: bool = False) -> None:
+    """刪除專案及其所有 datasets / analyses。cancel=True 時先取消執行中工作（強制刪除用）。"""
+    base = db.collection('projects').document(pid)
+    for d in base.collection('datasets').stream():
+        data = d.to_dict() or {}
+        if cancel and data.get('status') == 'crawling' and data.get('crawl_job_id'):
+            try:
+                cancel_crawl(data['crawl_job_id'])
+            except Exception:
+                pass
+        d.reference.delete()
+    for a in base.collection('analyses').stream():
+        data = a.to_dict() or {}
+        if cancel and data.get('status') in ('pending', 'running') and data.get('job_id'):
+            try:
+                cancel_analysis(data['job_id'])
+            except Exception:
+                pass
+        a.reference.delete()
+    base.delete()
+
+
+@bp.route('/<pid>/delete', methods=['POST'])
+@project_access_required(min_role='owner')
+def delete_project(pid, project, role):
+    """刪除整個專案（Owner/Admin）。先檢查無執行中相依工作，才允許級聯刪除。"""
+    active = _project_active_jobs(pid)
+    if active:
+        names = '、'.join(f'{t}「{n}」' for t, n, _ in active[:5])
+        more = '…' if len(active) > 5 else ''
+        flash(f'此專案有 {len(active)} 個執行中工作（{names}{more}），無法刪除。'
+              '請先停止這些工作，或由管理員強制刪除。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    _cascade_delete_project(pid, cancel=False)
+    log_usage('delete_project', detail=project.get('title', ''), project_id=pid)
+    flash('專案及其所有資料集與分析已刪除。', 'success')
+    return redirect(url_for('project_bp.list_projects'))
+
+
+@bp.route('/<pid>/force-delete', methods=['POST'])
+@project_access_required(min_role='owner')
+def force_delete_project(pid, project, role):
+    """強制刪除卡住的專案（僅系統 Admin）。先取消所有執行中工作，再整個刪除。"""
+    if not is_admin():
+        abort(403)
+    _cascade_delete_project(pid, cancel=True)
+    log_usage('force_delete_project', detail=project.get('title', ''), project_id=pid)
+    flash('已強制取消所有執行中工作並刪除整個專案。', 'warning')
+    return redirect(url_for('project_bp.list_projects'))
 
 
 # ──────────────────────────────────────────────────────────────────────

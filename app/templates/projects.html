@@ -11,10 +11,14 @@
   {% if projects %}
   <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
     {% for p in projects %}
+    {% set can_manage = (p.owner == user.email or is_admin) %}
     <div class="col">
-      <div class="card h-100 shadow-sm">
+      <div class="card h-100 shadow-sm{% if p.archived %} opacity-50 border-secondary{% endif %}">
         <div class="card-body">
-          <h5 class="card-title">{{ p.title }}</h5>
+          <h5 class="card-title">
+            {{ p.title }}
+            {% if p.archived %}<span class="badge bg-secondary">已封存</span>{% endif %}
+          </h5>
           {% if p.description %}
           <p class="card-text text-muted small">{{ p.description }}</p>
           {% endif %}
@@ -26,10 +30,23 @@
             &nbsp;{{ p.members|length }} 位成員
           </div>
         </div>
-        <div class="card-footer bg-transparent">
+        <div class="card-footer bg-transparent d-flex gap-2">
+          {% if p.archived %}
+            {% if can_manage %}
+            <a href="{{ url_for('project_bp.project_detail', pid=p.id) }}" class="btn btn-sm btn-outline-secondary flex-grow-1">檢視</a>
+            <form method="POST" action="{{ url_for('project_bp.archive_project', pid=p.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="archive" value="0">
+              <button type="submit" class="btn btn-sm btn-outline-success">還原</button>
+            </form>
+            {% else %}
+            <span class="btn btn-sm btn-outline-secondary w-100 disabled">已封存（僅 Owner/管理員可存取）</span>
+            {% endif %}
+          {% else %}
           <a href="{{ url_for('project_bp.project_detail', pid=p.id) }}" class="btn btn-sm btn-outline-primary w-100">
             進入專案
           </a>
+          {% endif %}
         </div>
       </div>
     </div>
