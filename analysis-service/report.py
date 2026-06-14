@@ -70,8 +70,19 @@ def _section_clusters(clusters: Dict) -> str:
     ]
     for g in groups:
         articles = g.get("articles", [])
-        lines.append(f"### 主題群 {g['cluster_id'] + 1}（{len(articles)} 篇）")
+        label = g.get("label", "")
+        heading = f"### 主題群 {g['cluster_id'] + 1}"
+        if label:
+            heading += f"：{label}"
+        heading += f"（{len(articles)} 篇）"
+        lines.append(heading)
         lines.append("")
+        if g.get("description"):
+            lines.append(f"*{g['description']}*")
+            lines.append("")
+        if g.get("keywords"):
+            lines.append("**代表詞彙：** " + "、".join(g["keywords"]))
+            lines.append("")
         for a in articles:
             title = a.get("title") or a.get("url", "")
             url = a.get("url", "")

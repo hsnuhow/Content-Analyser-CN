@@ -137,6 +137,13 @@ def run_analysis(job_id: str, report_title: str,
                 nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
                                "clusters": {"clusters": [], "n_clusters": 0}}
 
+        # ── 為主題群生成 LLM 描述（label + 一句話定位）──
+        try:
+            _progress(78, "為語意主題群生成描述...")
+            synthesis.label_clusters(nlp_results.get("clusters", {}), llm)
+        except Exception as e:
+            _log(f"分群描述生成略過：{e}")
+
         # ── Synthesis ──
         _progress(80, "Synthesis：整合數值與質化結果，生成報告...")
         synthesis_parts = synthesis.run(

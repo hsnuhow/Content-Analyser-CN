@@ -21,6 +21,28 @@ from sklearn.preprocessing import normalize
 # jieba 靜默模式
 jieba.setLogLevel(20)
 
+# ⭐ 美妝/保養領域自訂詞典：jieba 預設詞典不懂這些複合詞，會切碎（如「維他命」→「他命」、
+#    「傳明酸」「菸鹼醯胺」「初生光采」被拆開）。預先加入，提升斷詞與關鍵字品質。
+_DOMAIN_TERMS = [
+    # 成分
+    "維他命", "維他命C", "維他命B3", "菸鹼醯胺", "傳明酸", "穀胱甘肽", "熊果素",
+    "外泌體", "玻尿酸", "神經醯胺", "視黃醇", "A醇", "杜鵑花酸", "壬二酸", "水楊酸",
+    "果酸", "杏仁酸", "甘醇酸", "乳酸", "胜肽", "角鯊烷", "積雪草", "蝦紅素",
+    "維生素C", "維生素", "左旋C", "白藜蘆醇", "麴酸", "鞣花酸", "光甘草定",
+    "AHA", "BHA", "PHA", "TXC", "B3", "VC",
+    # 功效/概念
+    "初生光采", "淨亮精萃", "淨亮精華油", "美白精華", "提亮", "透亮", "黑色素",
+    "暗沉", "蠟黃", "膚色不均", "去黃", "淡斑", "煥膚", "刷酸", "妝前乳",
+    "保養型底妝", "敏弱肌", "敏感肌", "光澤感", "白玉肌",
+    # 品牌
+    "香奈兒", "嬌蘭", "雅詩蘭黛", "資生堂", "蘭蔻", "契爾氏", "寶拉珍選",
+]
+for _t in _DOMAIN_TERMS:
+    try:
+        jieba.add_word(_t)
+    except Exception:
+        pass
+
 # 中文停用詞（常見但無語意的詞）
 _STOPWORDS = frozenset([
     '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都',
@@ -70,8 +92,11 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
 
     # 單篇時 max_df=0.95 會把所有詞（df=100%）過濾掉，改為 1.0 保留所有詞
     effective_max_df = 1.0 if len(texts) <= 1 else 0.95
+    # ⭐ ngram_range=(1,2)：同時取單詞與雙詞（「初生光采」「美白精華」），雙詞語意更明確，
+    #    對齊 REF 範本關鍵字品質。bigram 由 sklearn 在斷詞後以空白接合（如「初生 光采」）。
     vectorizer = TfidfVectorizer(
         tokenizer=_tokenize,
+        ngram_range=(1, 2),
         max_features=500,
         min_df=1,
         max_df=effective_max_df,
@@ -222,4 +247,22 @@ def run(contents: List[Dict], project_id: str,
     else:
         _log("[Path 1b] 略過（未設定 GOOGLE_CLOUD_PROJECT）")
 
+    # ⭐ 為每個主題群算「代表詞彙」：彙整該群文章的 per-article TF-IDF 關鍵字，取權重總和 Top N。
+    _attach_cluster_keywords(cluster_result, tfidf.get("per_article", []))
+
     return {"tfidf": tfidf, "clusters": cluster_result}
+
+
+def _attach_cluster_keywords(cluster_result: Dict, per_article: List[Dict],
+                             top_n: int = 8) -> None:
+    """為每個 cluster 加上 `keywords`（代表詞彙）：彙整群內文章的 TF-IDF 關鍵字權重。"""
+    kw_by_url = {a.get("url", ""): a.get("keywords", []) for a in per_article}
+    kw_by_title = {a.get("title", ""): a.get("keywords", []) for a in per_article}
+    for g in cluster_result.get("clusters", []):
+        agg: Dict[str, float] = {}
+        for art in g.get("articles", []):
+            kws = kw_by_url.get(art.get("url", "")) or kw_by_title.get(art.get("title", "")) or []
+            for k in kws:
+                agg[k["keyword"]] = agg.get(k["keyword"], 0.0) + float(k.get("weight", 0))
+        top = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        g["keywords"] = [kw for kw, _ in top]
