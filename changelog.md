@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-14 新增第 4 微服務 search-extent（B1：Ads Keyword Planner 關鍵字延伸，待部署）
+延伸服務 B 第一階段。獨立 Cloud Run 服務，尚未部署，等 Google Ads API Basic access 核准補 dev token。
+
+**search-extent（需求側情報）**：
+- 種子關鍵字（分析語意群 TF-IDF top 詞）→ `KeywordPlanIdeaService.GenerateKeywordIdeas`
+  取關聯關鍵字 + 平均搜尋量 + 競爭度。唯讀，不投放/不變更帳戶。
+- API：`GET /health`、`POST /api/expand`（X-API-Key，需 'expand' 權限）。預設語言 1018（繁中）、地區 2158（台灣）。
+- 檔案：`search-extent/`（app.py / ads_client.py / auth.py / Dockerfile / requirements.txt / README.md / gen_refresh_token.py）。
+
+**GCP 設定（已完成）**：
+- 啟用 Google Ads API（content-analyser-cn）。
+- 建 OAuth client「search-extent Ads API」(Desktop)；client_id/secret 存入 Secret Manager。
+- 已建 secrets：`ADS_CLIENT_ID`、`ADS_CLIENT_SECRET`、`ADS_LOGIN_CUSTOMER_ID`（1762473192）。
+- 待補：`ADS_REFRESH_TOKEN`（跑 gen_refresh_token.py）、`ADS_DEVELOPER_TOKEN`（等 Basic access 核准）、`SEARCH_EXTENT_API_KEY`。
+
+**架構**：Cloud Run 服務由三個增為**四個**（+search-extent）。
+
 ## 2026-06-14 資料治理四features：刪除/更名 + 孤兒清理 + 強制停止 + usage_log + LLM 精緻調配（待部署）
 四項一次開發，尚未部署。涉及三服務（新增取消/清理 API → 需重新部署 crawler 與 analysis）。
 

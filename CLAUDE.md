@@ -803,6 +803,18 @@ Content-Analyser-CN/
 }
 ```
 
+## search-extent（X-API-Key 保護，需 'expand' 權限）
+
+需求側情報服務（第 4 個 Cloud Run 服務）。種子關鍵字 → Google Ads Keyword Planner 關聯關鍵字。唯讀。
+
+| 端點 | 說明 |
+|------|------|
+| `GET /health` | 探活（含 `ads_configured`）|
+| `POST /api/expand` | `{seeds:[...], language_id?, geo_ids?, limit?}` → 關聯關鍵字 |
+
+回傳：`{status, seeds, count, ideas:[{text, avg_monthly_searches, competition, competition_index}]}`
+（預設語言 1018＝繁中、地區 2158＝台灣）。觸及 Firestore：`api_keys`（僅驗證）。
+
 ## 從 Colab / 外部工具呼叫
 
 ```python
@@ -896,6 +908,18 @@ analysis_jobs/{job_id}            非同步任務狀態
 | `ANALYSIS_API_KEY` | API 驗證金鑰 |
 | `GOOGLE_CLOUD_PROJECT` | Vertex AI Embedding + Firestore |
 
+## search-extent
+
+| 變數 | 說明 |
+|------|------|
+| `SEARCH_EXTENT_API_KEY` | API 驗證金鑰 |
+| `ADS_DEVELOPER_TOKEN` | Google Ads API developer token（Basic access）|
+| `ADS_CLIENT_ID` / `ADS_CLIENT_SECRET` | OAuth client（Desktop）|
+| `ADS_REFRESH_TOKEN` | OAuth refresh token（gen_refresh_token.py 產）|
+| `ADS_LOGIN_CUSTOMER_ID` | MCC ID（純數字 1762473192）|
+| `ADS_CUSTOMER_ID` | （選用）查詢目標帳戶，預設用 login_customer_id |
+| `GOOGLE_CLOUD_PROJECT` | Firestore（api_keys 驗證）|
+
 ## Secret Manager 操作
 
 ```bash
@@ -906,6 +930,7 @@ gcloud secrets list --format="table(name)"        # 確認（不讀值）
 ```
 
 必要 secrets：`FLASK_SECRET_KEY`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`CRAWLER_API_KEY`、`ANALYSIS_API_KEY`、`GENAI_API_KEY`
+search-extent secrets：`SEARCH_EXTENT_API_KEY`、`ADS_DEVELOPER_TOKEN`、`ADS_CLIENT_ID`、`ADS_CLIENT_SECRET`、`ADS_REFRESH_TOKEN`、`ADS_LOGIN_CUSTOMER_ID`
 
 ---
 
