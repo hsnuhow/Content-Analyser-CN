@@ -16,9 +16,11 @@ set -e
 #
 # content-crawler 的執行期環境變數（標準化：機密一律走 Secret Manager）：
 #   - 機密 → --set-secrets：CRAWLER_API_KEY / GENAI_API_KEY +
-#     住宅代理憑證 PROXY_ENABLED / PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
+#     Tier 3 代理憑證 PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
 #   - 非機密設定 → --set-env-vars：ENABLE_YOUTUBE_TRANSCRIPT
-#   本腳本完整定義 crawler 環境、不依賴 Cloud Run console 手動設定，可安全一鍵部署。
+#   - Tier 3 on/off 不在此：由後台 toggle（Firestore system/config.tier3_enabled）控制。
+#   PROXY_* 五個 secret 可由管理後台「Secret Manager 金鑰管理」直接建立/更新（不存在會自動建立），
+#   或用下方 gcloud 指令一次建立。本腳本完整定義 crawler 環境、不依賴 console 手動設定。
 #   本地除錯：proxy 憑證放 .env（已 gitignore），僅 debug 模式取用，不進正式環境。
 #
 # 前置需求：Secret Manager 中必須已建立以下 secrets：
@@ -28,8 +30,8 @@ set -e
 #   GOOGLE_CLIENT_ID  - Google OAuth Client ID
 #   GOOGLE_CLIENT_SECRET - Google OAuth Client Secret
 #   FLASK_SECRET_KEY  - Flask Session 加密金鑰
-#   PROXY_ENABLED / PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
-#                     - content-crawler 住宅代理憑證（Decodo），值由維運者建立
+#   PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
+#                     - content-crawler Tier 3 住宅代理憑證（Decodo），由後台或維運者建立
 #
 # 首次部署後，請執行：
 #   bash setup_admin.sh  (設定管理員 email)
@@ -58,7 +60,7 @@ echo ""
 echo "[前置需求] 請確認 Secret Manager 已建立以下 secrets："
 echo "  CRAWLER_API_KEY / ANALYSIS_API_KEY / GENAI_API_KEY"
 echo "  GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / FLASK_SECRET_KEY"
-echo "  PROXY_ENABLED / PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER"
+echo "  PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER（Tier 3 代理；可由後台建立）"
 echo ""
 
 read -p "是否繼續部署？(y/N) " confirm
@@ -87,7 +89,7 @@ gcloud run deploy $CRAWLER_SERVICE \
   --timeout 300 \
   --concurrency 4 \
   --set-env-vars "ENABLE_YOUTUBE_TRANSCRIPT=1" \
-  --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,PROXY_ENABLED=PROXY_ENABLED:latest,PROXY_HOST=PROXY_HOST:latest,PROXY_PORT=PROXY_PORT:latest,PROXY_USER=PROXY_USER:latest,PROXY_PASS=PROXY_PASS:latest,PROXY_PROVIDER=PROXY_PROVIDER:latest"
+  --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,PROXY_HOST=PROXY_HOST:latest,PROXY_PORT=PROXY_PORT:latest,PROXY_USER=PROXY_USER:latest,PROXY_PASS=PROXY_PASS:latest,PROXY_PROVIDER=PROXY_PROVIDER:latest"
 
 CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE \
   --region $REGION --platform managed --format 'value(status.url)')

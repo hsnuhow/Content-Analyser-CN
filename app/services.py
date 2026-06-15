@@ -65,16 +65,35 @@ def set_secret(secret_id, payload, project_id=None):
         print("[SecretManager] Project ID not found（無法更新 secret）。")
         return False
 
+    from google.api_core.exceptions import NotFound
+
     client = secretmanager.SecretManagerServiceClient()
     parent = f"projects/{project_id}/secrets/{secret_id}"
+    payload_bytes = payload.encode("UTF-8")
 
     try:
-        payload_bytes = payload.encode("UTF-8")
         client.add_secret_version(
             request={"parent": parent, "payload": {"data": payload_bytes}}
         )
         print(f"[SecretManager] Updated {secret_id}")
         return True
+    except NotFound:
+        # secret 尚未存在 → 自動建立後再加首個版本（首次設定可純後台完成，免 gcloud）。
+        # 需 service account 具 secretmanager.secrets.create 權限；無權限時走 except 回傳 False。
+        try:
+            client.create_secret(request={
+                "parent": f"projects/{project_id}",
+                "secret_id": secret_id,
+                "secret": {"replication": {"automatic": {}}},
+            })
+            client.add_secret_version(
+                request={"parent": parent, "payload": {"data": payload_bytes}}
+            )
+            print(f"[SecretManager] Created + set {secret_id}")
+            return True
+        except Exception as e:
+            print(f"[SecretManager] Failed to create {secret_id}: {e}")
+            return False
     except Exception as e:
         print(f"[SecretManager] Failed to update {secret_id}: {e}")
         return False

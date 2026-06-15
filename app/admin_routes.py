@@ -209,7 +209,11 @@ def reactivate_api_key_route(key_id):
 # Secret Manager 管理（原有功能保留）
 # ──────────────────────────────────────────────────────────────────────
 
-ALLOWED_SECRETS = ['GENAI_API_KEY', 'CRAWLER_API_KEY', 'ANALYSIS_API_KEY']
+ALLOWED_SECRETS = [
+    'GENAI_API_KEY', 'CRAWLER_API_KEY', 'ANALYSIS_API_KEY',
+    # Tier 3 住宅代理憑證（content-crawler 用；on/off 另由後台 Tier 3 toggle 控制）
+    'PROXY_HOST', 'PROXY_PORT', 'PROXY_USER', 'PROXY_PASS', 'PROXY_PROVIDER',
+]
 
 
 @bp.route('/update_secrets', methods=['POST'])
