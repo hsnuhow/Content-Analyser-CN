@@ -127,6 +127,26 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
         finally:
             ex.shutdown(wait=False)  # 不等待：卡住的 thread 待 driver 被砍後自然結束
 
+    def _force_close(c, timeout: int = 15):
+        """關閉 driver，最多等 timeout 秒；逾時直接 kill Chrome 進程。
+        避免 close() 本身卡在 wedged Chrome 而阻塞整批；也確保記憶體立即釋放。"""
+        if c is None:
+            return
+        cex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            cex.submit(c.close).result(timeout=timeout)
+        except Exception:
+            try:
+                drv = getattr(c, "driver", None)
+                proc = getattr(getattr(drv, "service", None), "process", None)
+                if proc:
+                    proc.kill()
+                    _log("close() 逾時，已強制 kill Chrome 進程")
+            except Exception:
+                pass
+        finally:
+            cex.shutdown(wait=False)
+
     try:
         total = len(urls)
         _update_job(db, job_id, status="running", progress=2, total=total,
@@ -168,11 +188,8 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             # 每 RECYCLE_EVERY 篇回收 driver，釋放 Chrome 記憶體（防長批次 OOM）。
             #   學到的選擇器已持久化於 Firestore，重建 driver 不會遺失（下次自動載回）。
             if i > 0 and i % RECYCLE_EVERY == 0:
-                try:
-                    crawler.close()
-                except Exception:
-                    pass
-                crawler = _new_crawler()
+                _force_close(crawler)          # 先關舊（超時保護）
+                crawler = _new_crawler()        # 再建新 → 全程不會兩個 Chrome 並存
                 _log(f"已回收並重建 driver（第 {i} 篇前），釋放記憶體")
 
             url = (url or "").strip()
@@ -184,15 +201,15 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                 consecutive_hangs = 0
             else:
                 _log(f"({i+1}/{total}) {url}")
+                _t0 = time.time()
                 result, hung = _scrape_with_watchdog(url)
+                # 觀測 metric：每篇耗時與是否被看門狗砍，供事後調校時限/回收頻率。
+                result["elapsed_sec"] = round(time.time() - _t0, 1)
+                result["hung"] = hung
                 if hung:
                     _log(f"⏱ 看門狗逾時，強制砍掉並重建 driver（解除卡死的 Chrome）")
-                    old = crawler
-                    crawler = _new_crawler()      # 先換新，供下一篇
-                    try:
-                        old.close()               # 砍掉卡住的 driver → 解除 hang 中的 thread
-                    except Exception:
-                        pass
+                    _force_close(crawler)         # 先砍掉卡死的 driver（釋放記憶體，避免並存）
+                    crawler = _new_crawler()       # 再建新供下一篇
                     consecutive_hangs += 1
                 else:
                     consecutive_hangs = 0

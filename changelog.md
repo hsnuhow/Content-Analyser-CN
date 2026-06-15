@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-06-16 改善：爬蟲最佳化（Phase 1+2，已部署 content-crawler 00050-k89）
+徹底研究爬蟲流程後，完成低/中風險最佳化（中高項 Fetch.enable/research 模式記入待辦監督式開發）：
+- **Phase 1（穩定/偵測）**：
+  - 已學/快取選擇器**讀取端驗證**（字數≥300+非列表+非cookie 才採用）→ 修補誤學寬選擇器污染整域。
+  - `AD_BLOCKLIST` **外部化**（`get_ad_blocklist`：內建 + Firestore `system/config.ad_blocklist`，60s 快取）→ 不重部署即可增刪。
+  - 深滾傳入 **deadline**（剩餘<30s 停滾保留抽取時間）。
+  - crawl_job 看門狗/回收改 `_force_close`（close 超時保護 + 先關舊再建新）→ **消除新舊 Chrome 並存 OOM 窗口**。
+  - 每篇結果加觀測 metric（`elapsed_sec`/`hung`）。修正誤導 log。
+- **Phase 2a（速度/未知站偵測）**：**SSR 輕量預探測**——未知站開 Chrome 前先抓靜態 HTML，JSON-LD/RSC 結構化內文≥1000字即跳過 Chrome（省 16–40s 冷啟動）。僅對未知站套用，已知模板站零影響。env `CRAWLER_SSR_PROBE=0` 可停。
+- **效能比較（CHANEL 20 網址，同資料集）**：
+
+  | 版本 | 成功率 | HUNG | 重點 |
+  |------|--------|------|------|
+  | 基準（最佳化前） | 19/20 | — | skm 403 為唯一失敗 |
+  | Phase 1 | 19/20 | 0 | 無退步、無 hang；sum 1639s |
+  | Phase 1+2 | 19/20 | 0 | sum 1628s；**tvbs（未知SSR站）68s→3.7s（18×）且 1954→3708字** |
+
+  19 個已知模板站不受 SSR 預探測影響（正確跳過）；唯一未知 SSR 站 tvbs 大幅提速且抽取更完整。
+- 回捲檢查點：`rollback-20260616-crawler-opt`（最終測試通過，未使用）。
+- 待辦（中高，監督式）：Fetch.enable 依型別封鎖、research「先研究再爬」模式（chip task_077594ed）；redirect-SSRF/同步看門狗（task_186abfdc）。
+
 ## 2026-06-15 修正：全面 code review + 安全審查問題修正（待部署四服務）
 完整審查（5 路並行深審 + 驗證）後，修正所有 Critical/High 與多數 Medium 問題。分 5 批提交：
 - **安全批 1**：SSRF（crawler `_is_safe_url` 對 domain 解析 DNS、任一 IP 落內網即拒，補「域名指向 metadata」繞過）；
