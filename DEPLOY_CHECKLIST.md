@@ -1,9 +1,17 @@
 # 部署前準備清單 — InsightOut
 
+> 📍 屬【維護支柱】，由 [MAINTENANCE.md](MAINTENANCE.md) §4 索引。本檔為**首次部署 / 全新環境**的逐步指引。
+> 日常部署、崩潰重建、回滾、腳本一覽請看 [MAINTENANCE.md](MAINTENANCE.md)。
+>
+> ⚠️ **與現況的差異（本檔成文時為三服務，現為四服務）**：
+> - 現有第四服務 **search-extent**（§7 真實接地），本清單未涵蓋，需單獨部署（阻塞於 Google Ads dev token）。
+> - Secret 除下列 6 個外，另有 **`PROXY_HOST/PORT/USER/PASS/PROVIDER`**（Tier 3 代理，可由後台建立）
+>   與 search-extent 的 **`SEARCH_EXTENT_API_KEY` / `ADS_*`**。完整清單見 [MAINTENANCE.md](MAINTENANCE.md) §3。
+
 **產品：** InsightOut（insightout.annexix.cc）  
 **GCP Project：** content-analyser-cn  
 **版本：** 1.1  
-**適用：** 首次部署三服務至 Google Cloud Run
+**適用：** 首次部署核心三服務至 Google Cloud Run（search-extent 另行部署）
 
 ---
 

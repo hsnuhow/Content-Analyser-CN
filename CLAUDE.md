@@ -4,6 +4,10 @@
 **Scope:** 本專案的全部開發、測試、部署規範。適用於 Claude Code 與所有開發協作者。  
 **Primary Rule:** 安全、可回溯、先計畫後執行。Safety, traceability, and plan-before-action come first.
 
+> **文件地圖（三支柱 + 規範）**：本檔（CLAUDE.md）是開發治理規範。其餘文件以三支柱組織：
+> 🟦 產品 [product_guideline.md](product_guideline.md)｜🟩 開發 [DEVELOPMENT.md](DEVELOPMENT.md)｜🟧 維護 [MAINTENANCE.md](MAINTENANCE.md)。
+> 部署鐵則見 [deploy.md](deploy.md)。各支柱為索引中樞，連結並說明其下文件用途；開發時依「改什麼→更新哪份」對應。
+
 ---
 
 ## ⛔ 部署鐵則（最高優先，不可弱化）

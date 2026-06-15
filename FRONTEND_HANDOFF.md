@@ -1,7 +1,9 @@
 # 前端交接文件（FRONTEND_HANDOFF.md）
 
+> 📍 屬【開發支柱】，由 [DEVELOPMENT.md](DEVELOPMENT.md) 索引。
 > 日期：2026-06-13　|　用途：現有前端版面待重新設計，交付前端工程師
-> 搭配閱讀：`CODE_REVIEW.md`（完整問題清單）、`CLAUDE.md`（架構與口令制）
+> 搭配閱讀：[CODE_REVIEW.md](CODE_REVIEW.md)（完整問題清單）、[CLAUDE.md](CLAUDE.md)（架構與口令制）
+> ⚠️ 部署/正式 revision 狀態請以 [MAINTENANCE.md](MAINTENANCE.md) 與 [changelog.md](changelog.md) 為準（本檔交接時的 revision 已過時）。
 
 ## 結論
 現有前端（Bootstrap + Jinja2 模板）**版面不符需求，將整體重新設計**。本文件記錄現況、已知 bug、UIUX 待改清單、後端對接點，供前端工程師接手。

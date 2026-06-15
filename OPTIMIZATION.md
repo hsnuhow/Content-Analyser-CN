@@ -1,7 +1,9 @@
 # 待最佳化項目 / Optimization Backlog
 
-記錄已知、但尚未處理的效能與技術債項目。每項註明：問題、影響、建議方向、優先級。
-處理完成後移到 changelog 並從本檔移除。
+> 📍 屬【開發支柱】，由 [DEVELOPMENT.md](DEVELOPMENT.md) 索引。
+> 記錄已知、但尚未處理的效能與技術債項目。每項註明：問題、影響、建議方向、優先級。
+> 處理完成後移到 [changelog.md](changelog.md) 並從本檔移除。
+> 已處理：O-1（批次重用 driver）、O-4/O-5（已加重爬未完成/全部的 recrawl 功能）；分析端已並行化加速。
 
 ---
 
@@ -54,6 +56,26 @@
 
 ### O-5. 資料集無法增量補爬
 - 資料集爬完後，若想補幾個網址，目前需新建資料集。可加「補爬」功能。
+
+---
+
+---
+
+## 2026-06-15 技術債盤點（已拆為背景任務 chip 追蹤）
+
+一次完整唯讀盤點的結論（已修正盤點 agent 的高估後）。多數已開背景任務處理：
+
+| 項目 | 嚴重度 | 說明 |
+|------|--------|------|
+| 自動化測試缺失 | High | 四服務僅 `py_compile` 把關、無 pytest；應補關鍵單元測試（白名單、LLM JSON 解析、爬蟲 client）|
+| crawler.py 巨型函式 + 硬編站台設定 | Medium | `_extract_main_text`(~309行)/`scrape()`(~235行) 過長；SITE_TEMPLATES(34站)/AD_BLOCKLIST 硬編，宜拆函式 + 移 Firestore |
+| 重複邏輯 + 散落常數 | Medium | submit-analysis ×3、LLM JSON 清理 ×2、collection 路徑/預設模型/`MAX_*` 散落 → 抽 helper + 集中常數 |
+| `except Exception: pass` 靜默吞錯 | Medium | 三服務多處吞掉根因 → 至少改為記 log |
+| 未釘版依賴 | Medium | analysis-service 的 google-genai/anthropic/openai/requests 未 pin |
+| LLM 韌性 | Low | llm_client 無 rate-limit 重試/退避；取消檢查點缺口；600s thread 逾時後仍續跑 |
+
+> 已完成（不在此清單）：H1 deploy.sh 防清 env + proxy→Secret Manager 標準化、H3 文件四服務同步、
+> 服務驗證金鑰後台鎖定 + rotate-key.sh。詳見 [changelog.md](changelog.md)。
 
 ---
 

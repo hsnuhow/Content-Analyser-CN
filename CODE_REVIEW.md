@@ -1,8 +1,11 @@
 # CODE_REVIEW.md — InsightOut 全專案程式碼審查
 
+> 📍 屬【開發支柱】，由 [DEVELOPMENT.md](DEVELOPMENT.md) 索引。
 > 日期：2026-06-13　|　方法：4 模組並行審查（content-analyser / analysis-service / crawler-service / 前端模板）
 > 維度：Security / Correctness / Performance / Maintainability / UIUX
-> ⚠️ 行號為審查當時估計，實際修正前請核對。本文件為**記錄**，尚未動工修正。
+> ⚠️ 行號為審查當時估計，實際修正前請核對。本文件為**審查記錄**。
+> 部分項目已於後續處理（如 C2 LLM JSON 解析穩健化、C3 marked+DOMPurify XSS、M2 email 大小寫、爬蟲 driver 重用/續批等），
+> 落地記錄見 [changelog.md](changelog.md)；尚未處理者持續追蹤。
 
 ## 各模組 Verdict
 

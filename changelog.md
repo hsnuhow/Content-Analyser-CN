@@ -1,6 +1,17 @@
 # Changelog
 
-## 2026-06-15 補強：鎖定服務間驗證金鑰 + 新增 rotate-key.sh 安全輪換腳本（待部署 content-analyser）
+## 2026-06-15 文件：根目錄三支柱整理（產品/開發/維護中樞）
+把雜亂的 11 個根目錄 .md 整理成「三支柱 + 索引中樞」結構，零資料刪除、保留完整開發紀錄：
+- **新增 [DEVELOPMENT.md](DEVELOPMENT.md)（開發中樞）**：索引 development_plan / CODE_REVIEW / OPTIMIZATION / SECURITY_INCIDENTS /
+  FRONTEND_HANDOFF / changelog，記錄各文件用途與「何時更新」+ 現況里程碑。
+- **新增 [MAINTENANCE.md](MAINTENANCE.md)（維護中樞）**：技術棧（四服務規格）、維護腳本一覽（deploy/rotate-key/setup_admin/devserver/setup_secret）、
+  金鑰與 Secret 全貌、日常 vs 完整部署、從零初始化（索引 DEPLOY_CHECKLIST）、崩潰復原/回滾、健康檢查。
+- README 文件導覽改為三支柱 + 四服務；CLAUDE.md 加文件地圖。
+- 被索引文件加「歸屬 + 現況」標註（保留歷史本文）：development_plan（Phase 0–4 完成）、CODE_REVIEW（部分已處理）、
+  OPTIMIZATION（補 2026-06-15 技術債盤點）、DEPLOY_CHECKLIST（標註三→四服務差異與新 secret）、SECURITY_INCIDENTS、FRONTEND_HANDOFF。
+- 規則：三支柱為索引中樞、不重複內容；開發時依「改什麼→更新哪份」對應。
+
+## 2026-06-15 補強：鎖定服務間驗證金鑰 + 新增 rotate-key.sh 安全輪換腳本（已部署 content-analyser 00024-84b）
 - **後台移除可編輯入口**：`CRAWLER_API_KEY` / `ANALYSIS_API_KEY` 是服務間共用 X-API-Key（驗證方+呼叫方各一份、值需一致），
   從 `ALLOWED_SECRETS` 與後台下拉移除（後端 update_secrets 自動拒絕 + UI 不顯示），避免隨手改一端造成中斷。
 - **新增 `rotate-key.sh <CRAWLER|ANALYSIS>`**（根目錄）：以維運者 gcloud 身分原子化輪換——產生新值 → 寫 Secret Manager →
