@@ -12,11 +12,14 @@ Path 2：LLM 直讀層
 """
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Callable, Optional
 
 from llm_client import LLMClient
 
 INTENT_BATCH_SIZE = 5   # 每批處理幾篇文章
+INTENT_MAX_WORKERS = 4  # 意圖萃取批次的並行上限（避免觸發 LLM rate limit）
 
 
 def _parse_llm_json(raw: str) -> str:
@@ -101,20 +104,39 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
     """逐批萃取每篇文章的搜尋意圖。
 
     回傳：[{url, title, search_intents: [{scenario, keywords, label}]}]
-    """
-    results: List[Dict] = []
 
-    for batch_start in range(0, len(contents), INTENT_BATCH_SIZE):
-        batch = contents[batch_start: batch_start + INTENT_BATCH_SIZE]
-        end = min(batch_start + INTENT_BATCH_SIZE, len(contents))
+    各批次彼此獨立，改為並行呼叫 LLM（上限 INTENT_MAX_WORKERS），把原本逐批序列
+    等待壓成 ≈ 最慢一批的時間。ex.map 保留批次順序，故最終 results 順序與 contents 一致。
+    """
+    starts = list(range(0, len(contents), INTENT_BATCH_SIZE))
+    batches = [contents[s: s + INTENT_BATCH_SIZE] for s in starts]
+    total = len(contents)
+
+    done = {"n": 0}
+    lock = threading.Lock()
+
+    def _work(batch: List[Dict]) -> List[Dict]:
+        res = _extract_intent_batch(batch, llm, intent_chars=intent_chars)
         if log_fn:
+            with lock:
+                done["n"] += len(batch)
+                n = done["n"]
             try:
-                log_fn(f"[Path 2a] 搜尋意圖萃取 {batch_start + 1}–{end} / {len(contents)}")
+                log_fn(f"[Path 2a] 搜尋意圖萃取 {n} / {total}")
             except Exception:
                 pass
+        return res
 
-        batch_results = _extract_intent_batch(batch, llm, intent_chars=intent_chars)
+    if batches:
+        workers = min(INTENT_MAX_WORKERS, len(batches))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            batch_results_list = list(ex.map(_work, batches))
+    else:
+        batch_results_list = []
 
+    results: List[Dict] = []
+    for batch_start, batch_results in zip(starts, batch_results_list):
+        batch = contents[batch_start: batch_start + INTENT_BATCH_SIZE]
         for j in range(len(batch)):
             article_result = batch_results[j] if j < len(batch_results) else {}
             idx = batch_start + j
@@ -201,16 +223,28 @@ def run(contents: List[Dict], llm: LLMClient,
             except Exception:
                 pass
 
+    # 2a 與 2b 彼此獨立，並行執行：意圖萃取（內部又並行多批）與質化分析同時進行，
+    # 把兩段原本序列的等待壓成 ≈ 較慢一段的時間。
     _log(f"[Path 2a] 開始逐篇搜尋意圖萃取（{len(contents)} 篇，輸入量={input_scale}）...")
-    search_intents = run_search_intent(contents, llm, log_fn=log_fn,
-                                       intent_chars=limits["intent_chars"])
+    _log(f"[Path 2b] 開始跨文章六面向質化分析（取前 {min(len(contents), limits['max_articles'])} 篇）...")
+
+    def _intent():
+        return run_search_intent(contents, llm, log_fn=log_fn,
+                                 intent_chars=limits["intent_chars"])
+
+    def _qual():
+        return run_qualitative_analysis(contents, llm,
+                                        qual_chars=limits["qual_chars"],
+                                        max_articles=limits["max_articles"])
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_intent = ex.submit(_intent)
+        f_qual = ex.submit(_qual)
+        search_intents = f_intent.result()
+        qualitative = f_qual.result()
+
     total_intents = sum(len(a["search_intents"]) for a in search_intents)
     _log(f"[Path 2a] 完成，共萃取 {total_intents} 個搜尋情境")
-
-    _log(f"[Path 2b] 開始跨文章六面向質化分析（取前 {min(len(contents), limits['max_articles'])} 篇）...")
-    qualitative = run_qualitative_analysis(contents, llm,
-                                           qual_chars=limits["qual_chars"],
-                                           max_articles=limits["max_articles"])
     _log(f"[Path 2b] 完成（{len(qualitative)} 字）")
 
     return {

@@ -154,6 +154,14 @@ def run_analysis(job_id: str, report_title: str,
                 )
                 nlp_results.update(result)
                 _progress(40, f"Path 1 完成：{result['clusters'].get('n_clusters', 0)} 個語意群組")
+                # 為主題群生成 LLM 描述（label + 一句話定位）。
+                # 移到 Path 1 thread 內（與 Path 2 並行，省一段序列等待）；
+                # 且先於 search-extent，使其能用到正式群標籤。失敗不影響報告。
+                try:
+                    _progress(42, "為語意主題群生成描述...")
+                    synthesis.label_clusters(result.get("clusters", {}), llm)
+                except Exception as e:
+                    _log(f"分群描述生成略過：{e}")
                 # 分群完成 → 接 search-extent 真實搜尋接地（與 Path 2 並行）
                 if se_enabled:
                     try:
@@ -213,13 +221,6 @@ def run_analysis(job_id: str, report_title: str,
         # 兩路完成 → 進入昂貴的 Synthesis 前先檢查取消。
         if _cancelled_stop():
             return
-
-        # ── 為主題群生成 LLM 描述（label + 一句話定位）──
-        try:
-            _progress(78, "為語意主題群生成描述...")
-            synthesis.label_clusters(nlp_results.get("clusters", {}), llm)
-        except Exception as e:
-            _log(f"分群描述生成略過：{e}")
 
         # ── Synthesis ──
         _progress(80, "Synthesis：整合數值與質化結果，生成報告...")
