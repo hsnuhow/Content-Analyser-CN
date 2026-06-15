@@ -7,11 +7,15 @@ LLM 統一呼叫層
 系統不提供 LLM Key，全部由 per-project 設定或呼叫端帶入。
 """
 import concurrent.futures
+import random
+import time
 
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 8192
 DEFAULT_TOP_P = None  # None = 用各 SDK 預設值
 LLM_TIMEOUT_SEC = 300
+MAX_RETRIES = 3            # 對 429 / 5xx / overloaded 的重試次數
+RETRY_BASE_DELAY = 2.0     # 指數退避基底秒數
 
 SUPPORTED_PROVIDERS = ("gemini", "claude", "openai")
 
@@ -19,6 +23,20 @@ SUPPORTED_PROVIDERS = ("gemini", "claude", "openai")
 class LLMError(Exception):
     """LLM 呼叫失敗時拋出。"""
     pass
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """暫時性錯誤（rate limit / 過載 / 5xx / 連線）→ 值得退避重試。
+    永久性錯誤（invalid key / 模型不存在 / 400）→ 不重試。"""
+    m = str(exc).lower()
+    retry_markers = ("429", "rate limit", "ratelimit", "resource_exhausted", "quota",
+                     "overloaded", "503", "502", "500", "unavailable", "timeout",
+                     "timed out", "connection")
+    permanent_markers = ("invalid api key", "api key not valid", "permission",
+                         "authentication", "401", "403", "not found", "404")
+    if any(p in m for p in permanent_markers):
+        return False
+    return any(r in m for r in retry_markers)
 
 
 class LLMClient:
@@ -61,16 +79,28 @@ class LLMClient:
             elif self.provider == "openai":
                 return self._call_openai(prompt, temperature, max_tokens, top_p)
 
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_call)
-                return future.result(timeout=LLM_TIMEOUT_SEC)
-        except concurrent.futures.TimeoutError:
-            raise LLMError(f"LLM 呼叫逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
-        except LLMError:
-            raise
-        except Exception as e:
-            raise LLMError(f"LLM 呼叫失敗（{self.provider}）：{e}") from e
+        # 對暫時性錯誤（429/5xx/過載）做指數退避重試；並行呼叫（synthesis 4-way、
+        # intent 多批）較易撞 rate limit，避免一次 429 就讓整個 job 失敗。
+        last_exc = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_call)
+                    return future.result(timeout=LLM_TIMEOUT_SEC)
+            except concurrent.futures.TimeoutError as e:
+                last_exc = LLMError(f"LLM 呼叫逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
+            except Exception as e:
+                last_exc = e
+                if not _is_retryable(e) or attempt == MAX_RETRIES - 1:
+                    break
+                delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                print(f"[LLMClient] {self.provider} 暫時性錯誤，{delay:.1f}s 後重試"
+                      f"（{attempt + 1}/{MAX_RETRIES}）：{e}", flush=True)
+                time.sleep(delay)
+                continue
+        if isinstance(last_exc, LLMError):
+            raise last_exc
+        raise LLMError(f"LLM 呼叫失敗（{self.provider}）：{last_exc}") from last_exc
 
     def _call_gemini(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:
@@ -103,11 +133,17 @@ class LLMClient:
         try:
             return _generate(self.model)
         except Exception as e:
+            # 僅在「模型本身有問題」時退回 flash；rate-limit/quota/auth 不退回
+            # （那類退回也會再失敗，浪費一次呼叫），交給外層退避重試/錯誤處理。
             fallback = "gemini-2.5-flash"
-            if self.model != fallback:
-                print(f"[LLMClient] {self.model} 失敗，後備使用 {fallback}: {e}", flush=True)
+            m = str(e).lower()
+            model_issue = any(k in m for k in (
+                "not found", "404", "not supported", "unsupported", "does not exist", "invalid model"))
+            transient_or_auth = any(k in m for k in ("rate", "quota", "429", "401", "403", "permission"))
+            if self.model != fallback and model_issue and not transient_or_auth:
+                print(f"[LLMClient] 模型 {self.model} 不可用，後備使用 {fallback}: {e}", flush=True)
                 return _generate(fallback)
-            raise LLMError(f"Gemini 呼叫失敗：{e}") from e
+            raise
 
     def _call_claude(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:
@@ -123,7 +159,10 @@ class LLMClient:
         if top_p is not None:
             kwargs["top_p"] = top_p
         msg = client.messages.create(**kwargs)
-        return (msg.content[0].text or "").strip()
+        # 防呆：content 可能為空或含非 text block（如 max_tokens 截斷、tool block）。
+        txt = "".join(getattr(b, "text", "") for b in (msg.content or [])
+                      if getattr(b, "type", "") == "text")
+        return txt.strip()
 
     def _call_openai(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:

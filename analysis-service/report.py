@@ -86,8 +86,11 @@ def _section_clusters(clusters: Dict) -> str:
         for a in articles:
             title = a.get("title") or a.get("url", "")
             url = a.get("url", "")
-            if url:
-                lines.append(f"- [{title}]({url})")
+            # 與附錄一致：只允許 http(s) scheme 的連結，擋 javascript: 等注入
+            parsed = urlparse(url) if url else None
+            safe_url = url if (parsed and parsed.scheme in ("http", "https")) else None
+            if safe_url:
+                lines.append(f"- [{title}]({safe_url})")
             else:
                 lines.append(f"- {title}")
         lines.append("")

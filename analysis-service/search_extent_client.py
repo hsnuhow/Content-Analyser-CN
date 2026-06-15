@@ -50,7 +50,20 @@ def expand(seeds, language_id=None, geo_ids=None, limit=60,
         )
         if resp.status_code == 401:
             return {"error": "search-extent 金鑰驗證失敗（401）"}
-        return resp.json()
+        # 任何非 2xx 一律回 error（即使 body 非 JSON，如 Cloud Run 的 HTML 503 頁），
+        # 確保「絕不拖垮分析、最差降級為純 LLM §7」的契約成立。
+        if resp.status_code >= 400:
+            try:
+                j = resp.json()
+                if isinstance(j, dict) and "error" in j:
+                    return j
+            except Exception:
+                pass
+            return {"error": f"search-extent 回應狀態 {resp.status_code}"}
+        try:
+            return resp.json()
+        except Exception:
+            return {"error": "search-extent 回應非 JSON"}
     except requests.exceptions.Timeout:
         return {"error": f"search-extent 逾時（{timeout}s）"}
     except Exception as e:

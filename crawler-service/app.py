@@ -19,6 +19,7 @@
 """
 import ipaddress
 import os
+import socket
 import uuid
 import threading
 import functools
@@ -36,8 +37,17 @@ from crawl_job import run_crawl_batch, JOBS_COLLECTION
 SERVICE_VERSION = "1.5.0"
 
 
+def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
+    """是否為私有/保留/loopback/link-local（含 GCP metadata 169.254.x）等危險範圍。"""
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
 def _is_safe_url(url: str):
     """C1 SSRF 防護：阻擋私有/保留 IP、loopback、link-local（含 GCP metadata）。
+
+    關鍵：對 domain name **實際解析 DNS**，只要任一解析結果落入危險範圍即拒，
+    防止「域名 A 記錄指向 169.254.169.254 / 內網」這類繞過（先前直接信任 DNS）。
     回傳 (ok: bool, reason: str)。
     """
     try:
@@ -47,18 +57,24 @@ def _is_safe_url(url: str):
         host = parsed.hostname or ""
         if not host:
             return False, "缺少 hostname"
-        # 已知危險 hostname
         _BLOCKED_HOSTS = {"metadata.google.internal", "169.254.169.254"}
         if host.lower() in _BLOCKED_HOSTS:
             return False, f"禁止存取 metadata endpoint：{host}"
-        # 若 hostname 是 IP，直接檢查範圍
+        # 收集 host 對應的所有 IP（IP 字面值直接用；否則解析 DNS）
+        candidates = []
         try:
-            ip = ipaddress.ip_address(host)
-            if (ip.is_private or ip.is_loopback or
-                    ip.is_link_local or ip.is_reserved or ip.is_multicast):
-                return False, f"禁止存取保留/私有 IP：{host}"
+            candidates = [ipaddress.ip_address(host)]
         except ValueError:
-            pass  # 是 domain name，信任 DNS（避免 TOCTOU 的 DNS resolution）
+            try:
+                infos = socket.getaddrinfo(host, None)
+                candidates = [ipaddress.ip_address(i[4][0]) for i in infos]
+            except Exception as e:
+                return False, f"無法解析 hostname：{host}（{e}）"
+        if not candidates:
+            return False, f"無法解析 hostname：{host}"
+        for ip in candidates:
+            if _ip_is_blocked(ip):
+                return False, f"禁止存取保留/私有 IP：{host} → {ip}"
         return True, ""
     except Exception as e:
         return False, str(e)
@@ -175,7 +191,12 @@ def scrape():
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
-    hard_timeout_sec = int(data.get("hard_timeout_sec", 60))
+    # 防呆 + 夾值：非數字不致 500；上限 300s 避免單一請求被惡意/誤設綁住 worker。
+    try:
+        hard_timeout_sec = int(data.get("hard_timeout_sec", 60))
+    except (TypeError, ValueError):
+        hard_timeout_sec = 60
+    hard_timeout_sec = min(max(hard_timeout_sec, 5), 300)
 
     result = _run_scrape(url, use_gemini, gemini_api_key, hard_timeout_sec)
     http_status = 200 if result.get("status") in ("success", "skipped") else 500
@@ -347,24 +368,35 @@ def cleanup_crawl_jobs():
         days = 7
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
     deleted = 0
+    MAX_CLEAN = 500  # 單次上限，避免一次掃/刪過多導致請求逾時
     try:
-        for doc in db.collection(JOBS_COLLECTION).stream():
+        # 只查「已結束」狀態（伺服器端單欄位過濾，免複合索引），並設上限，
+        # 不再全表 stream。updated_at 的 cutoff 比較在取回後做。
+        q = (db.collection(JOBS_COLLECTION)
+             .where("status", "in", ["completed", "failed", "cancelled"])
+             .limit(MAX_CLEAN))
+        for doc in q.stream():
             d = doc.to_dict() or {}
-            if d.get("status") not in ("completed", "failed", "cancelled"):
-                continue
             updated = d.get("updated_at") or d.get("completed_at")
-            # 無時間戳或早於 cutoff → 刪除（含 results 子集合）
             if updated is None or updated < cutoff:
                 try:
+                    rbatch = db.batch()
+                    nr = 0
                     for r in doc.reference.collection("results").stream():
-                        r.reference.delete()
-                except Exception:
-                    pass
+                        rbatch.delete(r.reference)
+                        nr += 1
+                        if nr % 400 == 0:
+                            rbatch.commit()
+                            rbatch = db.batch()
+                    rbatch.commit()
+                except Exception as e:
+                    print(f"[cleanup] 刪除 results 子集合失敗 {doc.id}: {e}", flush=True)
                 doc.reference.delete()
                 deleted += 1
     except Exception as e:
         return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
-    return jsonify({"status": "ok", "deleted": deleted, "days": days}), 200
+    return jsonify({"status": "ok", "deleted": deleted, "days": days,
+                    "capped": deleted >= MAX_CLEAN}), 200
 
 
 if __name__ == "__main__":

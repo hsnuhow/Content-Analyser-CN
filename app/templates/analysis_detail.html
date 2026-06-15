@@ -115,8 +115,10 @@
   </div>
 
   {# C3: 使用 DOMPurify sanitize 防 XSS，再以 marked.js 渲染 Markdown #}
-  <script src="https://cdn.jsdelivr.net/npm/marked@11/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.2.0/marked.min.js"
+          integrity="sha384-9Md4MlJk24bo2Ifubp0FbKhuES4/iAwyTGMeWpBG4RoHGTKygpEGEpOYhEQxbfa9" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"
+          integrity="sha384-eguRoJERj8ghOpzO//Rl7+ScQsQIR1cH+ajll7+fG+IpbNPlkZsQn9h8ccr+wPXx" crossorigin="anonymous"></script>
   <script>
     const md = {{ analysis.result_markdown | tojson }};
     document.getElementById('markdown-output').innerHTML = DOMPurify.sanitize(marked.parse(md));

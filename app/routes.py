@@ -27,6 +27,9 @@ bp = Blueprint('main_bp', __name__)
 
 @bp.route('/debug')
 def debug():
+    # 安全：僅本地開發環境可用；正式環境回 404，避免洩漏 session/設定狀態。
+    if not is_dev_env():
+        return "Not Found", 404
     return jsonify({
         'session_user': session.get('user'),
         'is_dev_env': is_dev_env(),
@@ -119,7 +122,10 @@ def dev_login():
 def callback():
     try:
         token = oauth.google.authorize_access_token()
-        userinfo = token['userinfo']
+        userinfo = dict(token['userinfo'])
+        # 統一小寫 email：避免 Google 偶發不同大小寫造成 owner 查詢（大小寫敏感的
+        # Firestore where 等值比對）漏掉自己的專案、或建立重複 user/member 記錄。
+        userinfo['email'] = userinfo.get('email', '').strip().lower()
         session['user'] = userinfo
 
         email = userinfo.get('email', '')

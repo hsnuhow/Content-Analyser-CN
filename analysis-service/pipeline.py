@@ -197,9 +197,10 @@ def run_analysis(job_id: str, report_title: str,
         t2.start()
         t1.join(timeout=600)
         t2.join(timeout=600)
-        if t1.is_alive():
+        path1_timed_out = t1.is_alive()
+        if path1_timed_out:
             nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
-            _log("⚠️ Path 1 thread 逾時（600s），繼續執行")
+            _log("⚠️ Path 1 thread 逾時（600s），丟棄其部分結果、降級繼續")
         if t2.is_alive():
             llm_error.append("Path 2 超過 600s 未完成，已放棄等待")
             _log("⚠️ Path 2 thread 逾時（600s），停止任務")
@@ -211,12 +212,23 @@ def run_analysis(job_id: str, report_title: str,
             _update_job(db, job_id, status="failed", log=err_msg)
             return
 
-        if nlp_error:
-            # Path 1 失敗（Vertex AI 問題）→ 降級繼續（只有 TF-IDF）
+        # L4 防 race：Path 1 逾時時其 daemon thread 仍存活、仍會寫 nlp_results /
+        # search_extent_results。絕不可邊讀邊被改 → 逾時即丟棄部分結果走安全降級，
+        # 並清空 search_extent（該寫入也在 Path1 thread 內）。
+        if path1_timed_out:
+            nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
+                           "clusters": {"clusters": [], "n_clusters": 0}}
+            search_extent_results = {}
+        elif nlp_error:
+            # Path 1 失敗（Vertex AI 問題）但 thread 已結束 → 降級繼續（只有 TF-IDF）
             _log(f"⚠️ Path 1 部分失敗，降級繼續（無語意分群）：{nlp_error[0]}")
             if not nlp_results:
                 nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
                                "clusters": {"clusters": [], "n_clusters": 0}}
+
+        # 凍結 search-extent 結果快照：synthesis（決定 §7 prompt 版本）與 report
+        # （決定是否標「真實接地」）共用同一份，避免各自重判 dict 是否為空而不一致。
+        se_frozen = dict(search_extent_results)
 
         # 兩路完成 → 進入昂貴的 Synthesis 前先檢查取消。
         if _cancelled_stop():
@@ -230,7 +242,7 @@ def run_analysis(job_id: str, report_title: str,
             report_title=report_title,
             n_articles=len(contents),
             llm=llm,
-            search_extent_results=search_extent_results,
+            search_extent_results=se_frozen,
         )
 
         if _cancelled_stop():
@@ -246,7 +258,7 @@ def run_analysis(job_id: str, report_title: str,
             synthesis_parts=synthesis_parts,
             llm_provider=llm_config.get("provider", "gemini"),
             llm_model=llm_config.get("model", "gemini-2.5-flash"),
-            search_extent_results=search_extent_results,
+            search_extent_results=se_frozen,
         )
 
         _update_job(
