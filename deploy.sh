@@ -2,12 +2,27 @@
 set -e
 
 # =====================================================================
-# deploy.sh — 三個 Cloud Run 服務完整部署腳本
+# deploy.sh — Cloud Run 服務完整部署腳本
 #
 # 部署順序：
 #   1. content-crawler    (爬蟲微服務，4Gi Chrome 環境)
 #   2. analysis-pipeline  (分析引擎，2Gi NLP + Vertex AI)
 #   3. content-analyser   (Web UI + 控制平面，1Gi 輕量)
+#
+# ⚠️ 第四個服務 search-extent（§7 真實搜尋接地）本腳本【不】部署，
+#    需單獨手動部署（目前阻塞於 Google Ads ADS_DEVELOPER_TOKEN）。
+#    部署 search-extent 後，content-analyser / analysis-pipeline 需另行
+#    注入 SEARCH_EXTENT_SERVICE_URL 與 SEARCH_EXTENT_API_KEY（見 CLAUDE.md 附錄 D）。
+#
+# ⚠️⚠️ 重大警告 — content-crawler 的執行期環境變數 ⚠️⚠️
+#    正式 content-crawler 帶有【只存在於 Cloud Run console、不在本腳本】的環境變數：
+#      PROXY_ENABLED / PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
+#      ENABLE_YOUTUBE_TRANSCRIPT（、CRAWLER_DISABLE_IMAGES）
+#    本腳本已移除 crawler 段落原本的 --clear-env-vars，改為「保留既有 env」，
+#    以免一鍵部署把上述設定清空導致代理失效。
+#    根治方式：把 PROXY_* 遷移到 Secret Manager 並改用 --set-secrets（待辦）。
+#    在那之前，正式 crawler 建議只做 image-only 部署：
+#      gcloud run deploy content-crawler --image <新 image> --region asia-east1
 #
 # 前置需求：Secret Manager 中必須已建立以下 secrets：
 #   CRAWLER_API_KEY   - 爬蟲服務存取金鑰 (openssl rand -hex 32)
@@ -59,6 +74,8 @@ echo ""
 echo ">>> [1/3] 建立並部署 content-crawler..."
 gcloud builds submit crawler-service --tag gcr.io/$PROJECT_ID/$CRAWLER_SERVICE
 
+# ⚠️ 不使用 --clear-env-vars：保留 console 設定的 PROXY_* / ENABLE_YOUTUBE_TRANSCRIPT
+#    等執行期環境變數（見檔頭警告）。--set-secrets 只覆寫指定的 secret-env，不動其他。
 gcloud run deploy $CRAWLER_SERVICE \
   --image gcr.io/$PROJECT_ID/$CRAWLER_SERVICE \
   --platform managed \
@@ -68,7 +85,6 @@ gcloud run deploy $CRAWLER_SERVICE \
   --cpu 2 \
   --timeout 300 \
   --concurrency 4 \
-  --clear-env-vars \
   --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest"
 
 CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE \
