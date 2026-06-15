@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-15 補強：分析 LLM 並行化 + 爬蟲降冷啟動（已部署 analysis 00014-bqd / crawler 00046-cfh）
+針對執行速度做精簡優化，不犧牲穩定與功能完整（prompt/輸出/取消檢查點全不變，併發皆設上限防 rate limit）：
+- **analysis-pipeline Phase 1（加速）**：
+  - `synthesis.py`：§1/§4/§6/§7 四章節由序列改 `ThreadPoolExecutor(4)` 並行；新增 `_safe_gen` 包裝，單章失敗沿用原 fallback、不影響其他章節。
+  - `llm_path.py`：意圖萃取各批次並行（上限 4，`ex.map` 保序）；`run()` 內 Path 2a 意圖 ‖ Path 2b 質化同時執行。
+  - `pipeline.py`：`label_clusters` 移入 Path 1 thread（與 Path 2 並行），且先於 search-extent → 真實關聯關鍵字能用上正式群標籤。
+- **content-crawler Phase 2**：`crawl_job.py` `RECYCLE_EVERY` 6→12（廣告/追蹤封鎖+關圖後記憶體大降，driver 冷啟動 16–40s 次數減半）。
+- 部署：兩服務皆 image-only（`:perf-20260615`），保留 crawler console 設定的 `PROXY_*` / `ENABLE_YOUTUBE_TRANSCRIPT` 等 env。Phase 3（平行爬取）未動。
+
 ## 2026-06-15 新增：自動續批 + esquirehk listing 修正 + 結果（13/20）+ overlay-skip/時限驗證
 第二次 CHANEL 測試 13 成功/1 略/6 失（前兩次 5、0）：HK 站(voguehk/popbee/elle.hk)+重 TW 站全回，403 正確判失敗。
 - **自動續批（auto-continue）**：批次撞 45 分上限/連續卡死切掉的項標 `unattempted=True`；`_sync` 完成時若有未爬項
