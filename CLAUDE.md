@@ -51,7 +51,7 @@
    每次只處理明確範圍內的問題。避免順手重構、擴張功能或改動未授權模組。
 
 4. **高度模組化**  
-   系統拆分為清楚邊界的模組與服務。三個 Cloud Run 服務（`content-analyser`、`content-crawler`、`analysis-pipeline`）之間**只透過 HTTP API 溝通**，不得共用程式碼或直接呼叫對方的內部函式。
+   系統拆分為清楚邊界的模組與服務。四個 Cloud Run 服務（`content-analyser`、`content-crawler`、`analysis-pipeline`、`search-extent`）之間**只透過 HTTP API 溝通**，不得共用程式碼或直接呼叫對方的內部函式。
 
 5. **API 邊界優先**  
    主程式只能透過 `app/crawler_client.py` 呼叫爬蟲服務。不得在主程式中直接 `import crawler`。
@@ -433,11 +433,17 @@ echo "✅ 全部通過"
 | `GOOGLE_CLIENT_SECRET` | content-analyser | Google OAuth |
 | `CRAWLER_API_KEY` | 兩個服務 | 爬蟲服務存取金鑰 |
 | `GENAI_API_KEY` | 兩個服務 | Gemini API Key |
+| `PROXY_HOST` / `PROXY_PORT` / `PROXY_USER` / `PROXY_PASS` / `PROXY_PROVIDER` | content-crawler | Tier 3 住宅代理（Decodo）憑證；deploy.sh --set-secrets 注入。可由後台「Secret Manager 金鑰管理」建立/更新（不存在會自動建立）。on/off 另由後台 Tier 3 toggle（Firestore）控制 |
 
 ```bash
 # 確認 secrets 存在（不讀取值）
 gcloud secrets list --format="table(name)"
 ```
+
+> 機密一律走 Secret Manager（§3.1）：crawler 的 proxy 憑證已標準化為上述 secrets，
+> 由管理後台寫入（只輸入不回顯，與 GENAI key 同機制），不存 Firestore、不放 console 明文。
+> deploy.sh 完整定義 crawler 環境、可安全一鍵部署。更新憑證後需重啟 crawler 才生效。
+> 本地除錯時 proxy 憑證放 `.env`（已 gitignore），僅 debug 模式取用，不進正式環境。
 
 ### 6.3 部署三個服務（完整）
 
@@ -682,14 +688,14 @@ gcloud secrets versions access ...
 
 **給康泰用的內容策略分析平台。**
 
-使用者自行蒐集內容（爬蟲 / Chrome MCP / 直接貼上），送入分析引擎，產出含「用戶搜尋情境分析」的 Markdown 洞察報告。採用**三個獨立的 Google Cloud Run 服務**，以 HTTP API 溝通。
+使用者自行蒐集內容（爬蟲 / Chrome MCP / 直接貼上），送入分析引擎，產出含「用戶搜尋情境分析」的 Markdown 洞察報告。採用**四個獨立的 Google Cloud Run 服務**，以 HTTP API 溝通。
 
 完整產品規格見 `product_guideline.md`，本附錄為快速索引。
 
 - **GitHub**: https://github.com/hsnuhow/Content-Analyser-CN
 - **管理員**: 由 `system/config.admin_email`（Firestore）決定，不寫死在程式碼
 
-## 三服務架構圖
+## 四服務架構圖
 
 ```
 CLIENT：Web UI / Google Colab / Claude Cowork
@@ -706,21 +712,28 @@ CLIENT：Web UI / Google Colab / Claude Cowork
 │ content-crawler  │    │ analysis-pipeline        │
 │ （4Gi，Chrome）  │    │ （2Gi，NLP + Vertex AI） │
 │ 爬取 → 純文字    │    │ 內容 → Markdown 報告     │
-└──────────────────┘    └──────────────────────────┘
-                                   │
-                          Vertex AI Embedding（系統）
-                          + 用戶 LLM Key（Gemini/Claude）
+└──────────────────┘    └───────┬──────────────────┘
+                                 │ HTTP X-API-Key（§7 真實搜尋接地）
+                                 ▼
+                        ┌──────────────────────────┐
+                        │ search-extent（1Gi）     │
+                        │ Google Ads Keyword Planner│
+                        │ → 真實關聯關鍵字+搜尋量   │
+                        └──────────────────────────┘
+        analysis-pipeline 另用 Vertex AI Embedding（系統）+ 用戶 LLM Key（Gemini/Claude/OpenAI）
                                    │
                                    ▼
                           Firestore（任務、Project、報告）
 ```
+
+> search-extent 在缺 `ADS_DEVELOPER_TOKEN` 時自動降級為純 LLM §7（不影響其他功能）。
 
 ## 目錄結構
 
 ```
 Content-Analyser-CN/
 ├── main.py / requirements.txt / Dockerfile     主程式（無 Chrome）
-├── deploy.sh                                    三服務部署腳本
+├── deploy.sh                                    部署腳本（crawler/analysis/analyser；search-extent 另行手動）
 ├── setup_admin.sh.example                       管理員初始化範本
 ├── CLAUDE.md / product_guideline.md / development_plan.md / changelog.md
 ├── app/                            content-analyser（控制平面）
@@ -850,9 +863,11 @@ status = requests.get(
 system/config
   admin_email: string             setup_admin.sh 寫入
 
-users/{email}
+users/{email}                     doc ID 即 email（權威來源）
+  email: string                   doc ID 的鏡射欄位；舊文件可能缺，讀取端一律以 doc ID 補齊
   display_name / picture: string
-  whitelist_status: string        "pending" | "approved" | "rejected"
+  whitelist_status: string        "pending" | "approved" | "rejected"（admin 為 approved + is_admin=true）
+  is_admin: bool                  admin 登入時 ensure_user upsert
   added_by / approved_at / last_login
   usage_log/{id}                  使用量（按用戶）
 
@@ -863,6 +878,10 @@ projects/{project_id}             頂層，多人協作
                                    search_extent, max_output_tokens, top_p, input_scale}（Owner 設定）
   archived: bool                  封存（Editor/Viewer 不可進入，僅 Owner/Admin）
   archived_at: timestamp
+  datasets/{dataset_id}           蒐集的內容集（爬取/手動匯入）
+    title / status / created_by / crawl_job_id
+    items/{auto-id}               ⭐子集合（避免 1MB 文件上限、筆數不限）
+      url / title / text / source_type / status / _seq（排序）
   analyses/{analysis_id}
     report_title / status / progress / log
     job_id                        對應 analysis-pipeline 的 job
@@ -873,9 +892,14 @@ projects/{project_id}             頂層，多人協作
 api_keys/{key_id}                 外部工具金鑰（Admin 管理）
   name / key_hash / permissions / is_active / call_count
 
+# content-crawler 自管（獨立）：
+crawl_jobs/{job_id}               非同步爬取任務狀態（job 文件保持輕量）
+  status / progress / log / cancel_requested
+  results/{idx}                   ⭐子集合（idx 補零排序，避免 1MB 文件上限）
+
 # analysis-pipeline 自管（獨立）：
 analysis_jobs/{job_id}            非同步任務狀態
-  status / progress / log / result_markdown
+  status / progress / log / cancel_requested / result_markdown
 ```
 
 ---
@@ -898,11 +922,17 @@ analysis_jobs/{job_id}            非同步任務狀態
 
 ## content-crawler
 
-| 變數 | 說明 |
-|------|------|
-| `CRAWLER_API_KEY` | API 驗證金鑰 |
-| `GENAI_API_KEY` | Gemini（selector 輔助）|
-| `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 |
+| 變數 | 來源 | 說明 |
+|------|------|------|
+| `CRAWLER_API_KEY` | Secret Manager | API 驗證金鑰 |
+| `GENAI_API_KEY` | Secret Manager | Gemini（selector 輔助）|
+| `PROXY_HOST` / `PROXY_PORT` / `PROXY_USER` / `PROXY_PASS` / `PROXY_PROVIDER` | Secret Manager | Tier 3 住宅代理（Decodo）憑證；deploy.sh --set-secrets 注入；後台可建立/更新 |
+| `ENABLE_YOUTUBE_TRANSCRIPT` | deploy.sh --set-env-vars | `1` = 啟用 YouTube 字幕擷取 |
+| `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 | |
+| `CRAWLER_DISABLE_IMAGES` | （選用）| 關閉圖片載入省記憶體 |
+
+> Tier 3 住宅代理是否實際啟用，另由 Firestore `system/config.tier3_enabled`（admin 控制台切換）決定；
+> 上述 PROXY_* 為憑證來源，兩者搭配才生效。
 
 ## analysis-pipeline
 
@@ -950,12 +980,13 @@ cp .env.example .env    # 填入實際值
 FLASK_DEBUG=1 python main.py
 ```
 
-## 語法檢查（全部三服務）
+## 語法檢查（全部四服務）
 
 ```bash
 python3 -m py_compile app/*.py main.py && \
-python3 -m py_compile crawler-service/app.py crawler-service/crawler.py && \
+python3 -m py_compile crawler-service/app.py crawler-service/crawler.py crawler-service/crawl_job.py && \
 python3 -m py_compile analysis-service/*.py && \
+python3 -m py_compile search-extent/*.py && \
 bash -n deploy.sh && echo "✅ 全部通過"
 ```
 
