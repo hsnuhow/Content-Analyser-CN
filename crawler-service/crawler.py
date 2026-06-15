@@ -1880,6 +1880,46 @@ class HeadlessCrawler:
             self._log(f"[OG] 社群 UA 抓取失敗：{e}")
             return {"title": "", "description": ""}
 
+    def _ssr_preprobe(self, url: str) -> Dict[str, Any]:
+        """開 Chrome 前的輕量探測：抓靜態 HTML，若結構化資料（JSON-LD articleBody /
+        RSC block payload）已含足量內文，直接回傳成功 → 完全跳過 Chrome（省 16–40s 冷啟動
+        + 滾動）。只信任「結構化」抽取（不靠長度啟發式，避免 nav/側欄文字灌水誤判），
+        對台灣多數 SSR 新聞站收益大。回 dict（success）或 None（探測不足，照常走 Chrome）。
+        env CRAWLER_SSR_PROBE=0 可停用。"""
+        if os.environ.get("CRAWLER_SSR_PROBE", "1") == "0":
+            return None
+        # 僅對「未知站」探測：已知站（有模板/已學選擇器）Chrome+模板已抽得完整，
+        # 不走預探測以免拿到比完整爬取更短的 JSON-LD 摘要而退步。
+        if self._content_container_known(url):
+            return None
+        import urllib.request
+        import html as _html
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                if "html" not in (resp.headers.get("Content-Type", "") or "").lower():
+                    return None
+                html_raw = resp.read(3_000_000).decode("utf-8", "ignore")
+        except Exception as e:
+            self._log(f"[SSR-Probe] 靜態抓取略過（照常走 Chrome）：{e}")
+            return None
+        # 只信任結構化抽取
+        body = self._extract_from_json_ld(html_raw) or ""
+        if len(body) < 1000:
+            blk = self._extract_from_block_payload(html_raw) or ""
+            if len(blk) > len(body):
+                body = blk
+        content = self._clean_text(body)
+        if len(content) < 1000:
+            return None
+        m = (re.search(r'<meta property="og:title" content="([^"]*)"', html_raw)
+             or re.search(r'<title[^>]*>(.*?)</title>', html_raw, re.S | re.I))
+        title = _html.unescape(m.group(1).strip()) if m else url
+        self._log(f"[SSR-Probe] ✅ 靜態 HTML 結構化內文足量（{len(content)} 字），跳過 Chrome")
+        return {"status": "success", "url": url, "title": title,
+                "content": content, "length": len(content), "source": "ssr_preprobe"}
+
     # ──────────────────────────────────────────────────────────────────
     # YouTube：Tier 1（oEmbed/og 取標題+說明）+ Tier 2（Gemini 影片理解取口白）
     # ──────────────────────────────────────────────────────────────────
@@ -2082,6 +2122,12 @@ class HeadlessCrawler:
                 return {"status": "skipped", "url": url,
                         "error": "Instagram 公開貼文已封鎖 og 抓取，需 oEmbed API（Meta token）或登入瀏覽器手動蒐集。"}
             # threads 但無 og：往下走一般流程
+
+        # ⭐ SSR 輕量預探測：開 Chrome 前先抓靜態 HTML，若結構化內文（JSON-LD/RSC）已足量
+        #   → 直接回傳、完全跳過 Chrome（最省成本、避免深滾卡死）。探測不足才走 Chrome。
+        ssr = self._ssr_preprobe(url)
+        if ssr is not None:
+            return ssr
 
         if self.driver is None:
             self._init_driver()
