@@ -16,16 +16,26 @@ def create_app():
     # x_host=1: Trust X-Forwarded-Host
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
+    is_dev = os.environ.get('FLASK_DEBUG') == '1'
+
     # Basic Config
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_secret_key')
+    # 安全：正式環境必須由 Secret Manager 注入 SECRET_KEY。若缺失，絕不可退回固定值
+    # （否則 session 以公開常數簽章 → 可偽造 approved/admin session、auth bypass）。
+    _secret = os.environ.get('SECRET_KEY')
+    if not _secret:
+        if is_dev:
+            _secret = 'dev_secret_key'
+        else:
+            raise RuntimeError(
+                "SECRET_KEY 未設定（正式環境必須由 Secret Manager 注入）。拒絕以預設值啟動。")
+    app.config['SECRET_KEY'] = _secret
     app.config['GOOGLE_CLIENT_ID'] = os.environ.get('GOOGLE_CLIENT_ID')
     app.config['GOOGLE_CLIENT_SECRET'] = os.environ.get('GOOGLE_CLIENT_SECRET')
-    
+
     # [Fix] Session Cookie Configuration for Preview/Dev
     # In production (Cloud Run), we want Secure cookies.
     # In development (Preview), we need to relax this to allow cookies over HTTP or complex proxies.
-    is_dev = os.environ.get('FLASK_DEBUG') == '1'
-    
+
     if is_dev:
         app.config['SESSION_COOKIE_SECURE'] = False
         app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -63,6 +73,27 @@ def create_app():
             if admin_email:
                 is_admin = user.get('email', '').lower() == admin_email.lower()
         return dict(user=user, is_admin=is_admin)
+
+    # 安全標頭（縱深防禦）：防點擊劫持、MIME 嗅探；正式環境加 HSTS。
+    # CSP 保留 'unsafe-inline'（模板含 inline script，移除會破壞 UI）；
+    # 報告 HTML 的 XSS 主防線仍為前端 DOMPurify。frame-ancestors/X-Frame-Options 防 iframe 劫持。
+    @app.after_request
+    def _security_headers(resp):
+        resp.headers.setdefault('X-Frame-Options', 'DENY')
+        resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        resp.headers.setdefault('Content-Security-Policy', (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+        ))
+        if not is_dev:
+            resp.headers.setdefault(
+                'Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+        return resp
 
     with app.app_context():
         from . import routes

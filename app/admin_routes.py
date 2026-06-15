@@ -52,6 +52,9 @@ def admin_required(f):
         if not admin_email:
             return "系統尚未設定管理員帳號。請執行 setup_admin.sh 完成初始化。", 503
 
+        # 授權依據 = 登入身分等於 system/config.admin_email（唯一系統管理員，由 setup_admin 設定）。
+        # 此身分本身即最高授權，故不另查 whitelist_status（admin 不走白名單流程，
+        # ensure_user 對 admin 直接 approved）；以 email 完全比對為準。
         if user.get('email', '').lower() != admin_email.lower():
             return "Access Denied: You are not an administrator.", 403
 

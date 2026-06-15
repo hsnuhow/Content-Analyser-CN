@@ -27,6 +27,9 @@ bp = Blueprint('main_bp', __name__)
 
 @bp.route('/debug')
 def debug():
+    # 安全：僅本地開發環境可用；正式環境回 404，避免洩漏 session/設定狀態。
+    if not is_dev_env():
+        return "Not Found", 404
     return jsonify({
         'session_user': session.get('user'),
         'is_dev_env': is_dev_env(),
