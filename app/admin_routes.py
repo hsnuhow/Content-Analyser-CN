@@ -115,8 +115,10 @@ def admin_users():
         0 if u.get('whitelist_status') == 'pending' else 1,
         u.get('email', '')
     ))
+    admin_email = (get_admin_email() or '').strip().lower()
     return render_template('admin_users.html',
-                           user=session.get('user'), users=users)
+                           user=session.get('user'), users=users,
+                           admin_email=admin_email)
 
 
 @bp.route('/users/<email>/approve', methods=['POST'])

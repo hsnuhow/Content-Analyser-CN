@@ -35,7 +35,9 @@
               {{ u.get('last_login', '-') }}
             </td>
             <td>
-              {% if u.get('whitelist_status') == 'pending' %}
+              {% if admin_email and u.get('email', '')|lower == admin_email %}
+              <span class="badge bg-primary">管理員</span>
+              {% elif u.get('whitelist_status') == 'pending' %}
               <form method="POST"
                     action="{{ url_for('admin_bp.approve_user_route', email=u.get('email')) }}"
                     class="d-inline">
