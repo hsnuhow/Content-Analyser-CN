@@ -7,7 +7,7 @@
 - **deploy.sh 標準化**：crawler 段以 `--set-secrets` 注入 5 個 PROXY_* + CRAWLER/GENAI key，`ENABLE_YOUTUBE_TRANSCRIPT` 走 `--set-env-vars`；
   移除原本會清空 console env 的 `--clear-env-vars`。Tier 3 on/off 由後台 toggle（Firestore tier3_enabled，fail-closed）控制，不再用 PROXY_ENABLED env。
 - **安全**：憑證只存 Secret Manager（不進 Firestore、不進 git/image/Cloud Build、不放 console 明文）；更新後需重啟 crawler 才生效。
-- 部署：content-analyser image-only（00023-jgq）。crawler 尚未重部署——待維運者填入 5 個 secret 後，再以新 deploy.sh 設定切換來源。
+- 部署：content-analyser image-only（00023-jgq）。content-crawler 已重部署（00047-whj）：5 個 PROXY_* 改從 Secret Manager 讀取（valueFrom secretKeyRef），console 明文 PROXY_* 已移除；PROXY_ENABLED 一併移除，Tier 3 on/off 改由後台 toggle。crawler SA 具專案層 secretAccessor，部署無權限問題。
 - 文件：CLAUDE.md 三服務→四服務（含 search-extent）、附錄 C 補子集合、§6.2/附錄 D 補 PROXY_* 與語法檢查清單。
 
 ## 2026-06-15 修正：/admin/users 白名單管理 500（已部署 content-analyser 00022-mlc）
