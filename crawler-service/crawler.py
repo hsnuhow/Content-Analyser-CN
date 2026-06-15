@@ -42,6 +42,29 @@ except ImportError:
 
 # 常數設定
 ZH_ACCEPT_LANGUAGE = "zh-TW,zh;q=0.9,en;q=0.5"
+
+# 廣告/追蹤/分析網域黑名單（CDP Network.setBlockedURLs，wildcard）。
+# 這些 script 持續發請求、讓 renderer 永遠忙，是重型 SSR 站（Hearst listicle/gallery）
+# 載入卡死的元兇。封掉它們（廣告非內文，不影響抽取），載入大幅加速、不再卡死。
+AD_BLOCKLIST = [
+    "*doubleclick.net*", "*googlesyndication.com*", "*googleadservices.com*",
+    "*google-analytics.com*", "*googletagmanager.com*", "*googletagservices.com*",
+    "*pagead2.googlesyndication.com*", "*adservice.google.*", "*g.doubleclick.net*",
+    "*connect.facebook.net*", "*facebook.com/tr*", "*facebook.com/plugins*",
+    "*scorecardresearch.com*", "*quantserve.com*", "*quantcount.com*",
+    "*criteo.com*", "*criteo.net*", "*taboola.com*", "*outbrain.com*",
+    "*amazon-adsystem.com*", "*adnxs.com*", "*rubiconproject.com*",
+    "*pubmatic.com*", "*openx.net*", "*casalemedia.com*", "*33across.com*",
+    "*adsrvr.org*", "*moatads.com*", "*adform.net*", "*smartadserver.com*",
+    "*yieldmo.com*", "*indexww.com*", "*media.net*", "*teads.tv*", "*3lift.com*",
+    "*hotjar.com*", "*hotjar.io*", "*mixpanel.com*", "*segment.com*", "*segment.io*",
+    "*fullstory.com*", "*mouseflow.com*", "*clarity.ms*", "*newrelic.com*",
+    "*nr-data.net*", "*sentry.io*", "*onesignal.com*", "*branch.io*",
+    "*ads-twitter.com*", "*analytics.tiktok.com*", "*bat.bing.com*",
+    "*sail-horizon.com*", "*cdn.ampproject.org*", "*adsafeprotected.com*",
+    "*omnitagjs.com*", "*permutive.com*", "*permutive.app*", "*tinypass.com*",
+]
+
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -512,6 +535,11 @@ class HeadlessCrawler:
         options.add_argument(f"--user-agent={DEFAULT_UA}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--dns-prefetch-disable")
+        # ⭐ 關閉圖片載入（純文字抽取不需要圖；Hearst gallery 數百張圖正是載入慢的主因）。
+        #   用 --blink-settings（UC-safe，避開 add_experimental_option prefs 被 UC 處理掉的坑）。
+        #   env CRAWLER_DISABLE_IMAGES=0 可關閉此行為。
+        if os.environ.get("CRAWLER_DISABLE_IMAGES", "1") != "0":
+            options.add_argument("--blink-settings=imagesEnabled=false")
 
         # 對齊 Colab v3.8：eager 策略（等 DOMContentLoaded，不等所有資源）。
         # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
@@ -539,6 +567,13 @@ class HeadlessCrawler:
 
         try:
             self.driver.execute_cdp_cmd("Network.enable", {})
+            # ⭐ 封廣告/追蹤網域：斷掉持續發請求、拖住 page-load 的元兇（重型 SSR 站不再卡死）。
+            try:
+                self.driver.execute_cdp_cmd(
+                    "Network.setBlockedURLs", {"urls": AD_BLOCKLIST})
+                self._log(f"[INIT] 已封廣告/追蹤網域 {len(AD_BLOCKLIST)} 條")
+            except Exception as e:
+                self._log(f"[INIT] 廣告封鎖略過: {e}")
             self.driver.execute_cdp_cmd(
                 "Network.setExtraHTTPHeaders",
                 {"headers": {"Accept-Language": ZH_ACCEPT_LANGUAGE}},
