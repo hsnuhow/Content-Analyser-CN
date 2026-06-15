@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-15 新增：後台管理 Tier 3 代理憑證 + deploy.sh 標準化（已部署 content-analyser 00023-jgq）
+把 content-crawler 住宅代理憑證從「Cloud Run console 明文 env」標準化為 Secret Manager，並可由管理後台維護：
+- **後台管理憑證**：`/admin` 的「Secret Manager 金鑰管理」下拉新增「Tier 3 代理憑證」(PROXY_HOST/PORT/USER/PASS/PROVIDER)，
+  比照 GENAI key（只輸入不回顯、admin_required、CSRF）。`services.set_secret` 改為「secret 不存在則自動建立」(create_secret + add_version)，首次設定可純後台完成（需 SA 有 secretmanager.secrets.create）。
+- **deploy.sh 標準化**：crawler 段以 `--set-secrets` 注入 5 個 PROXY_* + CRAWLER/GENAI key，`ENABLE_YOUTUBE_TRANSCRIPT` 走 `--set-env-vars`；
+  移除原本會清空 console env 的 `--clear-env-vars`。Tier 3 on/off 由後台 toggle（Firestore tier3_enabled，fail-closed）控制，不再用 PROXY_ENABLED env。
+- **安全**：憑證只存 Secret Manager（不進 Firestore、不進 git/image/Cloud Build、不放 console 明文）；更新後需重啟 crawler 才生效。
+- 部署：content-analyser image-only（00023-jgq）。crawler 尚未重部署——待維運者填入 5 個 secret 後，再以新 deploy.sh 設定切換來源。
+- 文件：CLAUDE.md 三服務→四服務（含 search-extent）、附錄 C 補子集合、§6.2/附錄 D 補 PROXY_* 與語法檢查清單。
+
 ## 2026-06-15 修正：/admin/users 白名單管理 500（已部署 content-analyser 00022-mlc）
 症狀：管理員開白名單頁整頁 500，無法審核（恰好有真實待審用戶卡在 pending）。
 - **根因**：`users/{email}` 以 email 為 doc ID，但 `list_all_users` 用 `to_dict()` 丟失 doc ID；
