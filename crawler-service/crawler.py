@@ -63,6 +63,12 @@ AD_BLOCKLIST = [
     "*ads-twitter.com*", "*analytics.tiktok.com*", "*bat.bing.com*",
     "*sail-horizon.com*", "*cdn.ampproject.org*", "*adsafeprotected.com*",
     "*omnitagjs.com*", "*permutive.com*", "*permutive.app*", "*tinypass.com*",
+    # 補強（研究 agent：Hearst 站常見 ad/verification/DMP）
+    "*doubleverify.com*", "*sharethrough.com*", "*bidswitch.net*", "*chartbeat.com*",
+    "*parsely.com*", "*krxd.net*", "*crwdcntrl.net*", "*demdex.net*", "*omtrdc.net*",
+    "*2mdn.net*", "*optimizely.com*", "*sundaysky.com*", "*kargo.com*",
+    # 封重量級非文字資源（純文字抽取不需要；進一步降載）
+    "*.mp4", "*.webm", "*.woff", "*.woff2", "*.ttf",
 ]
 
 DEFAULT_UA = (
@@ -540,6 +546,10 @@ class HeadlessCrawler:
         #   env CRAWLER_DISABLE_IMAGES=0 可關閉此行為。
         if os.environ.get("CRAWLER_DISABLE_IMAGES", "1") != "0":
             options.add_argument("--blink-settings=imagesEnabled=false")
+        # 降載：靜音、停背景網路節流、減少 subframe 程序（重型廣告站少開一堆 iframe 程序）。
+        options.add_argument("--mute-audio")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-features=site-per-process,IsolateOrigins")
 
         # 對齊 Colab v3.8：eager 策略（等 DOMContentLoaded，不等所有資源）。
         # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
