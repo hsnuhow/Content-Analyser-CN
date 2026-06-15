@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-15 新增：自動續批 + esquirehk listing 修正 + 結果（13/20）+ overlay-skip/時限驗證
+第二次 CHANEL 測試 13 成功/1 略/6 失（前兩次 5、0）：HK 站(voguehk/popbee/elle.hk)+重 TW 站全回，403 正確判失敗。
+- **自動續批（auto-continue）**：批次撞 45 分上限/連續卡死切掉的項標 `unattempted=True`；`_sync` 完成時若有未爬項
+  → 自動再開一批補爬（保留已成功項，merge），最多 15 輪。真失敗(403/卡死)不自動重試。→ 解決「批次被切掉沒爬完」。
+- **esquirehk listing 誤判**：模板/已知容器命中時跳過列表頁檢查（文章頁多個 <article> 卡片被誤判 skip）。
+- 已知殘留：harpersbazaar/tw gallery 頁（g 開頭，數百圖）載入卡死（有模板+overlay-skip，仍卡在 load；看門狗擋住）。
+
+## 2026-06-14 補強：縮短爬蟲時限 + 403偵測 + 4個HK站模板（已部署 00043-8fq）
+
 ## 2026-06-14 重構：批次無數量上限（items 子集合）+ 重啟續爬（待部署 crawler+analyser）
 解除「批次數量上限」與「永遠卡住/被切掉就得重來」：
 
