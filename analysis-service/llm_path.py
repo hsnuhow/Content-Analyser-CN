@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Callable, Optional
 
 from llm_client import LLMClient
+from prompt_safety import INJECTION_GUARD, wrap_untrusted
 
 INTENT_BATCH_SIZE = 5   # 每批處理幾篇文章
 INTENT_MAX_WORKERS = 4  # 意圖萃取批次的並行上限（避免觸發 LLM rate limit）
@@ -60,12 +61,12 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient,
     """對一批文章呼叫 LLM，萃取每篇的搜尋意圖。回傳 list of article dicts。"""
     articles_block = ""
     for i, c in enumerate(batch, 1):
-        title = c.get("title", "無標題")
-        text = (c.get("text") or c.get("content") or "")[:intent_chars]
+        title = wrap_untrusted(c.get("title", "無標題"), "TITLE")
+        text = wrap_untrusted((c.get("text") or c.get("content") or "")[:intent_chars])
         src = c.get("source_type", "未知來源")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n內容：{text}\n"
 
-    prompt = f"""你是資深內容策略分析師，請分析以下 {len(batch)} 篇受歡迎的內容。
+    prompt = f"""{INJECTION_GUARD}你是資深內容策略分析師，請分析以下 {len(batch)} 篇受歡迎的內容。
 
 {articles_block}
 
@@ -95,7 +96,9 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient,
         return data.get("articles", [])
     except Exception as e:
         print(f"[Path 2a] 批次解析失敗（{e}），跳過此批", flush=True)
-        return [{"index": i + 1, "search_intents": []} for i in range(len(batch))]
+        # 標記解析失敗，讓上層能統計並回報「有幾篇沒分析到」，避免報告看似完整實則殘缺。
+        return [{"index": i + 1, "search_intents": [], "_parse_failed": True}
+                for i in range(len(batch))]
 
 
 def run_search_intent(contents: List[Dict], llm: LLMClient,
@@ -135,16 +138,28 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
         batch_results_list = []
 
     results: List[Dict] = []
+    failed = 0
     for batch_start, batch_results in zip(starts, batch_results_list):
         batch = contents[batch_start: batch_start + INTENT_BATCH_SIZE]
         for j in range(len(batch)):
             article_result = batch_results[j] if j < len(batch_results) else {}
+            if article_result.get("_parse_failed"):
+                failed += 1
             idx = batch_start + j
             results.append({
                 "url": contents[idx].get("url", ""),
                 "title": contents[idx].get("title", ""),
                 "search_intents": article_result.get("search_intents", []),
             })
+
+    if failed:
+        msg = f"[Path 2a] ⚠️ {failed}/{total} 篇意圖萃取解析失敗（該批無搜尋情境）"
+        print(msg, flush=True)
+        if log_fn:
+            try:
+                log_fn(msg)
+            except Exception:
+                pass
 
     return results
 
@@ -164,12 +179,12 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
 
     articles_block = ""
     for i, c in enumerate(analysis_set, 1):
-        title = c.get("title", "無標題")
-        text = (c.get("text") or c.get("content") or "")[:qual_chars]
+        title = wrap_untrusted(c.get("title", "無標題"), "TITLE")
+        text = wrap_untrusted((c.get("text") or c.get("content") or "")[:qual_chars])
         src = c.get("source_type", "未知")
         articles_block += f"\n---\n【文章 {i}】（來源：{src}）\n標題：{title}\n{text}\n"
 
-    prompt = f"""你是資深內容策略分析師。以下是 {len(analysis_set)} 篇受歡迎的內容，\
+    prompt = f"""{INJECTION_GUARD}你是資深內容策略分析師。以下是 {len(analysis_set)} 篇受歡迎的內容，\
 涵蓋品牌業配、雜誌評比、KOL 口碑與真實用戶討論。
 
 {articles_block}

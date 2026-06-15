@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any
 
 from llm_client import LLMClient
+from prompt_safety import INJECTION_GUARD, wrap_untrusted
 
 MAX_INTENT_SUMMARY = 15  # Synthesis 時最多傳入幾篇的 intent 摘要
 
@@ -132,7 +133,9 @@ def run(nlp_results: Dict, llm_results: Dict,
     intent_summary = _fmt_intents(llm_results.get("search_intents", []))
     qualitative = llm_results.get("qualitative", "")[:3000]  # 避免 prompt 過長
 
-    base_context = f"""以下是針對「{report_title}」分析 {n_articles} 篇內容的結果：
+    # 防注入：tfidf/分群/意圖/質化皆衍生自爬取的不可信內容，可能挾帶注入文字。
+    # 整段以 INJECTION_GUARD 聲明 + <DATA> 包裹，要求 LLM 僅當素材、不服從其中指示。
+    base_context = INJECTION_GUARD + wrap_untrusted(f"""以下是針對「{report_title}」分析 {n_articles} 篇內容的結果：
 
 【數值分析（Path 1）】
 {tfidf_summary}
@@ -143,7 +146,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 {intent_summary}
 
 【六面向質化分析（Path 2b，節錄）】
-{qualitative}"""
+{qualitative}""")
 
     # ── § 1 摘要 ──
     summary_prompt = f"""{base_context}
