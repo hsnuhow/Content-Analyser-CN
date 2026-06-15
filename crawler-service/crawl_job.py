@@ -201,7 +201,11 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                 consecutive_hangs = 0
             else:
                 _log(f"({i+1}/{total}) {url}")
+                _t0 = time.time()
                 result, hung = _scrape_with_watchdog(url)
+                # 觀測 metric：每篇耗時與是否被看門狗砍，供事後調校時限/回收頻率。
+                result["elapsed_sec"] = round(time.time() - _t0, 1)
+                result["hung"] = hung
                 if hung:
                     _log(f"⏱ 看門狗逾時，強制砍掉並重建 driver（解除卡死的 Chrome）")
                     _force_close(crawler)         # 先砍掉卡死的 driver（釋放記憶體，避免並存）
