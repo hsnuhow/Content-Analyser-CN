@@ -110,8 +110,23 @@ def ensure_user(email: str, display_name: str = "", picture: str = "") -> str:
     """
     email = email.strip().lower()
     admin_email = get_admin_email()
-    # Admin 不需要白名單流程
+    # Admin 不需要白名單流程，但仍維護一份完整的 user 文件（讓管理員有正確 email 記錄，
+    # 並自動修復早期建立、缺欄位的畸形文件）。display_name/picture 為空時不覆蓋既有值。
     if admin_email and email == admin_email.strip().lower():
+        try:
+            payload = {
+                'email': email,
+                'whitelist_status': 'approved',
+                'is_admin': True,
+                'last_login': firestore.SERVER_TIMESTAMP,
+            }
+            if display_name:
+                payload['display_name'] = display_name
+            if picture:
+                payload['picture'] = picture
+            db.collection('users').document(email).set(payload, merge=True)
+        except Exception as e:
+            print(f"[Services] 維護 admin 文件失敗 {email}: {e}")
         return "approved"
 
     ref = db.collection('users').document(email)
@@ -176,11 +191,19 @@ def reject_user(email: str) -> bool:
         return False
 
 
+def _user_dict_with_email(d) -> dict:
+    """把 doc 轉 dict，並以 document ID 補上 email（users/{email}，doc ID 即權威 email）。
+    早期/畸形文件可能缺 email 欄位；統一在此補齊，避免 url_for 取到 None。"""
+    u = d.to_dict() or {}
+    u['email'] = d.id
+    return u
+
+
 def list_pending_users() -> list:
     """列出所有 pending 用戶。"""
     try:
         docs = db.collection('users').where('whitelist_status', '==', 'pending').stream()
-        return [d.to_dict() for d in docs]
+        return [_user_dict_with_email(d) for d in docs]
     except Exception as e:
         print(f"[Services] list_pending_users 失敗: {e}")
         return []
@@ -190,7 +213,7 @@ def list_all_users() -> list:
     """列出所有用戶（不含 system/config）。"""
     try:
         docs = db.collection('users').stream()
-        return [d.to_dict() for d in docs]
+        return [_user_dict_with_email(d) for d in docs]
     except Exception as e:
         print(f"[Services] list_all_users 失敗: {e}")
         return []
