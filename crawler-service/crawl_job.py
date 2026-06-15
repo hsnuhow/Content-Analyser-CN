@@ -159,7 +159,8 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             if time.time() - start_ts > BATCH_MAX_SECONDS:
                 aborted = f"批次超過 {BATCH_MAX_SECONDS}s 總時限"
                 for u in urls[i:]:
-                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取"})
+                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取",
+                             "unattempted": True})
                 break
 
             # 每 RECYCLE_EVERY 篇回收 driver，釋放 Chrome 記憶體（防長批次 OOM）。
@@ -206,7 +207,8 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             if consecutive_hangs >= MAX_CONSECUTIVE_HANGS:
                 aborted = f"連續 {consecutive_hangs} 篇看門狗逾時，疑系統性問題"
                 for u in urls[i + 1:]:
-                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取"})
+                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取",
+                             "unattempted": True})
                 break
 
         done_log = (f"完成：成功 {counts['success']}、略過 {counts['skipped']}、"

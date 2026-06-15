@@ -33,6 +33,9 @@ from .crawler_client import submit_crawl_batch, get_crawl_status, cancel_crawl
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
+# 自動續批最多輪數（每輪一個 ≤45 分批次補爬「未爬取」項），防失控。
+AUTO_CONTINUE_MAX_ROUNDS = 15
+
 # ──────────────────────────────────────────────────────────────────────
 # 輔助函式
 # ──────────────────────────────────────────────────────────────────────
@@ -984,17 +987,43 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
     }
     if jstatus == 'completed':
         results = job.get('results', []) or []
-        # 寫入 items 子集合：recrawl-failed 只替換指定 url（保留已成功項）；否則整批寫入。
+        # 寫入 items 子集合：recrawl/續批只替換指定 url（保留已成功項）；否則整批寫入。
         recrawl_urls = dataset.get('recrawl_urls')
         if recrawl_urls:
             _replace_items_by_url(pid, did, set(recrawl_urls), results)
-            update['recrawl_urls'] = firestore.DELETE_FIELD
         else:
             _save_dataset_items(pid, did, results, append=False)
         items = _load_dataset_items(pid, did)
+
+        # ── 自動續批：把「未爬取（被時限/連續卡死切掉，unattempted）」的項自動再開一批爬完，
+        #    直到沒有未爬項或達上限。真失敗（403/卡死）不自動重試。 ──
+        unattempted = list(dict.fromkeys(
+            it.get('url') for it in items if it.get('unattempted') and it.get('url')))
+        auto_round = int(dataset.get('auto_round', 0) or 0)
+        if unattempted and auto_round < AUTO_CONTINUE_MAX_ROUNDS:
+            proj = db.collection('projects').document(pid).get()
+            lc = (proj.to_dict() or {}).get('llm_config', {}) if proj.exists else {}
+            gkey = lc.get('api_key') if lc.get('provider') == 'gemini' else None
+            res = submit_crawl_batch(unattempted, use_gemini=bool(gkey), gemini_api_key=gkey)
+            if 'error' not in res and res.get('job_id'):
+                update['status'] = 'crawling'
+                update['crawl_job_id'] = res['job_id']
+                update['recrawl_urls'] = unattempted
+                update['auto_round'] = auto_round + 1
+                update['progress'] = 0
+                update['log'] = (f'自動續批（第 {auto_round + 1} 輪）：補爬 '
+                                 f'{len(unattempted)} 個未爬項...')
+                ds_ref.update(update)
+                return {**dataset, **update}
+
+        # 沒有未爬項 / submit 失敗 / 達上限 → 視為完成
         update['status'] = 'completed'
         update['item_count'] = len(items)
         update['succeeded'] = sum(1 for it in items if it.get('status') == 'success')
+        if recrawl_urls:
+            update['recrawl_urls'] = firestore.DELETE_FIELD
+        if dataset.get('auto_round'):
+            update['auto_round'] = firestore.DELETE_FIELD
     elif jstatus == 'failed':
         update['status'] = 'failed'
         update['log'] = job.get('log', '爬取失敗')

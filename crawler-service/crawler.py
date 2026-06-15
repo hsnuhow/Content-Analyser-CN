@@ -2035,7 +2035,9 @@ class HeadlessCrawler:
 
             initial_source = self.driver.page_source
             initial_soup = BeautifulSoup(initial_source, 'html.parser')
-            if self._is_listing_page(initial_soup):
+            # 模板/已學選擇器命中＝已知文章站 → 不做列表頁誤判（esquirehk 等文章頁有多個 <article>
+            #   關聯卡片會被誤判成列表頁而 skip）。只對未知站做列表頁檢查。
+            if not self._content_container_known(url) and self._is_listing_page(initial_soup):
                 # ⭐ 否決誤判：現代媒體（Vogue/GQ 等）的單篇文章頁 JS 渲染後會載入多張
                 #   關聯文章 <article> 卡片，觸發「多個 article = 列表頁」誤判。
                 #   單篇文章的可靠信號：(a) JSON-LD NewsArticle articleBody ≥200 字，或
