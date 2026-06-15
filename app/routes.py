@@ -122,7 +122,10 @@ def dev_login():
 def callback():
     try:
         token = oauth.google.authorize_access_token()
-        userinfo = token['userinfo']
+        userinfo = dict(token['userinfo'])
+        # 統一小寫 email：避免 Google 偶發不同大小寫造成 owner 查詢（大小寫敏感的
+        # Firestore where 等值比對）漏掉自己的專案、或建立重複 user/member 記錄。
+        userinfo['email'] = userinfo.get('email', '').strip().lower()
         session['user'] = userinfo
 
         email = userinfo.get('email', '')

@@ -231,7 +231,7 @@ def project_detail(pid, project, role):
     datasets = [d.to_dict() | {'id': d.id} for d in datasets_docs]
     # 進專案頁主動同步 crawling 中的資料集（回收背景爬完的結果，狀態/下載鈕即時正確）
     datasets = [
-        (_sync_crawling_dataset(pid, ds['id'], ds) or ds)
+        (_sync_crawling_dataset(pid, ds['id'], ds, allow_spawn=(role != 'viewer')) or ds)
         if ds.get('status') == 'crawling' else ds
         for ds in datasets
     ]
@@ -344,7 +344,14 @@ def list_models(pid, project, role):
     provider = request.args.get('provider', '').lower().strip()
     if provider not in ('gemini', 'claude', 'openai'):
         return jsonify({'models': [], 'error': '不支援的提供商'}), 400
-    api_key = (project.get('llm_config', {}) or {}).get('api_key', '')
+    llm_cfg = project.get('llm_config', {}) or {}
+    api_key = llm_cfg.get('api_key', '')
+    # 安全：只允許查「與已儲存金鑰相符的提供商」。否則 Editor 可指定別家 provider，
+    # 把 Owner 存的金鑰送往非該金鑰所屬的第三方 API（跨提供商金鑰外洩）。
+    stored_provider = (llm_cfg.get('provider', '') or '').lower().strip()
+    if stored_provider and provider != stored_provider:
+        return jsonify({'models': [],
+                        'error': f'此專案金鑰屬 {stored_provider}，無法用於查詢 {provider} 模型'}), 400
     if not api_key:
         return jsonify({'models': [], 'error': '尚未設定 API Key（請先儲存該提供商的 Key）'}), 200
     models = _fetch_provider_models(provider, api_key)
@@ -915,13 +922,22 @@ def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -
     """寫入 items。append=False 先清空既有。回傳寫入後的 _next_seq。"""
     ref = _items_ref(pid, did)
     ds_ref = db.collection('projects').document(pid).collection('datasets').document(did)
+    items = list(items)
+    count = len(items)
     if not append:
         for d in ref.stream():
             d.reference.delete()
         seq = 0
     else:
-        snap = ds_ref.get()
-        seq = (snap.to_dict() or {}).get('_next_seq', 0) if snap.exists else 0
+        # 並發安全：用交易「預約」一段連續的 _seq（count 個）。避免兩個併發 append
+        # （雙開分頁/續批）讀到同一 _next_seq → items _seq 重疊、計數器被後者覆蓋。
+        @firestore.transactional
+        def _reserve(t):
+            snap = ds_ref.get(transaction=t)
+            start = (snap.to_dict() or {}).get('_next_seq', 0) if snap.exists else 0
+            t.set(ds_ref, {'_next_seq': start + count}, merge=True)
+            return start
+        seq = _reserve(db.transaction())
     batch = db.batch()
     n = 0
     for it in items:
@@ -933,7 +949,8 @@ def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -
             batch = db.batch()
     if n % 400 != 0:
         batch.commit()
-    ds_ref.update({'_next_seq': seq})
+    if not append:
+        ds_ref.update({'_next_seq': seq})  # 覆寫模式無競爭，直接設定
     return seq
 
 
@@ -954,13 +971,38 @@ def _replace_items_by_url(pid: str, did: str, urls_set: set, new_items: list) ->
     _save_dataset_items(pid, did, new_items, append=True)
 
 
-def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
+def _claim_auto_continue(ds_ref, job_id: str) -> bool:
+    """交易式認領「為此已完成 job 送出下一輪續批」的權利，防多 poller/多分頁重複 spawn。
+    僅當 dataset 仍 crawling、crawl_job_id 仍等於 job_id、且尚未被認領時成功（回 True）。"""
+    @firestore.transactional
+    def _claim(t):
+        snap = ds_ref.get(transaction=t)
+        d = snap.to_dict() or {}
+        if d.get('status') != 'crawling' or d.get('crawl_job_id') != job_id:
+            return False
+        if d.get('_continue_claimed_for') == job_id:
+            return False
+        t.update(ds_ref, {'_continue_claimed_for': job_id})
+        return True
+    try:
+        return bool(_claim(db.transaction()))
+    except Exception as e:
+        print(f"[sync] 續批認領交易失敗，保守跳過：{e}", flush=True)
+        return False
+
+
+def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
+                           allow_spawn: bool = False):
     """若 dataset 仍在 crawling，向 crawler 拉 job 最新狀態並同步回 Firestore。
     回傳最新 dataset dict（含 id）；找不到回傳 None。
 
     這是「後端主動同步」的核心：頁面載入時呼叫（dataset_detail / project_detail），
     確保即使使用者離開頁面、crawler 在背景跑完，下次進頁面就會回收結果並轉 completed，
     不再只依賴前端輪詢（離開即斷 → 永遠卡 crawling）。
+
+    allow_spawn：是否允許「自動續批」實際送出新爬蟲批次（有副作用、耗 Owner 配額）。
+      預設 False → 任何角色（含 Viewer）都能同步/回收結果，但只有 editor+ 的呼叫端
+      （傳 allow_spawn=True）能觸發續批，避免 Viewer 的唯讀輪詢產生爬蟲副作用。
     """
     ds_ref = (db.collection('projects').document(pid)
               .collection('datasets').document(did))
@@ -1000,7 +1042,10 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
         unattempted = list(dict.fromkeys(
             it.get('url') for it in items if it.get('unattempted') and it.get('url')))
         auto_round = int(dataset.get('auto_round', 0) or 0)
-        if unattempted and auto_round < AUTO_CONTINUE_MAX_ROUNDS:
+        # 只有 editor+ 的呼叫端（allow_spawn）能觸發續批；且用交易「認領」此 job_id 的續批，
+        # 防止多分頁/多 poller 在同一完成時刻各自送出一批（雙開重複 spawn）。
+        if (allow_spawn and unattempted and auto_round < AUTO_CONTINUE_MAX_ROUNDS
+                and _claim_auto_continue(ds_ref, job_id)):
             proj = db.collection('projects').document(pid).get()
             lc = (proj.to_dict() or {}).get('llm_config', {}) if proj.exists else {}
             gkey = lc.get('api_key') if lc.get('provider') == 'gemini' else None
@@ -1035,7 +1080,7 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None):
 @project_access_required(min_role='viewer')
 def dataset_detail(pid, did, project, role):
     # 進入詳情頁主動同步：離開頁面後 crawler 跑完的結果在此回收。
-    dataset = _sync_crawling_dataset(pid, did)
+    dataset = _sync_crawling_dataset(pid, did, allow_spawn=(role != 'viewer'))
     if dataset is None:
         abort(404)
     dataset['id'] = did
@@ -1048,7 +1093,7 @@ def dataset_detail(pid, did, project, role):
 @project_access_required(min_role='viewer')
 def dataset_status(pid, did, project, role):
     """前端輪詢進度；同步邏輯共用 _sync_crawling_dataset。"""
-    dataset = _sync_crawling_dataset(pid, did)
+    dataset = _sync_crawling_dataset(pid, did, allow_spawn=(role != 'viewer'))
     if dataset is None:
         return jsonify({'error': '找不到此資料集'}), 404
     return jsonify({'status': dataset.get('status', 'crawling'),
@@ -1084,6 +1129,19 @@ def analyse_dataset(pid, did, project, role):
     if not contents:
         flash('資料集中沒有可分析的成功項目。', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    # 與 submit_analysis_route 一致的保護：單次最多 100 篇、每篇截斷 50,000 字元
+    # （資料集可達 1000 筆，未設限會把超量 payload 丟給 analysis-pipeline → 下游失敗/成本爆）。
+    if len(contents) > 100:
+        flash(f'成功項目 {len(contents)} 篇超過單次分析上限 100 篇，僅取前 100 篇。', 'warning')
+        contents = contents[:100]
+    truncated_count = 0
+    for it in contents:
+        if len(it['text']) > 50000:
+            it['text'] = it['text'][:50000]
+            truncated_count += 1
+    if truncated_count:
+        flash(f'注意：{truncated_count} 篇超過 50,000 字元，已截斷後送出。', 'warning')
 
     llm_config = project.get('llm_config', {})
     if not llm_config.get('api_key'):
