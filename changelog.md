@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-15 修正：/admin/users 白名單管理 500（已部署 content-analyser 00022-mlc）
+症狀：管理員開白名單頁整頁 500，無法審核（恰好有真實待審用戶卡在 pending）。
+- **根因**：`users/{email}` 以 email 為 doc ID，但 `list_all_users` 用 `to_dict()` 丟失 doc ID；
+  早期建立的 admin 文件又缺 `email` 欄位 → template `url_for(..., email=None)` → Werkzeug BuildError → 500。
+- **修正**：
+  - `services.list_all_users`/`list_pending_users`：以 doc ID 注入 email（`_user_dict_with_email`），對缺 email 欄位的舊文件永久免疫。
+  - `services.ensure_user`：admin 登入時 upsert 完整 user 文件（email/display_name/picture/whitelist_status=approved/is_admin），自動修復畸形文件；空值不覆蓋既有。
+  - `admin_users.html`：admin 該列顯示「管理員」徽章、隱藏審核按鈕（防自我停用）。
+- 驗證機制（Google OAuth → ensure_user → 非 approved 擋至 /pending）原本即完整，本次僅修管理頁與 admin 記錄。實測頁面恢復、按鈕正常。
+
 ## 2026-06-15 補強：分析 LLM 並行化 + 爬蟲降冷啟動（已部署 analysis 00014-bqd / crawler 00046-cfh）
 針對執行速度做精簡優化，不犧牲穩定與功能完整（prompt/輸出/取消檢查點全不變，併發皆設上限防 rate limit）：
 - **analysis-pipeline Phase 1（加速）**：
