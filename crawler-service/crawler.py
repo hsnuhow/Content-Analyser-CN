@@ -71,6 +71,32 @@ AD_BLOCKLIST = [
     "*.mp4", "*.webm", "*.woff", "*.woff2", "*.ttf",
 ]
 
+# Firestore 可覆寫/擴充的封鎖清單快取（與內建合併；讀失敗只用內建）。
+_AD_BLOCKLIST_CACHE = {"val": None, "ts": 0.0}
+
+
+def get_ad_blocklist():
+    """生效封鎖清單 = 內建 AD_BLOCKLIST + Firestore `system/config.ad_blocklist`（陣列）。
+    可不重新部署即增刪封鎖網域；60s 行程快取；Firestore 讀失敗則回退只用內建。"""
+    import time
+    now = time.time()
+    c = _AD_BLOCKLIST_CACHE
+    if c["val"] is not None and now - c["ts"] < 60:
+        return c["val"]
+    extra = []
+    try:
+        from firebase_admin import firestore
+        doc = firestore.client().collection("system").document("config").get()
+        if doc.exists:
+            v = (doc.to_dict() or {}).get("ad_blocklist")
+            if isinstance(v, list):
+                extra = [str(x).strip() for x in v if str(x).strip()]
+    except Exception:
+        extra = []
+    merged = list(dict.fromkeys(AD_BLOCKLIST + extra))  # 去重、保序
+    c["val"], c["ts"] = merged, now
+    return merged
+
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -465,6 +491,11 @@ CMP_REMOVE_SELECTORS = [
 
 HEURISTIC_CONF_THRESHOLD = 0.55
 
+# 抽取字數門檻（集中管理，原本散落 200/300/500）
+MIN_LEARNED_CHARS = 300      # 已學/快取選擇器：讀取端採用前的最低字數（防誤學的寬選擇器污染）
+MIN_TEMPLATE_CHARS = 300     # 模板選擇器採用門檻
+MIN_FALLBACK_TRIGGER = 500   # scrape 層「主文過短」二級後備觸發門檻
+
 
 class UnsupportedSiteError(Exception):
     """爬取不支援的網站時拋出（如需登入、強反爬蟲）。
@@ -579,9 +610,10 @@ class HeadlessCrawler:
             self.driver.execute_cdp_cmd("Network.enable", {})
             # ⭐ 封廣告/追蹤網域：斷掉持續發請求、拖住 page-load 的元兇（重型 SSR 站不再卡死）。
             try:
+                _blocklist = get_ad_blocklist()
                 self.driver.execute_cdp_cmd(
-                    "Network.setBlockedURLs", {"urls": AD_BLOCKLIST})
-                self._log(f"[INIT] 已封廣告/追蹤網域 {len(AD_BLOCKLIST)} 條")
+                    "Network.setBlockedURLs", {"urls": _blocklist})
+                self._log(f"[INIT] 已封廣告/追蹤網域 {len(_blocklist)} 條")
             except Exception as e:
                 self._log(f"[INIT] 廣告封鎖略過: {e}")
             self.driver.execute_cdp_cmd(
@@ -1012,7 +1044,8 @@ class HeadlessCrawler:
         self._log("[Page Type Analysis] Judgement: SINGLE ARTICLE PAGE.")
         return False
 
-    def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60, original_url: str = None):
+    def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60, original_url: str = None,
+                                       deadline: float = None):
         """滾動到底以觸發 lazy-load（對齊 Colab v3.8 _scroll_page_safe）。
 
         逐次滾到底、等待，直到頁面高度連續穩定（stagnant）= 已到底。
@@ -1031,6 +1064,11 @@ class HeadlessCrawler:
         scrolls = 0
         url_changed = False
         while stagnant_scrolls < max_stagnant_scrolls and scrolls < max_scrolls:
+            # 時限收斂：剩餘時間 <30s 即停止滾動進抽取（深滾 60×1.5s≈90s 可能吃滿單頁時限，
+            # 重型 lazy gallery 尤甚）。確保留時間給抽取，不被滾動耗盡。
+            if deadline is not None and time.time() > deadline - 30:
+                self._log("[Scroll & Wait] 接近時限，停止捲動、保留時間給抽取。")
+                break
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(self.scroll_pause_time)
             scrolls += 1
@@ -1268,7 +1306,7 @@ class HeadlessCrawler:
                     config=types.GenerateContentConfig(temperature=0.3),
                 )
             except Exception:
-                self._log(f"[LLM] Gemini 2.0 Flash 不可用，改用 1.5 Flash - {url}")
+                self._log(f"[LLM] gemini-2.5-flash 不可用，改用 gemini-2.5-flash-lite - {url}")
                 resp = client.models.generate_content(
                     model="gemini-2.5-flash-lite",
                     contents=prompt_text,
@@ -1544,9 +1582,17 @@ class HeadlessCrawler:
             node = soup.select_one(sel)
             if node:
                 content = self._clean_text(node.get_text("\n", strip=True))
-                self._log(f"  → ✅ Content extracted: {len(content)} chars")
-                self._log(f"  → Preview: {content[:200]}...")
-                return content
+                # 讀取端驗證：已學/快取選擇器可能是歷史誤學的寬選擇器（body/列表/cookie 區塊）。
+                # 採用前檢查字數 + 非列表 + 非 cookie banner，不達標就 fallthrough 走模板/啟發式，
+                # 不再「命中就無條件回傳」（修補選擇器污染整個網域的最大缺口）。
+                if (len(content) >= MIN_LEARNED_CHARS
+                        and not self._looks_like_listing_block(node)
+                        and not self._looks_like_cookie_banner(content, node)):
+                    self._log(f"  → ✅ Content extracted: {len(content)} chars")
+                    self._log(f"  → Preview: {content[:200]}...")
+                    return content
+                self._log(f"  → ⚠️ Cached selector 命中但內容不合格"
+                          f"（{len(content)} 字／列表或 cookie 區塊），改走模板/啟發式")
             else:
                 self._log(f"  → ⚠️ Cached selector no longer matches, clearing cache")
                 del self.domain_selector_cache[domain]
@@ -2113,7 +2159,8 @@ class HeadlessCrawler:
                 url_changed_during_scroll = self._scroll_and_wait_for_full_load(max_scrolls=4, original_url=url)
             else:
                 self._log("[Execution Strategy] Detected a single article page. Proceeding with full scroll.")
-                url_changed_during_scroll = self._scroll_and_wait_for_full_load(original_url=url)
+                url_changed_during_scroll = self._scroll_and_wait_for_full_load(
+                    original_url=url, deadline=deadline)
 
             if time.time() > deadline:
                 raise TimeoutError(f"超過單頁 {hard_timeout_sec}s 時限（滾動階段後）")
