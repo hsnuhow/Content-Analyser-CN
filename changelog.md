@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-15 修正：全面 code review + 安全審查問題修正（待部署四服務）
+完整審查（5 路並行深審 + 驗證）後，修正所有 Critical/High 與多數 Medium 問題。分 5 批提交：
+- **安全批 1**：SSRF（crawler `_is_safe_url` 對 domain 解析 DNS、任一 IP 落內網即拒，補「域名指向 metadata」繞過）；
+  SECRET_KEY 正式環境 fail-fast；安全標頭（CSP/X-Frame-Options/nosniff/HSTS）；/debug 非 dev 回 404；前端 bootstrap/marked/dompurify 鎖版+SRI。
+- **安全+韌性批 2（analysis）**：prompt_safety（INJECTION_GUARD + `<DATA>` 包裹）防爬取內容注入 LLM；
+  llm_client 對 429/5xx 指數退避重試、Claude 回應防呆、Gemini fallback 收窄；Path1 逾時 race 修正（丟棄部分結果+凍結 search_extent 快照）；失敗批次顯性化；report §3 連結 scheme 白名單。
+- **邏輯批 3（content-analyser）**：爬蟲續批副作用 gate 給 editor+（Viewer 唯讀輪詢不再 spawn）+ 交易式認領防雙開重複續批；
+  analyse_dataset 補 100 篇上限+50k 截斷；_save_dataset_items _seq 交易式預約防併發碰撞；list_models 只准查相符 provider 防金鑰外洩；OAuth email 正規化小寫。
+- **穩健批 4**：crawler hard_timeout 夾值、學習選擇器驗證、crawler/analysis cleanup 改 where 過濾+limit；nlp_path embeddings 對位降級；search_extent_client 非 2xx 一律 error。
+- **納入開發程序**：較大項（crawler redirect SSRF 殘留 / 同步看門狗 / close 超時、list_projects 全集合掃描）拆背景任務並記於 OPTIMIZATION.md；search-extent §7 e2e 阻塞於 Ads token。
+- 全部 py_compile 通過；尚未部署（待部署四服務皆 image-only；content-analyser 需先確認 SECRET_KEY 已注入，否則 fail-fast 會擋啟動）。
+
 ## 2026-06-15 文件：根目錄三支柱整理（產品/開發/維護中樞）
 把雜亂的 11 個根目錄 .md 整理成「三支柱 + 索引中樞」結構，零資料刪除、保留完整開發紀錄：
 - **新增 [DEVELOPMENT.md](DEVELOPMENT.md)（開發中樞）**：索引 development_plan / CODE_REVIEW / OPTIMIZATION / SECURITY_INCIDENTS /

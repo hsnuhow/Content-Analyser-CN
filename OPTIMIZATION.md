@@ -79,4 +79,24 @@
 
 ---
 
+## 2026-06-15 全面 code review / 安全審查 — 剩餘追蹤項
+
+完整審查後，**多數 Critical/High/Medium 已修正並提交**（SSRF DNS 解析、prompt injection 防護、
+SECRET_KEY fail-fast、安全標頭、前端 SRI、LLM 退避重試、Path 逾時 race、續批副作用 gate/防重複、
+分析上限、_seq 原子化、金鑰防洩、cleanup 收斂、選擇器驗證…見 changelog）。以下**較大、需獨立處理**
+的項目納入開發程序追蹤：
+
+| 項目 | 嚴重度 | 說明 / 建議 | 狀態 |
+|------|--------|------------|------|
+| crawler SSRF redirect 殘留 | High | 入口 `_is_safe_url` 已解析 DNS 收口；但 og/oEmbed/YouTube 的 urllib 抓取與 Chrome 導航**跟隨 redirect 時未重驗** → 公開 URL 302 到內網仍可能。需 redirect handler 逐跳重驗 / egress proxy | 背景 chip |
+| crawler 同步 /api/scrape 無看門狗 | High | async 批次（crawl_job）有看門狗；同步單篇路徑步驟內 hang 無上限。應比照包 `ThreadPoolExecutor.result(timeout)` | 背景 chip |
+| crawler 回收/recycle close() 可能卡住 | High | 看門狗砍掉 hung thread 靠 `old.close()`；若 close 本身 hang 會卡整批。應對 close 加超時 | 背景 chip |
+| content-analyser list_projects/list_all_users 全集合掃描 | Medium | 每次列表掃整個 collection 查 member；應加 `member_emails` array 欄位 + `array_contains` 查詢 + 既有專案 backfill | 背景 chip |
+| 分析平行階段缺取消檢查點 | Low | 兩路平行（最貴 LLM 段）期間無 `cancel_requested` 檢查；取消後仍跑完才停 | 背景 chip |
+| C5 爬蟲 scroll 逾時保留部分結果 | Medium | 清單頁滾動逾時整篇 fail，應保留已抓內容（CODE_REVIEW C5，待確認現況） | 追蹤 |
+| search-extent §7 真實接地 e2e | — | 阻塞於 `ADS_DEVELOPER_TOKEN`（待 Google Ads Basic 核准） | 阻塞 |
+| 研究項目（未核准）| — | YouTube 影片資料化、Cowork 蒐集整合（見 development_plan.md） | 待核准 |
+
+---
+
 *建立於 2026-06-13。新項目請附問題／影響／建議方向／優先級。*
