@@ -247,6 +247,11 @@ Claude Code 絕對不得：
 - 使用 `.env`（已加入 `.gitignore`），僅存放本地用的值或佔位符
 - 生產與 staging 金鑰必須來自 Google Secret Manager
 
+金鑰輪換（強制走正確程序）：
+
+- `GENAI_API_KEY`、`PROXY_*`（Tier 3 代理憑證）可由 `/admin` 後台「Secret Manager 金鑰管理」更新（只輸入不回顯）。
+- `CRAWLER_API_KEY`、`ANALYSIS_API_KEY` 是服務間共用驗證金鑰（驗證方+呼叫方各一份，值需一致），**刻意不開放後台編輯**；輪換一律用根目錄 `rotate-key.sh <CRAWLER|ANALYSIS>`（維運者 gcloud 身分執行）：產生新值 → 寫 Secret Manager → 重部署兩端 → 驗證。不擴充 service account 權限，安全界線不變。
+
 ### 3.2 Firestore 是唯一主要資料庫
 
 所有應用主要資料必須存放於 **Firestore**。不得引入其他資料庫，除非使用者明確指示。

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-15 補強：鎖定服務間驗證金鑰 + 新增 rotate-key.sh 安全輪換腳本（待部署 content-analyser）
+- **後台移除可編輯入口**：`CRAWLER_API_KEY` / `ANALYSIS_API_KEY` 是服務間共用 X-API-Key（驗證方+呼叫方各一份、值需一致），
+  從 `ALLOWED_SECRETS` 與後台下拉移除（後端 update_secrets 自動拒絕 + UI 不顯示），避免隨手改一端造成中斷。
+- **新增 `rotate-key.sh <CRAWLER|ANALYSIS>`**（根目錄）：以維運者 gcloud 身分原子化輪換——產生新值 → 寫 Secret Manager →
+  重部署驗證方+呼叫方 → 用新金鑰打受保護端點驗證（看狀態碼非 401/403）。金鑰不 echo/不落地/結束 unset；
+  不擴充 service account 權限（安全界線不變）；驗證失敗印回滾指引。單金鑰輪換有 1–2 分鐘空窗（離峰執行）。
+- CLAUDE.md §3.1 補金鑰輪換程序說明。
+
 ## 2026-06-15 新增：後台管理 Tier 3 代理憑證 + deploy.sh 標準化（已部署 content-analyser 00023-jgq）
 把 content-crawler 住宅代理憑證從「Cloud Run console 明文 env」標準化為 Secret Manager，並可由管理後台維護：
 - **後台管理憑證**：`/admin` 的「Secret Manager 金鑰管理」下拉新增「Tier 3 代理憑證」(PROXY_HOST/PORT/USER/PASS/PROVIDER)，

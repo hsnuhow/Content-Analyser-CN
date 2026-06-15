@@ -210,10 +210,13 @@ def reactivate_api_key_route(key_id):
 # ──────────────────────────────────────────────────────────────────────
 
 ALLOWED_SECRETS = [
-    'GENAI_API_KEY', 'CRAWLER_API_KEY', 'ANALYSIS_API_KEY',
+    'GENAI_API_KEY',
     # Tier 3 住宅代理憑證（content-crawler 用；on/off 另由後台 Tier 3 toggle 控制）
     'PROXY_HOST', 'PROXY_PORT', 'PROXY_USER', 'PROXY_PASS', 'PROXY_PROVIDER',
 ]
+# ⚠️ CRAWLER_API_KEY / ANALYSIS_API_KEY 刻意「不」開放後台編輯：它們是服務間共用的
+#    驗證金鑰，隨手改一端會造成兩端不一致而中斷爬取/分析。輪換需同時更新 Secret Manager
+#    並重部署「驗證方 + 呼叫方」兩個服務——交由維運腳本（rotate-key）統一處理，不走此表單。
 
 
 @bp.route('/update_secrets', methods=['POST'])
