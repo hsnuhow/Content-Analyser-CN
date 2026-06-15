@@ -191,7 +191,12 @@ def scrape():
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
-    hard_timeout_sec = int(data.get("hard_timeout_sec", 60))
+    # 防呆 + 夾值：非數字不致 500；上限 300s 避免單一請求被惡意/誤設綁住 worker。
+    try:
+        hard_timeout_sec = int(data.get("hard_timeout_sec", 60))
+    except (TypeError, ValueError):
+        hard_timeout_sec = 60
+    hard_timeout_sec = min(max(hard_timeout_sec, 5), 300)
 
     result = _run_scrape(url, use_gemini, gemini_api_key, hard_timeout_sec)
     http_status = 200 if result.get("status") in ("success", "skipped") else 500
@@ -363,24 +368,35 @@ def cleanup_crawl_jobs():
         days = 7
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
     deleted = 0
+    MAX_CLEAN = 500  # 單次上限，避免一次掃/刪過多導致請求逾時
     try:
-        for doc in db.collection(JOBS_COLLECTION).stream():
+        # 只查「已結束」狀態（伺服器端單欄位過濾，免複合索引），並設上限，
+        # 不再全表 stream。updated_at 的 cutoff 比較在取回後做。
+        q = (db.collection(JOBS_COLLECTION)
+             .where("status", "in", ["completed", "failed", "cancelled"])
+             .limit(MAX_CLEAN))
+        for doc in q.stream():
             d = doc.to_dict() or {}
-            if d.get("status") not in ("completed", "failed", "cancelled"):
-                continue
             updated = d.get("updated_at") or d.get("completed_at")
-            # 無時間戳或早於 cutoff → 刪除（含 results 子集合）
             if updated is None or updated < cutoff:
                 try:
+                    rbatch = db.batch()
+                    nr = 0
                     for r in doc.reference.collection("results").stream():
-                        r.reference.delete()
-                except Exception:
-                    pass
+                        rbatch.delete(r.reference)
+                        nr += 1
+                        if nr % 400 == 0:
+                            rbatch.commit()
+                            rbatch = db.batch()
+                    rbatch.commit()
+                except Exception as e:
+                    print(f"[cleanup] 刪除 results 子集合失敗 {doc.id}: {e}", flush=True)
                 doc.reference.delete()
                 deleted += 1
     except Exception as e:
         return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
-    return jsonify({"status": "ok", "deleted": deleted, "days": days}), 200
+    return jsonify({"status": "ok", "deleted": deleted, "days": days,
+                    "capped": deleted >= MAX_CLEAN}), 200
 
 
 if __name__ == "__main__":

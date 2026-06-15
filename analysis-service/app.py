@@ -266,18 +266,22 @@ def cleanup_jobs():
         days = 7
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
     deleted = 0
+    MAX_CLEAN = 500  # 單次上限，避免全表掃/刪導致逾時
     try:
-        for doc in db.collection(JOBS_COLLECTION).stream():
+        # 只查已結束狀態（伺服器端單欄位過濾，免複合索引）+ 上限，不再全表 stream。
+        q = (db.collection(JOBS_COLLECTION)
+             .where("status", "in", ["completed", "failed", "cancelled"])
+             .limit(MAX_CLEAN))
+        for doc in q.stream():
             d = doc.to_dict() or {}
-            if d.get("status") not in ("completed", "failed", "cancelled"):
-                continue
             updated = d.get("updated_at") or d.get("completed_at")
             if updated is None or updated < cutoff:
                 doc.reference.delete()
                 deleted += 1
     except Exception as e:
         return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
-    return jsonify({"status": "ok", "deleted": deleted, "days": days}), 200
+    return jsonify({"status": "ok", "deleted": deleted, "days": days,
+                    "capped": deleted >= MAX_CLEAN}), 200
 
 
 if __name__ == "__main__":

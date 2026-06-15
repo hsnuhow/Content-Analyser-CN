@@ -205,7 +205,12 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
     ]
 
     embeddings = _get_embeddings(texts, project_id)
-    if len(embeddings) < 2:
+    # 對位防呆：分群用 labels[i] ↔ contents[i] 對應。若 embeddings 數量與 texts 不符
+    # （某批少回 → 錯位），後續會把文章分到錯群 → 寧可降級單群，不冒錯位風險。
+    if len(embeddings) < 2 or len(embeddings) != len(texts):
+        if len(embeddings) != len(texts):
+            print(f"[nlp] embeddings 數({len(embeddings)})≠texts 數({len(texts)})，降級單群避免錯位",
+                  flush=True)
         return {
             "clusters": [{"cluster_id": 0, "articles": [
                 {"url": c.get("url", ""), "title": c.get("title", "")} for c in contents

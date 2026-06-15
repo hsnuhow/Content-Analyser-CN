@@ -48,11 +48,29 @@ def load_learned_selectors() -> Dict[str, str]:
     return data
 
 
+# 過寬的選擇器：命中過一次（≥門檻字數）就被持久化、之後對整個網域盲套，
+# 會把雜訊也抽進來、長期污染該網域所有 URL 的抽取品質 → 拒絕寫入。
+_TOO_BROAD_SELECTORS = {"body", "html", "main", "div", "*", "article", "section"}
+
+
+def _is_valid_selector(selector: str) -> bool:
+    s = (selector or "").strip().lower()
+    if not s or len(s) > 200:
+        return False
+    # 純標籤名（無 . # [ > 空格 等限定）且落在過寬清單 → 拒絕
+    if s in _TOO_BROAD_SELECTORS:
+        return False
+    return True
+
+
 def save_learned_selector(domain: str, selector: str,
                           sample_url: str = "", chars: int = 0,
                           cms: str = "") -> None:
     """把某網域學到的有效選擇器寫回 Firestore。no-op on failure。"""
     if not domain or not selector:
+        return
+    if not _is_valid_selector(selector):
+        print(f"[SiteLearning] 選擇器過寬/不合法，拒絕寫入 {domain}：{selector!r}", flush=True)
         return
     try:
         from firebase_admin import firestore
