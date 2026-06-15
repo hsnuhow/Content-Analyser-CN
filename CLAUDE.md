@@ -433,11 +433,16 @@ echo "✅ 全部通過"
 | `GOOGLE_CLIENT_SECRET` | content-analyser | Google OAuth |
 | `CRAWLER_API_KEY` | 兩個服務 | 爬蟲服務存取金鑰 |
 | `GENAI_API_KEY` | 兩個服務 | Gemini API Key |
+| `PROXY_ENABLED` / `PROXY_HOST` / `PROXY_PORT` / `PROXY_USER` / `PROXY_PASS` / `PROXY_PROVIDER` | content-crawler | 住宅代理（Decodo）憑證；deploy.sh 以 --set-secrets 注入 |
 
 ```bash
 # 確認 secrets 存在（不讀取值）
 gcloud secrets list --format="table(name)"
 ```
+
+> 機密一律走 Secret Manager（§3.1）：crawler 的 proxy 憑證已標準化為上述 secrets，
+> deploy.sh 完整定義 crawler 環境、可安全一鍵部署，不再依賴 Cloud Run console 手動 env。
+> 本地除錯時 proxy 憑證放 `.env`（已 gitignore），僅 debug 模式取用，不進正式環境。
 
 ### 6.3 部署三個服務（完整）
 
@@ -916,11 +921,17 @@ analysis_jobs/{job_id}            非同步任務狀態
 
 ## content-crawler
 
-| 變數 | 說明 |
-|------|------|
-| `CRAWLER_API_KEY` | API 驗證金鑰 |
-| `GENAI_API_KEY` | Gemini（selector 輔助）|
-| `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 |
+| 變數 | 來源 | 說明 |
+|------|------|------|
+| `CRAWLER_API_KEY` | Secret Manager | API 驗證金鑰 |
+| `GENAI_API_KEY` | Secret Manager | Gemini（selector 輔助）|
+| `PROXY_ENABLED` / `PROXY_HOST` / `PROXY_PORT` / `PROXY_USER` / `PROXY_PASS` / `PROXY_PROVIDER` | Secret Manager | 住宅代理（Decodo）憑證；deploy.sh --set-secrets 注入 |
+| `ENABLE_YOUTUBE_TRANSCRIPT` | deploy.sh --set-env-vars | `1` = 啟用 YouTube 字幕擷取 |
+| `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 | |
+| `CRAWLER_DISABLE_IMAGES` | （選用）| 關閉圖片載入省記憶體 |
+
+> Tier 3 住宅代理是否實際啟用，另由 Firestore `system/config.tier3_enabled`（admin 控制台切換）決定；
+> 上述 PROXY_* 為憑證來源，兩者搭配才生效。
 
 ## analysis-pipeline
 
