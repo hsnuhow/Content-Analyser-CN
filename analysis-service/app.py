@@ -25,6 +25,7 @@ from flask import Flask, request, jsonify
 
 from pipeline import run_analysis, JOBS_COLLECTION
 from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLECTION
+from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
 from auth import is_authorized
 
 SERVICE_VERSION = "1.1.0"
@@ -301,6 +302,81 @@ def get_image_job(job_id: str):
         "progress": job.get("progress", 0), "log": job.get("log", ""),
         "report_title": job.get("report_title"), "n_images": job.get("n_images"),
         "n_success": job.get("n_success"),
+        "llm_provider": job.get("llm_provider"), "llm_model": job.get("llm_model"),
+    }
+    if job.get("status") == "completed":
+        safe["result_markdown"] = job.get("result_markdown", "")
+    if job.get("status") == "failed":
+        safe["error"] = job.get("log", "")
+    return jsonify(safe), 200
+
+
+@app.route("/api/synthesize-combined", methods=["POST"])
+@require_api_key
+def synthesize_combined():
+    """提交整合報告（非同步，階段③）：文字報告 × 視覺報告 → 整合策略報告。
+
+    Request: {report_title, text_markdown, visual_markdown, topic?,
+              llm_provider, llm_model, llm_api_key}
+    Response: {"job_id": "...", "status": "pending"}
+    """
+    data = request.get_json(silent=True) or {}
+    report_title = (data.get("report_title") or "").strip()
+    text_md = data.get("text_markdown") or ""
+    visual_md = data.get("visual_markdown") or ""
+    if not report_title:
+        return jsonify({"status": "failed", "error": "缺少 report_title"}), 400
+    if not text_md.strip() or not visual_md.strip():
+        return jsonify({"status": "failed",
+                        "error": "需同時提供 text_markdown 與 visual_markdown"}), 400
+    topic = (data.get("topic") or report_title).strip()
+    llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
+    llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
+    llm_api_key = (data.get("llm_api_key") or "").strip()
+    try:
+        temperature = max(0.0, min(1.0, float(data.get("temperature", 0.3))))
+    except (TypeError, ValueError):
+        temperature = 0.3
+    if not llm_api_key:
+        return jsonify({"status": "failed",
+                        "error": "缺少 llm_api_key。請在 Project 設定中配置 LLM API Key。"}), 400
+    if llm_provider not in ("gemini", "claude", "openai"):
+        return jsonify({"status": "failed",
+                        "error": f"不支援的 llm_provider：'{llm_provider}'。"}), 400
+
+    job_id = str(uuid.uuid4())
+    db.collection(COMBINED_JOBS_COLLECTION).document(job_id).set({
+        "job_id": job_id, "status": "pending", "progress": 0,
+        "log": "任務已建立，等待整合...", "report_title": report_title,
+        "llm_provider": llm_provider, "llm_model": llm_model,
+        "result_markdown": None,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
+    })
+    llm_cfg = {"provider": llm_provider, "model": llm_model,
+               "api_key": llm_api_key, "temperature": temperature,
+               "thinking": bool(data.get("thinking", False))}
+    threading.Thread(target=run_combined_report,
+                     args=(job_id, report_title, text_md, visual_md, topic, llm_cfg, db),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/synthesize-combined/<job_id>", methods=["GET"])
+@require_api_key
+def get_combined_job(job_id: str):
+    """查詢整合報告任務進度與結果（不回傳 llm_api_key）。"""
+    try:
+        doc = db.collection(COMBINED_JOBS_COLLECTION).document(job_id).get()
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"Firestore 查詢失敗：{e}"}), 500
+    if not doc.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+    job = doc.to_dict()
+    safe = {
+        "job_id": job.get("job_id"), "status": job.get("status"),
+        "progress": job.get("progress", 0), "log": job.get("log", ""),
+        "report_title": job.get("report_title"),
         "llm_provider": job.get("llm_provider"), "llm_model": job.get("llm_model"),
     }
     if job.get("status") == "completed":

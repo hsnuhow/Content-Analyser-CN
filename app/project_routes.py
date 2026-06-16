@@ -29,7 +29,8 @@ from io import BytesIO
 from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
 from .analysis_client import (submit_analysis, get_job_status, cancel_analysis,
-                              submit_image_analysis, get_image_analysis_status)
+                              submit_image_analysis, get_image_analysis_status,
+                              submit_combined, get_combined_status)
 from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
                              submit_research, get_research_status,
                              submit_extract_images, get_extract_images_status)
@@ -638,11 +639,17 @@ def analysis_status(pid, aid, project, role):
     analysis = doc.to_dict()
     status = analysis.get('status', 'pending')
 
-    # 若還在進行中，向 analysis-pipeline 查詢最新進度
+    # 若還在進行中，向 analysis-pipeline 查詢最新進度（視覺分析查影像端點）
     if status in ('pending', 'running'):
         job_id = analysis.get('job_id')
         if job_id:
-            pipeline_status = get_job_status(job_id)
+            kind = analysis.get('kind')
+            if kind == 'visual':
+                pipeline_status = get_image_analysis_status(job_id)
+            elif kind == 'combined':
+                pipeline_status = get_combined_status(job_id)
+            else:
+                pipeline_status = get_job_status(job_id)
             new_status = pipeline_status.get('status', status)
             progress = pipeline_status.get('progress', analysis.get('progress', 0))
             log = pipeline_status.get('log', analysis.get('log', ''))
@@ -1410,35 +1417,93 @@ def analyse_images_dataset(pid, did, project, role):
         flash(f'啟動視覺分析失敗：{result["error"]}', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
-    (db.collection('projects').document(pid).collection('datasets').document(did)
-     .update({'image_analysis_job_id': result.get('job_id'),
-              'image_analysis_status': 'running',
-              'updated_at': firestore.SERVER_TIMESTAMP}))
-    log_usage('analyse_images', detail=dataset.get('name', ''),
-              count=len(images), project_id=pid)
-    flash(f'已啟動「大圖視覺分析」（{len(images)} 張）。完成後此頁會顯示視覺報告。', 'success')
-    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    # 與文字分析一致：建一筆正式 analyses doc（kind='visual'）→ 進「歷史分析」清單、
+    # 有獨立報告頁、可下載/改名/刪除。result_markdown 由 analysis_status 輪詢時持久化。
+    job_id = result.get('job_id')
+    analysis_ref = (db.collection('projects').document(pid)
+                    .collection('analyses').document())
+    analysis_ref.set({
+        'id': analysis_ref.id,
+        'job_id': job_id,
+        'kind': 'visual',
+        'report_title': title,
+        'status': 'pending',
+        'progress': 0,
+        'log': '影像視覺分析已提交，等待處理...',
+        'n_images': len(images),
+        'llm_provider': provider,
+        'llm_model': model,
+        'submitted_by': current_user_email(),
+        'submitted_at': firestore.SERVER_TIMESTAMP,
+        'completed_at': None,
+        'result_markdown': None,
+        'source_dataset': did,
+    })
+    log_usage('analyse_images', detail=title, count=len(images), project_id=pid)
+    flash(f'已提交「大圖視覺分析」（{len(images)} 張）。完成後會列入歷史分析。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
 
-@bp.route('/<pid>/datasets/<did>/analyse-images/status')
-@project_access_required(min_role='viewer')
-def analyse_images_status(pid, did, project, role):
-    """輪詢大圖視覺分析任務進度與結果（result_markdown）。"""
-    ds_doc = (db.collection('projects').document(pid)
-              .collection('datasets').document(did).get())
-    if not ds_doc.exists:
-        return jsonify({'error': '找不到資料集'}), 404
-    job_id = (ds_doc.to_dict() or {}).get('image_analysis_job_id')
-    if not job_id:
-        return jsonify({'status': 'none'}), 200
-    job = get_image_analysis_status(job_id)
-    return jsonify({
-        'status': job.get('status', 'unknown'),
-        'log': job.get('log', ''),
-        'n_images': job.get('n_images'),
-        'n_success': job.get('n_success'),
-        'result_markdown': job.get('result_markdown', ''),
-    }), 200
+@bp.route('/<pid>/analyses/combine', methods=['POST'])
+@project_access_required(min_role='editor')
+def combine_analyses(pid, project, role):
+    """🧩 整合報告（階段③）：選 1 筆文字報告 + 1 筆視覺報告 → 整合策略報告。
+    產物本身也存成 analyses（kind='combined'），列入歷史分析。"""
+    ids = request.form.getlist('analysis_ids')
+    if len(ids) < 2:
+        flash('請勾選一份文字報告與一份視覺報告（共兩筆）。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    docs = []
+    for aid in ids:
+        d = (db.collection('projects').document(pid)
+             .collection('analyses').document(aid).get())
+        if d.exists:
+            docs.append(d.to_dict())
+    text_doc = next((v for v in docs if v.get('kind') not in ('visual', 'combined')), None)
+    visual_doc = next((v for v in docs if v.get('kind') == 'visual'), None)
+    if not text_doc or not visual_doc:
+        flash('整合需要「一份文字報告」+「一份視覺報告」，請確認勾選。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if text_doc.get('status') != 'completed' or visual_doc.get('status') != 'completed':
+        flash('兩份報告都需「已完成」才能整合。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    text_md = text_doc.get('result_markdown') or ''
+    visual_md = visual_doc.get('result_markdown') or ''
+    if not text_md or not visual_md:
+        flash('報告內容尚未就緒，請稍候再試。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    cfg = project.get('llm_config', {}) or {}
+    provider = (cfg.get('provider') or 'gemini').lower()
+    model = cfg.get('model') or 'gemini-2.5-flash'
+    api_key = cfg.get('api_key') or ''
+    if not api_key:
+        flash('請先在專案設定填入 LLM API Key。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    topic = (text_doc.get('report_title') or '').strip() or '整合主題'
+    title = f"{topic}（整合報告）"
+    result = submit_combined(title, text_md, visual_md, provider, model, api_key,
+                             topic=topic, temperature=cfg.get('temperature', 0.3))
+    if 'error' in result:
+        flash(f'啟動整合失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    job_id = result.get('job_id')
+    ref = (db.collection('projects').document(pid).collection('analyses').document())
+    ref.set({
+        'id': ref.id, 'job_id': job_id, 'kind': 'combined',
+        'report_title': title, 'status': 'pending', 'progress': 0,
+        'log': '整合報告已提交，等待處理...',
+        'llm_provider': provider, 'llm_model': model,
+        'submitted_by': current_user_email(),
+        'submitted_at': firestore.SERVER_TIMESTAMP,
+        'completed_at': None, 'result_markdown': None,
+        'source_text': text_doc.get('id'), 'source_visual': visual_doc.get('id'),
+    })
+    log_usage('combine', detail=title, count=2, project_id=pid)
+    flash('已提交整合報告（文字 × 視覺）。完成後列入歷史分析。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=ref.id))
 
 
 @bp.route('/<pid>/analyses/combined', methods=['POST'])

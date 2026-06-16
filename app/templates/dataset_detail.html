@@ -180,43 +180,6 @@
   </script>
   {% endif %}
 
-  {# 大圖視覺分析報告（image_analysis_job_id 存在時）#}
-  {% if dataset.image_analysis_job_id %}
-  <div class="card shadow-sm mb-4 border-success">
-    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-      <span>🎨 大圖視覺分析報告</span>
-      <a id="imgaDl" class="btn btn-sm btn-outline-secondary d-none" download="visual-report.md">📄 下載 Markdown</a>
-    </div>
-    <div class="card-body">
-      <div id="imgaLog" class="text-muted small mb-2">視覺分析進行中...</div>
-      <div id="imgaReport"></div>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/marked@11.2.0/marked.min.js"
-          integrity="sha384-9Md4MlJk24bo2Ifubp0FbKhuES4/iAwyTGMeWpBG4RoHGTKygpEGEpOYhEQxbfa9" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"
-          integrity="sha384-eguRoJERj8ghOpzO//Rl7+ScQsQIR1cH+ajll7+fG+IpbNPlkZsQn9h8ccr+wPXx" crossorigin="anonymous"></script>
-  <script>
-  (function pollImgA(){
-    fetch("{{ url_for('project_bp.analyse_images_status', pid=pid, did=dataset.id) }}")
-      .then(r=>r.json()).then(d=>{
-        document.getElementById('imgaLog').textContent = d.log || d.status || '';
-        if(d.status==='completed'){
-          const md = d.result_markdown || '';
-          document.getElementById('imgaReport').innerHTML = DOMPurify.sanitize(marked.parse(md));
-          const a=document.getElementById('imgaDl');
-          a.href = URL.createObjectURL(new Blob([md], {type:'text/markdown'}));
-          a.classList.remove('d-none');
-        } else if(d.status==='failed'){
-          document.getElementById('imgaLog').textContent='視覺分析失敗：'+(d.log||'');
-        } else if(d.status==='none'){
-          document.getElementById('imgaLog').textContent='（無視覺分析任務）';
-        } else { setTimeout(pollImgA,4000); }
-      }).catch(()=>setTimeout(pollImgA,6000));
-  })();
-  </script>
-  {% endif %}
-
   {# 一鍵分析（completed 時，Owner/Editor）#}
   {% if dataset.status == 'completed' and role in ('owner', 'editor') %}
   <div class="card shadow-sm mb-4 border-primary">

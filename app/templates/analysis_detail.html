@@ -106,8 +106,8 @@
   {% if analysis.status == 'completed' and analysis.result_markdown %}
   <div class="card shadow-sm">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span class="fw-semibold">分析報告</span>
-      <small class="text-muted">{{ analysis.n_articles }} 篇 · {{ analysis.llm_provider }} / {{ analysis.llm_model }}</small>
+      <span class="fw-semibold">{% if analysis.kind == 'visual' %}🎨 視覺分析報告{% elif analysis.kind == 'combined' %}🧩 整合策略報告{% else %}分析報告{% endif %}</span>
+      <small class="text-muted">{% if analysis.kind == 'visual' %}{{ analysis.n_images }} 張圖 · 視覺分析{% elif analysis.kind == 'combined' %}文字 × 視覺整合{% else %}{{ analysis.n_articles }} 篇{% endif %} · {{ analysis.llm_provider }} / {{ analysis.llm_model }}</small>
     </div>
     <div class="card-body p-4" id="report-content">
       <div id="markdown-output" style="max-height:80vh;overflow-y:auto"></div>

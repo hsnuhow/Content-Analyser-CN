@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-06-16 新增：整合報告（影像服務階段③，文字 × 視覺）
+把既有「文字分析報告」+「視覺分析報告」交叉整合成一份整合策略報告（兩者已同框架，整合自然）：
+- **analysis-pipeline**：`combined_report.py`（新）+ `POST /api/synthesize-combined`／`GET …/<job_id>`（非同步、輕量、無爬取/圖片/NLP）。
+  - **結構（文字為主體＋附加視覺）**：整合報告 = 文字報告（原文逐字保留，主體）＋ 視覺分析重點（原文保留、去逐圖附錄）＋ 整合洞察（LLM **僅生成這段**）。**不改寫兩份原報告**，確保原文字報告完全不被動到。
+  - 整合洞察：內容主題×視覺模式對應、內容缺口∩視覺缺口、可操作整合建議（圖素 brief 綁內容主題）。
+- **content-analyser**：`analysis_client`（submit_combined/get_combined_status）；`project_routes.combine_analyses`（選 1 文字 + 1 視覺 → 建 `kind='combined'` analyses doc → 導向報告頁）；`analysis_status` 加 combined 分流。
+- **UI**：歷史分析清單加勾選框（HTML5 `form=` 屬性避免巢狀表單）+「🧩 整合所選報告」；報告頁/清單顯示「🧩 整合報告」徽章。整合報告本身列入歷史分析（第三類）。
+- 只動 analysis-pipeline + content-analyser。
+
+
+## 2026-06-16 改善：視覺分析重新聚焦（基準線 → 缺口 → 圖素 Brief，對齊產品方法論）
+原視覺分析是「通用描述單張圖」（主觀美學形容詞、逐圖孤立、讓 LLM 猜顏色），與產品兩大方法論脫鉤、不夠準。重做為與文字分析同構：
+- **受控視覺分類**（取代開放形容詞）：每張圖歸類固定維度——鏡頭類型／背景／構圖／光線／品牌符碼(多選)／可疊字留白／主體一句；分類任務 LLM 更穩、可跨圖統計。
+- **主色用 Pillow 客觀色盤** + `_color_family`（hex→粗色家族）統計，不讓 LLM 猜色。
+- **主題脈絡**：把資料集主題餵給 Gemini，判讀對齊主題。
+- **方法論一（基準線）**：程式統計各維度分佈（含佔比）→「市場視覺基準線」。
+- **方法論二（缺口）+ 圖素 Brief**：Synthesis LLM 依**客觀統計**產出差異化缺口 + 可操作圖素製作規格。
+- 報告改為：一、視覺基準線（分佈表）／二、差異化缺口／三、圖素製作 Brief／附錄逐圖標註。
+- 只動 analysis-pipeline（`image_report.py`）。
+
 ## 2026-06-16 新增：大圖視覺分析（影像服務階段②，收進 analysis-pipeline，已部署 analysis 00017 / crawler 1.6.1）
 承接階段①的主文大圖，產出視覺分析報告（色調/色澤/主題/視覺吸睛要素），供製作圖素參考。
 - **analysis-pipeline**：
@@ -14,7 +34,10 @@
   - Stage① srcset 改**以空白切詞**（Hearst 圖 URL 內含逗號 crop 參數，原以逗號切會切爛 → 產垃圾 URL）
     + 影像 URL 合理性網（無副檔名且同主機 → 擋）。→ elle/cosmo 垃圾消失。
   - Stage② URL 與 **Referer** 皆 percent-encode（she.com 圖含中文檔名、文章 slug 含中文當 referer → latin-1 編碼錯誤）。
-  - 待辦：s.yimg.com（Yahoo）圖為 webp、住宅IP可下載，疑 GCP 機房IP 被封 → 需 Tier3 代理。
+  - **Tier3 標註與跳過**：`TIER3_DOMAINS`（s.yimg.com 等機房IP 被封的站）遇到**直接跳過**
+    （不浪費 20s 下載逾時），報告標「跳過（需 Tier3）」；下載遇 403/401 亦動態標記 skipped_tier3。
+    job 加 `n_tier3`。待辦：未來補 Tier3 住宅代理下載再真正取這些圖。
+  - 線上實測：補 Referer fix 後 CHANEL 隨機 40 張 → **40/40 成功**。
 - 文件：附錄 B `analyse-images`、附錄 C `image_analysis_jobs`。
 
 ## 2026-06-16 新增：主文大圖擷取（影像服務階段①＋UI 入口，已部署 crawler 1.6.0 / analyser 00029）
