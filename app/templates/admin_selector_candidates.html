@@ -10,6 +10,46 @@
     下次爬該網域即自動採用；採用時仍會經讀取端驗證。
   </p>
 
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">🔬 主動研究指定 URL（測試 / 主動建模板）</div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('admin_bp.research_url') }}" class="row g-2">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="col-md-9">
+          <input type="text" name="urls" class="form-control"
+                 placeholder="貼上文章 URL（多個用換行或逗號分隔，最多 10）" required>
+        </div>
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-info w-100">開始研究</button>
+        </div>
+      </form>
+      {% if active_research_job %}
+      <div class="mt-3">
+        <div id="arLog" class="text-muted small mb-2">研究進行中...</div>
+        <div id="arResult"></div>
+      </div>
+      <script>
+      (function pollAR(){
+        const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        fetch("{{ url_for('admin_bp.research_url_status') }}")
+          .then(r=>r.json()).then(d=>{
+            document.getElementById('arLog').textContent = d.log || d.status || '';
+            if(d.status==='completed'){
+              const res=d.result||{}; let h='';
+              (res.candidates||[]).forEach(c=>{ h+=`<div class="alert alert-success py-2 mb-2"><b>${esc(c.domain)}</b> → 候選 <code>${esc(c.selector)}</code>（${c.validated_chars||0} 字）— 下方可確認升級</div>`; });
+              (res.diagnoses||[]).forEach(g=>{ h+=`<div class="alert alert-warning py-2 mb-2"><b>${esc(g.domain)}</b>：${esc(g.diagnosis)}</div>`; });
+              document.getElementById('arResult').innerHTML = h || '<div class="text-muted">無候選/診斷。</div>';
+              setTimeout(()=>location.reload(), 1500);
+            } else if(d.status==='failed'){ document.getElementById('arLog').textContent='研究失敗：'+(d.log||''); }
+            else if(d.status==='none'){ document.getElementById('arLog').textContent=''; }
+            else { setTimeout(pollAR,4000); }
+          }).catch(()=>setTimeout(pollAR,6000));
+      })();
+      </script>
+      {% endif %}
+    </div>
+  </div>
+
   <h5 class="mt-4">待確認（{{ pending|length }}）</h5>
   {% if pending %}
   <div class="card shadow-sm mb-4">
