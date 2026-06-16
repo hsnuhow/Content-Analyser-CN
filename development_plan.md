@@ -339,3 +339,18 @@ Phase 0（清理地基）
 - 爬蟲任何修改都以 Colab v3.8（`seo_新開發_帶ui介面爬蟲_可輸入多網址.py`）為參考基準
 - 不在主程式 Dockerfile 安裝 Chrome
 - 不讓主程式直接呼叫 crawler 做任務協調（只做 health check）
+
+---
+
+## 待辦／Backlog（未排期，之後開發）
+
+### B-1 選擇器研究 agent 改進（讓自動學習器自己搞定「判不出選擇器」的站）
+2026-06 保時捷專案發現：研究 agent 對部分站回「no_extractable_article：有內容但找不到明確正文容器」，
+但實機 DOM 其實有清楚容器，只是：
+- **styled-components / emotion 站**（Condé Nast GQ/Vogue；Next.js/emotion 的 harpersbazaar）：
+  class 是**建構期雜湊**（如 `ArticlePageChunksContent-lfyGNk`），每次部署變 → agent 不敢採（怕不可泛化）。
+  → 改進：偵測「元件名-雜湊」模式，產出**前綴屬性選擇器** `[class*="元件名"]`（穩定、可泛化）。
+- **接受門檻偏嚴**：tvbs `.entry-content`、sicar `.release_content` 這類乾淨 class 也被判失敗。
+  → 改進：放寬 `research._classify_failure` / acceptance，對「單一穩定 class、字數足量、非列表」直接收為候選。
+本期暫以人工加 SITE_TEMPLATE（branch `feat/porsche-templates`）+ 後台核准 learned_selectors 補上；
+agent 自動化留待此 backlog。相關檔：`crawler-service/research.py`、`site_learning.py`。
