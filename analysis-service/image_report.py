@@ -95,7 +95,8 @@ def _fetch(url: str, referer: str, log: Callable[[str], None]):
     headers = {"User-Agent": DEFAULT_UA,
                "Accept": "image/jpeg,image/png,image/webp,*/*"}
     if referer:
-        headers["Referer"] = referer
+        # Referer 也需 encode：中文 slug 文章 URL 直接放 header 會觸發 latin-1 編碼錯誤
+        headers["Referer"] = _encode_url(referer)
     req = urllib.request.Request(_encode_url(url), headers=headers)
     with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
         mime = (resp.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
