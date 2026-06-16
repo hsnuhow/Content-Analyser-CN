@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-16 新增：數值語意探勘層（關聯規則 + Cloud NL）+ 數值閘門（analysis-pipeline 00023-n7d / v1.2.0）
+依使用者「TF-IDF 和這邊的，作為數值分析的語意探勘，各自找到數值結果，再透過 LLM 解讀解釋，最後加 LLM 延伸」需求，把數值層擴充為四項並加閘門。已部署上線（feat/numerical-mining → main）。
+- **Path 1c 關聯規則探勘（新增，nlp_path.run_association）**：以各篇 top 關鍵字為「交易品項」，純本地計算頻繁共現組合 + 關聯規則（support/confidence/lift），毫秒級、零外部套件。對應方法論一（高 support 有效組合）＋方法論二（高 lift 強關聯切角）。門檻：每篇取前 8 詞、min_support 0.15、min_conf 0.5、最多 15 條。
+- **Path 1d Cloud Natural Language（新增，nlp_path.run_entities_sentiment）**：`analyze_entities`（salience）+ `analyze_sentiment`（整體情感），最多 40 篇。未啟用 `language.googleapis.com` / 未裝套件 → `enabled=False` 優雅降級不擋報告。（API 已啟用，立即生效。）
+- **數值閘門（pipeline.py 改序列）**：Path 1 先行，TF-IDF 核心無結果即視為數值探勘失敗 → 直接 `failed`、**不進入 LLM**（不燒 token 產無依據報告）；分群/關聯/實體可降級不擋。Path 1 通過閘門後才跑 Path 2（LLM 質化）。修掉原並行架構在 Path1 逾時時仍照跑 LLM 的問題。
+- **Vertex embedding 強化**：`EMBEDDING_BATCH` 5→20 + 3 次重試（退避），修正先前 8 篇分群耗時 13 分鐘 > 600s join 逾時 → 整個 Path1 成功結果被丟棄的根因（保時捷 §2/§3 空白）。
+- **synthesis.py**：關聯規則 + 實體/情感整理成 prompt 區塊注入共用 context，§1/§4/§6/§7 章節據此解讀數值。
+- **report.py**：新增 §3.1 主題關聯規則、§3.2 關鍵實體與情感（程式直生，無資料則略過）。依需求**語意群與附錄維持只列標題 + 超連結，不貼全文**——文本僅作必要佐證，結論與洞察為主。
+- **requirements**：新增 `google-cloud-language>=2.13.0`。
+
 ## 2026-06-16 修正：ETtoday 等 SSR 站靜態抽取（避開 Chrome 149 CDP 崩潰，未部署→隨批部署）
 ETtoday 無法爬取根因：站為 SSR（內文在靜態 HTML 的 `.story`），但爬蟲因「已知站」跳過 SSR 預探測、硬開 Chrome，而 Chrome 149 在其廣告/JS 重頁觸發 CDP bug `missing or invalid columnNumber` → driver 崩潰。修正（crawler.py，重用 `_extract_main_text`）：
 - 新增 `_static_extract(url)`：抓靜態 HTML 跑模板/啟發式抽正文，足量（≥400 字）即回（source=`static_template`）。
