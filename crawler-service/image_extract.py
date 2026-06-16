@@ -16,6 +16,7 @@
 
 輸出：每個 URL 回 {url, status, source, count, images:[{src,width,height,alt}]}。
 """
+import random
 import re
 import threading
 import urllib.request
@@ -33,7 +34,8 @@ JOBS_COLLECTION = "image_extract_jobs"
 
 MIN_DIM = 200            # 有明確 width/height 屬性且 < 此值（px）視為小圖，濾掉
 MIN_CONTAINER_TEXT = 200  # 啟發式選容器時要求的最低文字量（避免選到空殼）
-MAX_IMAGES_PER_URL = 60   # 單頁回傳圖數上限（防版型異常灌爆）
+SAMPLE_SIZE = 10          # 單頁回傳圖數上限：蒐集全部後「隨機抽最多 N 張」（樣本更具代表性）
+HARD_COLLECT_CAP = 300    # 蒐集階段安全上限（防版型異常無限蒐集），抽樣母體上限
 
 # icon / logo / 裝飾性小圖的常見路徑關鍵字
 _JUNK_PATH_RE = re.compile(
@@ -203,9 +205,16 @@ def _collect_images(html: str, base_url: str,
             continue
         seen.add(key)
         images.append(cand)
-        if len(images) >= MAX_IMAGES_PER_URL:
-            log(f"[ImageExtract] 達單頁圖數上限 {MAX_IMAGES_PER_URL}，停止蒐集")
+        if len(images) >= HARD_COLLECT_CAP:
+            log(f"[ImageExtract] 達蒐集安全上限 {HARD_COLLECT_CAP}，停止蒐集")
             break
+    # 全部合格大圖蒐集完 → 隨機抽最多 SAMPLE_SIZE 張（樣本更具代表性，不偏向開頭）。
+    # 抽後依原始版面順序排序，輸出穩定可讀。
+    if len(images) > SAMPLE_SIZE:
+        idx = sorted(random.sample(range(len(images)), SAMPLE_SIZE))
+        sampled = [images[i] for i in idx]
+        log(f"[ImageExtract] 合格大圖 {len(images)} 張 → 隨機抽 {SAMPLE_SIZE} 張")
+        return sampled
     return images
 
 
