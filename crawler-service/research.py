@@ -79,6 +79,10 @@ def _ask_gemini_for_selector(genai_key: str, dom_summary: List[Dict],
     prompt = (
         "你是網頁主文抽取專家。以下是某文章頁的 DOM 結構摘要（每個候選節點含 css_path、"
         "文字長度、段落數、連結密度、預覽）。請找出**最可能是文章正文容器**的 CSS 選擇器。\n"
+        "⚠️ 選擇器必須能**套用到同網域的其他文章**（這是要建立網域模板）：\n"
+        "  - **絕對避免**含文章編號/日期的 id 或 class（如 `#container94110`、`#post-12345`）——只會匹配單篇。\n"
+        "  - 優先用穩定的 class（如 `.article-content`、`.entry-content`）、語意標籤（`article`）或結構選擇器。\n"
+        "  - 選正文容器本身，不要選含大量『延伸閱讀/相關文章』卡片的最外層 wrapper。\n"
         f"頁面標題：{title}\nCMS 指紋：{cms}\n{tried_block}\n"
         "DOM 摘要：\n"
         + json.dumps(dom_summary, ensure_ascii=False)[:28000]
@@ -171,7 +175,11 @@ def research_domain(domain: str, sample_urls: List[str],
                 f"{'（列表）' if ev['is_listing'] else ''}{'（cookie）' if ev['is_cookie'] else ''}")
             if ev["matched"] and ev["chars"] > best_chars:
                 best_chars, best_listing = ev["chars"], ev["is_listing"]
-            if ev["matched"] and ev["chars"] >= MIN_GOOD_CHARS and not ev["is_listing"] and not ev["is_cookie"]:
+            # 接受條件：非 cookie，且（內文很多→即使含相關連結也算文章 ‖ 內文足量且非列表）。
+            # 放寬 is_listing 硬拒：真文章容器常含「延伸閱讀」等連結，會誤判列表。
+            if ev["matched"] and not ev["is_cookie"] and (
+                    ev["chars"] >= 1000 or
+                    (ev["chars"] >= MIN_GOOD_CHARS and not ev["is_listing"])):
                 chosen = sel
                 break
 
