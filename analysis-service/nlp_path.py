@@ -10,6 +10,7 @@ Path 1：數值分析層
 """
 import os
 import re
+import concurrent.futures
 from typing import List, Dict, Any, Callable, Optional
 
 import numpy as np
@@ -73,10 +74,17 @@ _STOPWORDS = frozenset([
 
 TOP_KEYWORDS = 25
 TOP_PER_ARTICLE = 10
-EMBEDDING_BATCH = 20    # 每批筆數（5→20：大幅減少往返次數，避免 SSL 中斷/逾時累積拖到十幾分鐘）
-EMBEDDING_RETRIES = 3   # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
-MAX_EMBED_CHARS = 1000  # 向量化時每篇取前 N 字（控制 token 成本）
+EMBEDDING_BATCH = 20      # 每批筆數
+EMBEDDING_RETRIES = 2     # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
+EMBEDDING_WORKERS = 4     # 並行批次數：批次彼此獨立，並行送可把總時間壓到 ≈ 最慢一批
+EMBED_CALL_TIMEOUT_MS = 60000  # 單次 embed_content HTTP 逾時（毫秒）：避免單一呼叫無限掛住拖到數分鐘
+MAX_EMBED_CHARS = 1000    # 向量化時每篇取前 N 字（控制 token 成本）
 MAX_CLUSTERS = 8
+
+# 慢且可降級的步驟各自的硬時限：超過即降級（單群／停用），絕不拖垮整個 Path 1。
+# 數值閘門核心是 TF-IDF（秒級）+ 關聯規則（毫秒級），分群與 Cloud NL 都是 best-effort。
+CLUSTER_DEADLINE_SEC = 240   # Vertex embedding + KMeans 全程上限
+NL_DEADLINE_SEC = 120        # Cloud NL 實體 / 情感全程上限
 
 
 def _tokenize(text: str) -> List[str]:
@@ -157,20 +165,25 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
 def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
     """呼叫 Vertex AI text-multilingual-embedding-002，取得語意向量。
     使用 Application Default Credentials（Cloud Run Service Account）。
+
+    批次彼此獨立 → 並行送（EMBEDDING_WORKERS）並依批起始索引重組，確保 embeddings[i] ↔ texts[i] 對位。
+    每次呼叫帶 HTTP 逾時（EMBED_CALL_TIMEOUT_MS），避免單一掛住的呼叫拖到數分鐘。
     """
     from google import genai
+    from google.genai import types
+    import time as _time
 
     client = genai.Client(
         vertexai=True,
         project=project_id,
         location="us-central1",
+        http_options=types.HttpOptions(timeout=EMBED_CALL_TIMEOUT_MS),
     )
 
-    import time as _time
-    all_embeddings: List[List[float]] = []
-    for i in range(0, len(texts), EMBEDDING_BATCH):
-        batch = texts[i: i + EMBEDDING_BATCH]
-        # 暫時性錯誤（SSL EOF / 5xx / 逾時）短退避重試，避免單批失敗就整個分群被丟棄。
+    batch_starts = list(range(0, len(texts), EMBEDDING_BATCH))
+
+    def _embed_batch(start: int) -> List[List[float]]:
+        batch = texts[start: start + EMBEDDING_BATCH]
         last = None
         for attempt in range(EMBEDDING_RETRIES):
             try:
@@ -178,19 +191,25 @@ def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
                     model="text-multilingual-embedding-002",
                     contents=batch,
                 )
-                for emb in resp.embeddings:
-                    all_embeddings.append(list(emb.values))
-                last = None
-                break
+                return [list(emb.values) for emb in resp.embeddings]
             except Exception as e:
                 last = e
                 if attempt < EMBEDDING_RETRIES - 1:
-                    print(f"[nlp] embedding 批 {i//EMBEDDING_BATCH} 暫時性失敗，"
+                    print(f"[nlp] embedding 批 @{start} 暫時性失敗，"
                           f"{1.5*(attempt+1):.1f}s 後重試：{e}", flush=True)
                     _time.sleep(1.5 * (attempt + 1))
-        if last is not None:
-            raise last  # 重試後仍失敗 → 上拋讓 run_semantic_clustering 降級（而非靜默錯位）
+        raise last  # 重試後仍失敗 → 上拋讓 run_semantic_clustering 降級
 
+    results: Dict[int, List[List[float]]] = {}
+    workers = min(EMBEDDING_WORKERS, len(batch_starts)) or 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_embed_batch, s): s for s in batch_starts}
+        for fut in concurrent.futures.as_completed(futs):
+            results[futs[fut]] = fut.result()  # 任一批拋出 → 整體上拋降級
+
+    all_embeddings: List[List[float]] = []
+    for s in batch_starts:
+        all_embeddings.extend(results[s])
     return all_embeddings
 
 
@@ -304,7 +323,7 @@ def run_association(per_article: List[Dict]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 # Path 1d：Cloud Natural Language 實體 + 情感（需 language.googleapis.com；優雅降級）
 # ──────────────────────────────────────────────────────────────────────
-NL_MAX_DOCS = 40
+NL_MAX_DOCS = 25  # 取樣篇數：每篇 2 次 API 呼叫（實體+情感），控制在 NL_DEADLINE_SEC 內完成
 
 
 def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
@@ -377,14 +396,29 @@ def run(contents: List[Dict], project_id: str,
     top5 = [k["keyword"] for k in tfidf["top_keywords"][:5]]
     _log(f"[Path 1a] 完成。Top 5：{top5}")
 
+    def _degraded_clusters() -> Dict[str, Any]:
+        """分群降級：全部歸一群（報告仍可用，只是少了語意切分）。"""
+        return {"clusters": [{"cluster_id": 0, "articles": [
+            {"url": c.get("url", ""), "title": c.get("title", "")} for c in contents
+        ]}], "n_clusters": 1 if contents else 0}
+
     cluster_result: Dict[str, Any] = {"clusters": [], "n_clusters": 0}
     if project_id:
         _log("[Path 1b] Vertex AI 語意分群...")
+        # best-effort + 硬時限：embedding 偶有數分鐘級延遲/SSL 重試，超過 CLUSTER_DEADLINE_SEC
+        # 即降級單群，絕不拖垮 Path 1（TF-IDF 已成功，數值閘門不該被分群慢度卡死）。
         try:
-            cluster_result = run_semantic_clustering(contents, project_id)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                cluster_result = _ex.submit(
+                    run_semantic_clustering, contents, project_id
+                ).result(timeout=CLUSTER_DEADLINE_SEC)
             _log(f"[Path 1b] 完成，共 {cluster_result['n_clusters']} 個主題群")
+        except concurrent.futures.TimeoutError:
+            _log(f"[Path 1b] ⚠️ 分群超過 {CLUSTER_DEADLINE_SEC}s，降級單群繼續")
+            cluster_result = _degraded_clusters()
         except Exception as e:
-            _log(f"[Path 1b] ⚠️ Vertex AI 失敗（略過分群）：{e}")
+            _log(f"[Path 1b] ⚠️ Vertex AI 失敗（降級單群）：{e}")
+            cluster_result = _degraded_clusters()
     else:
         _log("[Path 1b] 略過（未設定 GOOGLE_CLOUD_PROJECT）")
 
@@ -401,15 +435,20 @@ def run(contents: List[Dict], project_id: str,
         _log(f"[Path 1c] ⚠️ 關聯探勘失敗（略過）：{e}")
         assoc = {"itemsets": [], "rules": []}
 
-    # Path 1d：Cloud NL 實體 + 情感（未啟用 API 會優雅降級 enabled=False）
+    # Path 1d：Cloud NL 實體 + 情感（best-effort + 硬時限；未啟用 API / 逾時皆優雅降級）
     _log("[Path 1d] Cloud Natural Language 實體／情感分析...")
     try:
-        entities = run_entities_sentiment(contents)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            entities = _ex.submit(run_entities_sentiment, contents).result(
+                timeout=NL_DEADLINE_SEC)
         if entities.get("enabled"):
             _log(f"[Path 1d] 完成，{entities.get('n_docs')} 篇／"
                  f"{len(entities.get('entities', []))} 個實體")
         else:
             _log(f"[Path 1d] 降級略過：{entities.get('reason', '未知')}")
+    except concurrent.futures.TimeoutError:
+        _log(f"[Path 1d] ⚠️ 超過 {NL_DEADLINE_SEC}s，降級略過")
+        entities = {"entities": [], "enabled": False, "reason": f"逾時 >{NL_DEADLINE_SEC}s"}
     except Exception as e:
         _log(f"[Path 1d] ⚠️ 失敗（略過）：{e}")
         entities = {"entities": [], "enabled": False, "reason": str(e)}
