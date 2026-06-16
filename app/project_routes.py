@@ -30,7 +30,8 @@ from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
 from .analysis_client import submit_analysis, get_job_status, cancel_analysis
 from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
-                             submit_research, get_research_status)
+                             submit_research, get_research_status,
+                             submit_extract_images, get_extract_images_status)
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -1302,6 +1303,62 @@ def research_status(pid, did, project, role):
         'status': job.get('status', 'unknown'),
         'log': job.get('log', ''),
         'result': job.get('result', {}),
+    }), 200
+
+
+@bp.route('/<pid>/datasets/<did>/extract-images', methods=['POST'])
+@project_access_required(min_role='editor')
+def extract_images_dataset(pid, did, project, role):
+    """🖼 擷取主文大圖：對資料集成功項的 URL 觸發影像擷取（只取主文大圖、不碰文字）。
+    與文字爬取嚴格分離（獨立 crawler 端點），on-demand。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        abort(404)
+    dataset = ds_doc.to_dict()
+    if dataset.get('status') == 'crawling':
+        flash('資料集正在爬取中，請先等爬完再擷取大圖。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    items = _load_dataset_items(pid, did)
+    urls = list(dict.fromkeys(
+        it.get('url') for it in items
+        if it.get('status') == 'success' and it.get('url')))
+    if not urls:
+        flash('沒有成功的項目可擷取大圖。', 'info')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    result = submit_extract_images(urls)
+    if 'error' in result:
+        flash(f'啟動影像擷取失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    (db.collection('projects').document(pid).collection('datasets').document(did)
+     .update({'image_job_id': result.get('job_id'),
+              'image_status': 'running',
+              'updated_at': firestore.SERVER_TIMESTAMP}))
+    log_usage('extract_images', detail=dataset.get('name', ''),
+              count=len(urls), project_id=pid)
+    flash(f'已啟動「主文大圖擷取」（{len(urls)} 個成功項）。完成後此頁會顯示每篇抽到的大圖。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/extract-images/status')
+@project_access_required(min_role='viewer')
+def extract_images_status(pid, did, project, role):
+    """輪詢影像擷取任務進度與結果（JSON）。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        return jsonify({'error': '找不到資料集'}), 404
+    job_id = (ds_doc.to_dict() or {}).get('image_job_id')
+    if not job_id:
+        return jsonify({'status': 'none'}), 200
+    job = get_extract_images_status(job_id)
+    return jsonify({
+        'status': job.get('status', 'unknown'),
+        'log': job.get('log', ''),
+        'n_images': job.get('n_images', 0),
+        'results': job.get('results', []),
     }), 200
 
 

@@ -105,6 +105,42 @@ def get_research_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def submit_extract_images(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
+    """提交非同步「主文大圖擷取」。回傳 {"job_id": ...} 或 {"error": ...}。"""
+    base = _crawler_url()
+    if not base:
+        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.post(f"{base}/api/extract-images", json={"urls": urls},
+                             headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"提交影像擷取任務逾時（{timeout}s）。"}
+    except Exception as e:
+        return {"error": f"無法連線爬蟲服務：{e}"}
+
+
+def get_extract_images_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """查詢影像擷取任務進度與結果（每 URL 的大圖清單）。"""
+    base = _crawler_url()
+    if not base:
+        return {"status": "error", "error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.get(f"{base}/api/extract-images/{job_id}",
+                            headers=_headers(), timeout=timeout)
+        if resp.status_code == 404:
+            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
+        if resp.status_code == 401:
+            return {"status": "error", "error": "金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"status": "error", "error": "查詢逾時。"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 def cancel_crawl(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """請求取消非同步爬取任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
     base = _crawler_url()
