@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-16 新增：整合報告（影像服務階段③，文字 × 視覺）
+把既有「文字分析報告」+「視覺分析報告」交叉整合成一份整合策略報告（兩者已同框架，整合自然）：
+- **analysis-pipeline**：`combined_report.py`（新）+ `POST /api/synthesize-combined`／`GET …/<job_id>`（非同步、輕量、單次 Synthesis LLM、無爬取/圖片/NLP）。整合焦點：內容主題×視覺模式對應、內容缺口∩視覺缺口、整合行動建議（圖素 brief 綁內容主題）。
+- **content-analyser**：`analysis_client`（submit_combined/get_combined_status）；`project_routes.combine_analyses`（選 1 文字 + 1 視覺 → 建 `kind='combined'` analyses doc → 導向報告頁）；`analysis_status` 加 combined 分流。
+- **UI**：歷史分析清單加勾選框（HTML5 `form=` 屬性避免巢狀表單）+「🧩 整合所選報告」；報告頁/清單顯示「🧩 整合報告」徽章。整合報告本身列入歷史分析（第三類）。
+- 只動 analysis-pipeline + content-analyser。
+
+
 ## 2026-06-16 改善：視覺分析重新聚焦（基準線 → 缺口 → 圖素 Brief，對齊產品方法論）
 原視覺分析是「通用描述單張圖」（主觀美學形容詞、逐圖孤立、讓 LLM 猜顏色），與產品兩大方法論脫鉤、不夠準。重做為與文字分析同構：
 - **受控視覺分類**（取代開放形容詞）：每張圖歸類固定維度——鏡頭類型／背景／構圖／光線／品牌符碼(多選)／可疊字留白／主體一句；分類任務 LLM 更穩、可跨圖統計。

@@ -194,12 +194,18 @@
           {% for a in analyses %}
           <div class="list-group-item">
             <div class="d-flex justify-content-between align-items-center">
+              {% if role in ('owner', 'editor') and a.status == 'completed' %}
+              <input type="checkbox" name="analysis_ids" value="{{ a.id }}" form="combineForm"
+                     class="form-check-input me-2 flex-shrink-0" title="勾選以整合（1文字+1視覺）">
+              {% endif %}
               <a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=a.id) }}"
                  class="text-decoration-none flex-grow-1 me-2">
                 <strong>{{ a.report_title }}</strong>
-                {% if a.kind == 'visual' %}<span class="badge bg-info text-dark">🎨 視覺分析</span>{% endif %}
+                {% if a.kind == 'visual' %}<span class="badge bg-info text-dark">🎨 視覺分析</span>
+                {% elif a.kind == 'combined' %}<span class="badge bg-primary">🧩 整合報告</span>{% endif %}
                 <div class="text-muted small">
                   {% if a.kind == 'visual' %}{{ a.n_images }} 張圖 · 視覺分析 · {{ a.llm_provider }} / {{ a.llm_model }}
+                  {% elif a.kind == 'combined' %}文字 × 視覺整合 · {{ a.llm_provider }} / {{ a.llm_model }}
                   {% else %}{{ a.n_articles }} 篇 · {{ a.llm_provider }} / {{ a.llm_model }}{% endif %}
                 </div>
               </a>
@@ -228,6 +234,17 @@
           </div>
           {% endif %}
         </div>
+        {% if role in ('owner', 'editor') and analyses %}
+        <div class="card-footer">
+          <form method="POST" id="combineForm"
+                action="{{ url_for('project_bp.combine_analyses', pid=pid) }}"
+                onsubmit="return confirm('整合所選的「文字報告 × 視覺報告」？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-outline-primary">🧩 整合所選報告</button>
+            <span class="text-muted small ms-2">勾選 1 份文字 + 1 份視覺報告</span>
+          </form>
+        </div>
+        {% endif %}
       </div>
     </div>
 
