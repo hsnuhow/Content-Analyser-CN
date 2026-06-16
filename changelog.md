@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-16 補強：爬蟲並行安全（Cloud Tasks 佇列化，未部署，feature branch）
+解決「多用戶同時爬蟲 → 背景執行緒堆同台 instance → 多 Chrome 疊加 OOM」風險（背景執行緒模式騙過 Cloud Run 請求式擴縮 + CPU 節流挨餓）。改為佇列 + 同步 worker：
+- **content-crawler**：新增 `task_queue.py`（Cloud Tasks 入列、`tasks_enabled()` 由 `CRAWLER_USE_QUEUE=1` 明確開關）。
+  - `crawl_job.py` 重構：抽出共用 `_crawl_sequence`（看門狗/回收/Tier2-3 單一來源）；保留 `run_crawl_batch`（背景執行緒 fallback）；新增 `run_crawl_chunk`（同步單塊 worker）+ `_complete_chunk`（交易式完成計數、冪等）+ `chunk_urls`（CHUNK_SIZE=6）。
+  - `image_extract.py`：同樣抽 `_extract_sequence` + `run_image_extract_chunk` + `_complete_image_chunk`（IMG_CHUNK_SIZE=8）。
+  - `app.py`：`/api/crawl/batch`、`/api/extract-images`、`/api/research` 改為「佇列開時切塊入列、關時回退背景執行緒」；新增同步 worker `/api/crawl/run`、`/api/extract-images/run`、`/api/research/run`（@require_api_key；例外回 500 由 Cloud Tasks 重試，結果 doc id 以全域 index 命名→冪等覆蓋）。SERVICE_VERSION 1.6.1→1.7.0。
+- **deploy.sh**：content-crawler `--concurrency 4→1`、`--max-instances 10`、注入 `GOOGLE_CLOUD_PROJECT/TASKS_QUEUE/TASKS_LOCATION`，二次 update 注入 `WORKER_URL`。
+- **requirements**：`google-cloud-tasks`。
+- **未啟用前零行為改變**：`CRAWLER_USE_QUEUE` 未設=0 → 全走背景執行緒 fallback（與現況相同）。需維運者手動建 Cloud Tasks 佇列 + 授權 SA + 設 `CRAWLER_USE_QUEUE=1` 才切換。
+- 待：本機驗證 fallback、雲端建佇列、`核准部署：測試` tagged 驗證並行行為後切流量。
+
 ## 2026-06-16 新增：整合報告（影像服務階段③，文字 × 視覺）
 把既有「文字分析報告」+「視覺分析報告」交叉整合成一份整合策略報告（兩者已同框架，整合自然）：
 - **analysis-pipeline**：`combined_report.py`（新）+ `POST /api/synthesize-combined`／`GET …/<job_id>`（非同步、輕量、無爬取/圖片/NLP）。

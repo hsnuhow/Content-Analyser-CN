@@ -6,4 +6,5 @@ requests==2.31.0
 selenium==4.21.0
 undetected-chromedriver==3.5.5
 google-genai>=1.0.0
+google-cloud-tasks>=2.16.0
 firebase-admin==6.5.0
