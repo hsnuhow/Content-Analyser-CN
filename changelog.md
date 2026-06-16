@@ -2,7 +2,9 @@
 
 ## 2026-06-16 新增：整合報告（影像服務階段③，文字 × 視覺）
 把既有「文字分析報告」+「視覺分析報告」交叉整合成一份整合策略報告（兩者已同框架，整合自然）：
-- **analysis-pipeline**：`combined_report.py`（新）+ `POST /api/synthesize-combined`／`GET …/<job_id>`（非同步、輕量、單次 Synthesis LLM、無爬取/圖片/NLP）。整合焦點：內容主題×視覺模式對應、內容缺口∩視覺缺口、整合行動建議（圖素 brief 綁內容主題）。
+- **analysis-pipeline**：`combined_report.py`（新）+ `POST /api/synthesize-combined`／`GET …/<job_id>`（非同步、輕量、無爬取/圖片/NLP）。
+  - **結構（文字為主體＋附加視覺）**：整合報告 = 文字報告（原文逐字保留，主體）＋ 視覺分析重點（原文保留、去逐圖附錄）＋ 整合洞察（LLM **僅生成這段**）。**不改寫兩份原報告**，確保原文字報告完全不被動到。
+  - 整合洞察：內容主題×視覺模式對應、內容缺口∩視覺缺口、可操作整合建議（圖素 brief 綁內容主題）。
 - **content-analyser**：`analysis_client`（submit_combined/get_combined_status）；`project_routes.combine_analyses`（選 1 文字 + 1 視覺 → 建 `kind='combined'` analyses doc → 導向報告頁）；`analysis_status` 加 combined 分流。
 - **UI**：歷史分析清單加勾選框（HTML5 `form=` 屬性避免巢狀表單）+「🧩 整合所選報告」；報告頁/清單顯示「🧩 整合報告」徽章。整合報告本身列入歷史分析（第三類）。
 - 只動 analysis-pipeline + content-analyser。
