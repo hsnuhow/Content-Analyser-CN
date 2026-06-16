@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-16 修正+新增：數值閘門誤判修正(A0) + embedding 內容快取(A3)（analysis-pipeline 00024-fqj）
+線上問題：保時捷 46 篇分析「數值語意探勘失敗，已中止」。雙重根因 + 雙重修正。
+- **A0 止血**（fix/numerical-mining-timeout）：
+  - 根因：Vertex embedding 序列批次、單呼叫無逾時 → 46 篇耗 ~9 分鐘 > 600s Path 1 join；逾時又連同「已成功的 TF-IDF」一起丟棄 → 閘門誤判數值層失敗（TF-IDF 其實 4 秒就完成）。
+  - `_get_embeddings` 改並行批次（EMBEDDING_WORKERS=4）+ 單呼叫 HTTP 逾時 60s + 重試。
+  - `run()`：分群（CLUSTER_DEADLINE_SEC=240s）、Cloud NL（NL_DEADLINE_SEC=120s）各加硬時限，逾時即降級（分群→單群、NL→停用），run() 必在 ~6 分內返回。TF-IDF + 關聯（秒級本地）才是閘門核心。
+  - pipeline：Path 1 逾時不再丟棄已完成數值結果，只清 search-extent；NL_MAX_DOCS 40→25。
+  - **實測：embedding 46 篇 9 分鐘 → 52 秒。**
+- **A3 embedding 內容快取**：Firestore `embeddings/{sha256(model:dim:text)}` 存向量；向量化前先 `get_all` 查、只對 miss 呼叫 Vertex、再 `batch()` 寫回。key 含 model+dim → 換模型自動失效。完全 fail-safe（任何快取錯誤/數量不符 → 退回純向量化）。模型名抽成 `EMBED_MODEL`/`EMBED_DIM` 常數（仍用 002）。
+- **決策**：embedding 模型暫不換（gemini-embedding-001 單價 6× 但每次 <1¢，品質中等提升，先看 A0 結果再決定）；Vertex Batch Prediction 對 N=20–200 不值得，否決。
+- ⏳ 待調：關聯規則對 46 篇保時捷回 0 條（per-article TF-IDF 取的是「獨特詞」，min_support 0.15 太嚴 + 品牌詞 IDF 低不入籃）→ 需調 ASSOC 門檻/取詞策略。
+
+
 ## 2026-06-16 新增：數值語意探勘層（關聯規則 + Cloud NL）+ 數值閘門（analysis-pipeline 00023-n7d / v1.2.0）
 依使用者「TF-IDF 和這邊的，作為數值分析的語意探勘，各自找到數值結果，再透過 LLM 解讀解釋，最後加 LLM 延伸」需求，把數值層擴充為四項並加閘門。已部署上線（feat/numerical-mining → main）。
 - **Path 1c 關聯規則探勘（新增，nlp_path.run_association）**：以各篇 top 關鍵字為「交易品項」，純本地計算頻繁共現組合 + 關聯規則（support/confidence/lift），毫秒級、零外部套件。對應方法論一（高 support 有效組合）＋方法論二（高 lift 強關聯切角）。門檻：每篇取前 8 詞、min_support 0.15、min_conf 0.5、最多 15 條。
