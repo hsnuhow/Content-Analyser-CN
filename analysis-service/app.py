@@ -28,7 +28,9 @@ from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLE
 from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
 from auth import is_authorized
 
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.2.0"
+
+_REAP_COLLECTIONS = [JOBS_COLLECTION, IMAGE_JOBS_COLLECTION, COMBINED_JOBS_COLLECTION]
 
 # ── Firebase 初始化 ──
 if not firebase_admin._apps:
@@ -39,6 +41,16 @@ if not firebase_admin._apps:
         print(f"[Firebase] Init failed: {e}", flush=True)
 
 db = firestore.client()
+
+
+def _reap():
+    """收割本服務 3 個集合的卡住任務（reap-on-submit / cleanup 觸發，全自動、零外部排程）。"""
+    try:
+        from reaper import reap_stale
+        return reap_stale(db, _REAP_COLLECTIONS)
+    except Exception as e:
+        print(f"[Reaper] 觸發失敗（略過）: {e}", flush=True)
+        return 0
 
 # ── Flask ──
 app = Flask(__name__)
@@ -94,6 +106,7 @@ def analyse():
     Response:
     {"job_id": "abc123", "status": "pending"}
     """
+    _reap()  # reap-on-submit：收割卡住任務（全自動）
     data = request.get_json(silent=True) or {}
 
     # ── 驗證必填欄位 ──
@@ -242,6 +255,7 @@ def analyse_images():
     }
     Response: {"job_id": "...", "status": "pending"}
     """
+    _reap()  # reap-on-submit
     data = request.get_json(silent=True) or {}
     report_title = (data.get("report_title") or "").strip()
     if not report_title:
@@ -320,6 +334,7 @@ def synthesize_combined():
               llm_provider, llm_model, llm_api_key}
     Response: {"job_id": "...", "status": "pending"}
     """
+    _reap()  # reap-on-submit
     data = request.get_json(silent=True) or {}
     report_title = (data.get("report_title") or "").strip()
     text_md = data.get("text_markdown") or ""
@@ -417,6 +432,7 @@ def cleanup_jobs():
     Request: {"days": 7}（預設 7）。回傳刪除筆數。
     analysis_jobs 是 pipeline 暫存層，結果回收進 content-analyser 後即可清理。
     """
+    reaped = _reap()  # 先收割卡住的非終態任務（標 failed）
     import datetime
     data = request.get_json(silent=True) or {}
     try:
@@ -438,8 +454,9 @@ def cleanup_jobs():
                 doc.reference.delete()
                 deleted += 1
     except Exception as e:
-        return jsonify({"status": "failed", "error": str(e), "deleted": deleted}), 500
-    return jsonify({"status": "ok", "deleted": deleted, "days": days,
+        return jsonify({"status": "failed", "error": str(e),
+                        "deleted": deleted, "reaped": reaped}), 500
+    return jsonify({"status": "ok", "deleted": deleted, "reaped": reaped, "days": days,
                     "capped": deleted >= MAX_CLEAN}), 200
 
 

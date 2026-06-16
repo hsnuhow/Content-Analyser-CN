@@ -1024,6 +1024,22 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
 
     if dataset.get('status') != 'crawling':
         return dataset
+
+    # ① lazy 自癒：dataset 卡在 crawling 過久（crawler job 已死/被回收且沒人輪詢）→ 標 failed，
+    #   不再永遠轉圈。閾值 90 分 > crawler 端 reaper（60 分）+ 批次時限，讓 crawler 端先處理。
+    import datetime as _dt
+    _upd = dataset.get('updated_at')
+    try:
+        if _upd is not None:
+            _age_min = (_dt.datetime.now(_dt.timezone.utc) - _upd).total_seconds() / 60
+            if _age_min > 90:
+                ds_ref.update({'status': 'failed',
+                               'log': '逾時自癒：超過 90 分無進度，疑爬取中止（reaped）',
+                               'updated_at': firestore.SERVER_TIMESTAMP})
+                return {**dataset, 'status': 'failed'}
+    except Exception:
+        pass
+
     job_id = dataset.get('crawl_job_id')
     if not job_id:
         return dataset
@@ -1032,6 +1048,11 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
     if not isinstance(job, dict):
         return dataset
     jstatus = job.get('status', 'crawling')
+    if jstatus == 'error':  # crawler 找不到此 job（已刪/遺失）→ 視為失敗，解除 crawling 卡死
+        ds_ref.update({'status': 'failed',
+                       'log': job.get('error', '爬取任務遺失'),
+                       'updated_at': firestore.SERVER_TIMESTAMP})
+        return {**dataset, 'status': 'failed'}
     update = {
         'progress': job.get('progress', dataset.get('progress', 0)),
         'log': job.get('log', dataset.get('log', '')),

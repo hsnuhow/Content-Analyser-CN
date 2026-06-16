@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-16 新增：卡住任務收割機制（job reaper，未部署，feature branch feat/job-reaper）
+解決 job 卡在非終態（pending/queued/running）但 worker 已死 → 變孤兒、永不結束的問題（今天清掉 5 個 crawl_jobs 孤兒後加此機制防再發）。**全自動、零外部排程**：
+- **crawler / analysis 各加 `reaper.py`**：`reap_stale(db, collections, 60min)` 把「非終態且超過 60 分無更新」的 job 標 `failed`（reaped），再由既有「逾 N 天刪除」cleanup 回收。閾值 60 分 > 批次 45min / 單塊 25min。
+- **reap-on-submit（自動化③）**：每個提交端點（crawl/extract-images/research、analyse/analyse-images/synthesize-combined）先收割 → 靠正常使用自動觸發，不需 Cloud Scheduler。
+- **reap-on-cleanup**：兩服務 cleanup 端點一併收割（回傳 `reaped` 數）。
+- **① content-analyser lazy 自癒**：`_sync_crawling_dataset` 加 —— dataset 卡 crawling 超過 90 分（無人輪詢、job 已死）→ 標 failed；crawler job 回 `error`（找不到）也即時標 failed，不再永遠轉圈。
+- 版本：crawler 1.7.0→1.8.0、analysis 1.1.0→1.2.0。需部署三服務生效。
+
 ## 2026-06-16 部署：爬蟲佇列化上線 + 保時捷選擇器模板（content-crawler 00057-7hp / v1.7.0）
 - **佇列化啟用**：merge `feat/crawl-queue` → main，部署 content-crawler concurrency=1 + `CRAWLER_USE_QUEUE=1`，
   Cloud Tasks 佇列 `crawler-tasks`@asia-east1（RUNNING、max-concurrent-dispatches=8）、compute SA 綁 enqueuer。
