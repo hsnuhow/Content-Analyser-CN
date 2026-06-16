@@ -191,40 +191,54 @@ def run_analysis(job_id: str, report_title: str,
                 _log(f"Path 2 失敗：{e}")
                 traceback.print_exc()
 
+        # ── 閘門：先跑 Path 1（數值語意探勘），數值層失敗就不進 LLM ──
+        # 使用者要求：「數值文本分析失敗時，不會進入 LLM 分析」。數值層（TF-IDF 為核心，
+        # 外加 Vertex 分群／關聯規則／Cloud NL）是整份報告的接地依據；沒有數值結果就不該
+        # 燒 LLM token 產出無依據的報告。因此 Path 1 先行、作為 Path 2 的前置閘門。
+        # （Vertex embedding 批量已調大、加重試，Path 1 通常 1–2 分鐘完成，序列化成本可接受。）
         t1 = threading.Thread(target=_run_path1, daemon=True)
-        t2 = threading.Thread(target=_run_path2, daemon=True)
         t1.start()
-        t2.start()
         t1.join(timeout=600)
-        t2.join(timeout=600)
         path1_timed_out = t1.is_alive()
         if path1_timed_out:
             nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
-            _log("⚠️ Path 1 thread 逾時（600s），丟棄其部分結果、降級繼續")
+            _log("⚠️ Path 1 thread 逾時（600s）")
+
+        # L4 防 race：Path 1 逾時時 daemon thread 仍可能寫 nlp_results / search_extent_results。
+        # 逾時即視為數值層失敗，丟棄部分結果並擋下 LLM。
+        if path1_timed_out:
+            nlp_results = {}
+            search_extent_results = {}
+
+        # ── 數值層閘門判定 ──
+        # 數值核心 = TF-IDF top_keywords。沒有它就代表數值探勘整體失敗 → 不進 LLM、直接失敗。
+        tfidf_ok = bool((nlp_results.get("tfidf") or {}).get("top_keywords"))
+        if not tfidf_ok:
+            reason = (nlp_error[0] if nlp_error else "TF-IDF 未產生關鍵字")
+            err_msg = f"數值語意探勘失敗，已中止（不進入 LLM 分析）：{reason}"
+            _update_job(db, job_id, status="failed", log=err_msg)
+            _log(f"⛔ {err_msg}")
+            return
+        # TF-IDF 成功但分群/關聯/實體可降級——僅記 log，繼續進 LLM。
+        if nlp_error:
+            _log(f"⚠️ 數值層部分降級（核心 TF-IDF 仍有效）：{nlp_error[0]}")
+
+        if _cancelled_stop():
+            return
+
+        # ── 數值層通過閘門 → 執行 Path 2（LLM 質化分析）──
+        t2 = threading.Thread(target=_run_path2, daemon=True)
+        t2.start()
+        t2.join(timeout=600)
         if t2.is_alive():
             llm_error.append("Path 2 超過 600s 未完成，已放棄等待")
             _log("⚠️ Path 2 thread 逾時（600s），停止任務")
 
-        # ── 路徑失敗處理 ──
         if llm_error:
             # Path 2 失敗（LLM Key 問題）→ 任務失敗
             err_msg = f"LLM 分析失敗，請確認 API Key 與模型設定：{llm_error[0]}"
             _update_job(db, job_id, status="failed", log=err_msg)
             return
-
-        # L4 防 race：Path 1 逾時時其 daemon thread 仍存活、仍會寫 nlp_results /
-        # search_extent_results。絕不可邊讀邊被改 → 逾時即丟棄部分結果走安全降級，
-        # 並清空 search_extent（該寫入也在 Path1 thread 內）。
-        if path1_timed_out:
-            nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
-                           "clusters": {"clusters": [], "n_clusters": 0}}
-            search_extent_results = {}
-        elif nlp_error:
-            # Path 1 失敗（Vertex AI 問題）但 thread 已結束 → 降級繼續（只有 TF-IDF）
-            _log(f"⚠️ Path 1 部分失敗，降級繼續（無語意分群）：{nlp_error[0]}")
-            if not nlp_results:
-                nlp_results = {"tfidf": {"top_keywords": [], "per_article": []},
-                               "clusters": {"clusters": [], "n_clusters": 0}}
 
         # 凍結 search-extent 結果快照：synthesis（決定 §7 prompt 版本）與 report
         # （決定是否標「真實接地」）共用同一份，避免各自重判 dict 是否為空而不一致。
