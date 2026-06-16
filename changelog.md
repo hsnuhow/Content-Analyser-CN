@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-16 新增：選擇器研究工具（on-demand AI agent，B1+B2，待部署 crawler+analyser）
+爬完出現失敗項時，用戶可觸發「選擇器研究」——一個 in-code tool-use 閉環 agent，研究失敗網域、產出候選選擇器或失敗診斷，經 admin 確認後升級為主爬蟲知識：
+- **B1（crawler 核心）**：`research.py` agent 閉環（開樣本→Gemini 提選擇器→**實測抽到幾字/像不像正文**→不夠好回饋再修，上限 6 步/120s/域→第二樣本交叉驗證）。重用 `HeadlessCrawler` 的 Chrome/DOM 工具（不肥大主爬蟲）；用系統 GENAI_API_KEY；與爬蟲不並行。失敗則分類診斷（403→Tier3 / JS空殼 / 列表頁 / 無正文）。`POST /api/research` + `GET /api/research/<job_id>`（非同步）。`site_learning` 加候選 CRUD + promote。
+- **B2（content-analyser）**：資料集「🔬 研究失敗項」按鈕 + 結果輪詢面板；`/admin/selector-candidates` 候選確認頁（升級→寫 learned_selectors / 拒絕）。
+- **安全/隔離**：候選 per-domain（錯誤鎖死單一網域）+ admin 人工確認才升級 + 主爬蟲讀取端驗證三重把關。
+- 文件：附錄 B 新端點、附錄 C `research_jobs`/`selector_candidates`/`learned_selectors`。
+- 部署：crawler + content-analyser（皆 image-only）。
+
 ## 2026-06-16 改善：爬蟲最佳化（Phase 1+2，已部署 content-crawler 00050-k89）
 徹底研究爬蟲流程後，完成低/中風險最佳化（中高項 Fetch.enable/research 模式記入待辦監督式開發）：
 - **Phase 1（穩定/偵測）**：
