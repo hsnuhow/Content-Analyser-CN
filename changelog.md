@@ -1,11 +1,15 @@
 # Changelog
 
-## 2026-06-16 新增：選擇器研究工具（on-demand AI agent，B1+B2，待部署 crawler+analyser）
+## 2026-06-16 新增：選擇器研究工具（on-demand AI agent，B1+B2，已部署 crawler 00052 / analyser 00028）
 爬完出現失敗項時，用戶可觸發「選擇器研究」——一個 in-code tool-use 閉環 agent，研究失敗網域、產出候選選擇器或失敗診斷，經 admin 確認後升級為主爬蟲知識：
 - **B1（crawler 核心）**：`research.py` agent 閉環（開樣本→Gemini 提選擇器→**實測抽到幾字/像不像正文**→不夠好回饋再修，上限 6 步/120s/域→第二樣本交叉驗證）。重用 `HeadlessCrawler` 的 Chrome/DOM 工具（不肥大主爬蟲）；用系統 GENAI_API_KEY；與爬蟲不並行。失敗則分類診斷（403→Tier3 / JS空殼 / 列表頁 / 無正文）。`POST /api/research` + `GET /api/research/<job_id>`（非同步）。`site_learning` 加候選 CRUD + promote。
 - **B2（content-analyser）**：資料集「🔬 研究失敗項」按鈕 + 結果輪詢面板；`/admin/selector-candidates` 候選確認頁（升級→寫 learned_selectors / 拒絕）。
 - **安全/隔離**：候選 per-domain（錯誤鎖死單一網域）+ admin 人工確認才升級 + 主爬蟲讀取端驗證三重把關。
+- **B2+ admin 主動研究**：`/admin/research-url` 讓 admin 貼任意 URL 主動研究（不限失敗項），供測試/主動建模板。
+- **agent 調校（測試後）**：放寬 is_listing 硬拒（正文含「延伸閱讀」連結不再誤判列表）；prompt 引導選**可泛化**選擇器（避開含文章編號的 id）。
 - 文件：附錄 B 新端點、附錄 C `research_jobs`/`selector_candidates`/`learned_selectors`。
+- **端到端實測通過**：(1) skm 403 → 正確診斷「建議 Tier3」；(2) marieclaire 2 樣本 → 產出可泛化候選
+  `…article > div.articleContent`（交叉驗證 2300 字）→ admin 確認升級 → 寫入 learned_selectors（測試後已移除該筆，保護其既有模板）。
 - 部署：crawler + content-analyser（皆 image-only）。
 
 ## 2026-06-16 改善：爬蟲最佳化（Phase 1+2，已部署 content-crawler 00050-k89）
