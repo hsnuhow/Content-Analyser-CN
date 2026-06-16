@@ -97,6 +97,77 @@ def _section_clusters(clusters: Dict) -> str:
     return "\n".join(lines)
 
 
+def _section_assoc(assoc: Dict) -> str:
+    """關聯規則探勘：高頻共現組合 + 關聯規則（support/confidence/lift）。
+    無資料回空字串（assemble 會略過）。重點是「哪些主題詞固定一起出現」。"""
+    if not assoc:
+        return ""
+    rules = assoc.get("rules", [])
+    itemsets = assoc.get("itemsets", [])
+    if not rules and not itemsets:
+        return ""
+    lines = [
+        "## 3.1 主題關聯規則（共現探勘）",
+        "",
+        "以各篇核心關鍵字為「品項」做頻繁共現分析，找出固定一起出現的詞組。"
+        "`lift > 1` 代表兩者同時出現的頻率高於隨機——是內容選題時可成套操作的組合。",
+        "",
+    ]
+    if itemsets:
+        lines += [
+            "**高頻共現組合**",
+            "",
+            "| 共現詞組 | 支持度 | 篇數 |",
+            "| :--- | ---: | ---: |",
+        ]
+        for s in itemsets[:12]:
+            items = " ＋ ".join(s.get("items", []))
+            lines.append(f"| {items} | {s.get('support')} | {s.get('count')} |")
+        lines.append("")
+    if rules:
+        lines += [
+            "**關聯規則**（A → B：內容提到 A 時，也提到 B 的傾向）",
+            "",
+            "| 規則 | 信賴度 | lift | 篇數 |",
+            "| :--- | ---: | ---: | ---: |",
+        ]
+        for r in rules[:15]:
+            lines.append(f"| {r.get('antecedent')} → {r.get('consequent')} | "
+                         f"{r.get('confidence')} | {r.get('lift')} | {r.get('count')} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _section_entities(entities: Dict) -> str:
+    """Cloud NL 實體 salience + 整體情感。未啟用 / 無資料回空字串。"""
+    if not entities or not entities.get("enabled"):
+        return ""
+    ents = entities.get("entities", [])
+    if not ents:
+        return ""
+    lines = [
+        "## 3.2 關鍵實體與情感（Cloud Natural Language）",
+        "",
+        f"以 Google Cloud NL 對 {entities.get('n_docs')} 篇做實體抽取與情感分析。"
+        "`salience` 為實體在文本中的重要度（越高越核心）。",
+        "",
+    ]
+    avg = entities.get("avg_sentiment")
+    if avg is not None:
+        tone = "偏正向" if avg > 0.15 else ("偏負向" if avg < -0.15 else "中性")
+        lines.append(f"**整體情感分數：{avg}**（{tone}；範圍 −1～+1）")
+        lines.append("")
+    lines += [
+        "| 實體 | 類型 | salience | 提及次數 |",
+        "| :--- | :--- | ---: | ---: |",
+    ]
+    for e in ents[:20]:
+        lines.append(f"| {e.get('name')} | {e.get('type')} | "
+                     f"{e.get('salience')} | {e.get('mentions')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _section_search_extent(search_extent_results: Dict) -> str:
     """真實搜尋延伸資料附錄：依語意群列出 Google 關聯關鍵字 + 月均搜尋量 + 競爭度。"""
     if not search_extent_results:
@@ -214,7 +285,8 @@ def assemble(report_title: str,
     sections.append(
         "## 1. 摘要\n\n"
         f"本報告分析 {n} 篇受歡迎內容，來源涵蓋 {source_summary}。"
-        " 結合 TF-IDF 關鍵字、Vertex AI 語意分群與 LLM 質性分析。\n\n"
+        " 數值層結合 TF-IDF 關鍵字、Vertex AI 語意分群、關聯規則探勘與 Cloud NL 實體／情感，"
+        "再由 LLM 解讀數值結果並延伸質性洞察。\n\n"
         + synthesis_parts.get("summary", "")
     )
 
@@ -223,6 +295,16 @@ def assemble(report_title: str,
 
     # § 3 語意分群（程式直接生成）
     sections.append(_section_clusters(nlp_results.get("clusters", {})))
+
+    # § 3.1 主題關聯規則（程式直接生成；無資料則略過）
+    assoc_section = _section_assoc(nlp_results.get("assoc", {}))
+    if assoc_section:
+        sections.append(assoc_section)
+
+    # § 3.2 關鍵實體與情感（程式直接生成；未啟用 Cloud NL 則略過）
+    entities_section = _section_entities(nlp_results.get("entities", {}))
+    if entities_section:
+        sections.append(entities_section)
 
     # § 4 搜尋情境分析（Synthesis LLM）
     sections.append(

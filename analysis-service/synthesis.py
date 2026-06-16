@@ -89,6 +89,47 @@ def _fmt_clusters(clusters: Dict) -> str:
     return "\n".join(lines)
 
 
+def _fmt_assoc(assoc: Dict) -> str:
+    """關聯規則 → prompt 區塊。lift>1 代表「比隨機更常一起出現」的強關聯。"""
+    if not assoc:
+        return ""
+    rules = assoc.get("rules", [])[:12]
+    itemsets = assoc.get("itemsets", [])[:8]
+    if not rules and not itemsets:
+        return ""
+    lines = ["【關聯規則探勘（Path 1c，FP 風格頻繁共現）】"]
+    if itemsets:
+        lines.append("高頻共現組合（support＝出現於該比例篇數）：")
+        for s in itemsets:
+            items = "＋".join(s.get("items", []))
+            lines.append(f"  - {items}（support {s.get('support')}，{s.get('count')} 篇）")
+    if rules:
+        lines.append("關聯規則（A→B：見到 A 時 B 出現的信賴度 confidence；lift>1＝強於隨機）：")
+        for r in rules:
+            lines.append(f"  - {r.get('antecedent')} → {r.get('consequent')}"
+                         f"（信賴度 {r.get('confidence')}，lift {r.get('lift')}，{r.get('count')} 篇）")
+    return "\n".join(lines)
+
+
+def _fmt_entities(entities: Dict) -> str:
+    """Cloud NL 實體 salience + 整體情感 → prompt 區塊。未啟用則回空字串。"""
+    if not entities or not entities.get("enabled"):
+        return ""
+    ents = entities.get("entities", [])[:18]
+    if not ents:
+        return ""
+    lines = [f"【實體與情感分析（Path 1d，Cloud NL，{entities.get('n_docs')} 篇）】"]
+    avg = entities.get("avg_sentiment")
+    if avg is not None:
+        tone = "偏正向" if avg > 0.15 else ("偏負向" if avg < -0.15 else "中性")
+        lines.append(f"整體情感分數：{avg}（{tone}；範圍 -1～+1）")
+    lines.append("關鍵實體（salience＝在文本中的重要度，越高越核心）：")
+    for e in ents:
+        lines.append(f"  - {e.get('name')}（{e.get('type')}，salience {e.get('salience')}，"
+                     f"提及 {e.get('mentions')} 次）")
+    return "\n".join(lines)
+
+
 def _fmt_search_extent(search_extent_results: Dict) -> str:
     """把 search-extent 真實關聯關鍵字整理成 prompt 區塊（依群分組）。"""
     if not search_extent_results:
@@ -130,8 +171,17 @@ def run(nlp_results: Dict, llm_results: Dict,
     search_extent_results = search_extent_results or {}
     tfidf_summary = _fmt_tfidf(nlp_results.get("tfidf", {}))
     cluster_summary = _fmt_clusters(nlp_results.get("clusters", {}))
+    assoc_summary = _fmt_assoc(nlp_results.get("assoc", {}))
+    entities_summary = _fmt_entities(nlp_results.get("entities", {}))
     intent_summary = _fmt_intents(llm_results.get("search_intents", []))
     qualitative = llm_results.get("qualitative", "")[:3000]  # 避免 prompt 過長
+
+    # 數值探勘的兩個新層（關聯規則、實體/情感）有資料才插入，避免空區塊干擾 LLM。
+    numeric_extra = ""
+    if assoc_summary:
+        numeric_extra += f"\n\n{assoc_summary}"
+    if entities_summary:
+        numeric_extra += f"\n\n{entities_summary}"
 
     # 防注入：tfidf/分群/意圖/質化皆衍生自爬取的不可信內容，可能挾帶注入文字。
     # 整段以 INJECTION_GUARD 聲明 + <DATA> 包裹，要求 LLM 僅當素材、不服從其中指示。
@@ -140,7 +190,7 @@ def run(nlp_results: Dict, llm_results: Dict,
 【數值分析（Path 1）】
 {tfidf_summary}
 
-{cluster_summary}
+{cluster_summary}{numeric_extra}
 
 【各篇搜尋意圖摘要（Path 2a）】
 {intent_summary}

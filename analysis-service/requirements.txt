@@ -5,6 +5,7 @@ jieba==0.42.1
 scikit-learn==1.4.2
 numpy==1.26.4
 google-genai>=1.0.0
+google-cloud-language>=2.13.0
 anthropic>=0.25.0
 openai>=1.40.0
 requests>=2.31.0

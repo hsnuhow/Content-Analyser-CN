@@ -73,7 +73,8 @@ _STOPWORDS = frozenset([
 
 TOP_KEYWORDS = 25
 TOP_PER_ARTICLE = 10
-EMBEDDING_BATCH = 5     # Vertex AI 每批最多 5 筆
+EMBEDDING_BATCH = 20    # 每批筆數（5→20：大幅減少往返次數，避免 SSL 中斷/逾時累積拖到十幾分鐘）
+EMBEDDING_RETRIES = 3   # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
 MAX_EMBED_CHARS = 1000  # 向量化時每篇取前 N 字（控制 token 成本）
 MAX_CLUSTERS = 8
 
@@ -165,15 +166,30 @@ def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
         location="us-central1",
     )
 
+    import time as _time
     all_embeddings: List[List[float]] = []
     for i in range(0, len(texts), EMBEDDING_BATCH):
         batch = texts[i: i + EMBEDDING_BATCH]
-        resp = client.models.embed_content(
-            model="text-multilingual-embedding-002",
-            contents=batch,
-        )
-        for emb in resp.embeddings:
-            all_embeddings.append(list(emb.values))
+        # 暫時性錯誤（SSL EOF / 5xx / 逾時）短退避重試，避免單批失敗就整個分群被丟棄。
+        last = None
+        for attempt in range(EMBEDDING_RETRIES):
+            try:
+                resp = client.models.embed_content(
+                    model="text-multilingual-embedding-002",
+                    contents=batch,
+                )
+                for emb in resp.embeddings:
+                    all_embeddings.append(list(emb.values))
+                last = None
+                break
+            except Exception as e:
+                last = e
+                if attempt < EMBEDDING_RETRIES - 1:
+                    print(f"[nlp] embedding 批 {i//EMBEDDING_BATCH} 暫時性失敗，"
+                          f"{1.5*(attempt+1):.1f}s 後重試：{e}", flush=True)
+                    _time.sleep(1.5 * (attempt + 1))
+        if last is not None:
+            raise last  # 重試後仍失敗 → 上拋讓 run_semantic_clustering 降級（而非靜默錯位）
 
     return all_embeddings
 
@@ -238,6 +254,109 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Path 1c：關聯規則挖掘（FP 風格的頻繁組合 + 規則；純本地、快）
+# ──────────────────────────────────────────────────────────────────────
+ASSOC_TOP_KW = 8          # 每篇取前 N 個 TF-IDF 關鍵字當「品項」
+ASSOC_MIN_SUPPORT = 0.15  # 頻繁組合最低支持度（出現於 ≥15% 篇）
+ASSOC_MIN_CONF = 0.5      # 關聯規則最低信賴度
+ASSOC_MAX_RULES = 15
+
+
+def run_association(per_article: List[Dict]) -> Dict[str, Any]:
+    """關聯探勘：以每篇 top 關鍵字為「交易品項」，找頻繁共現組合 + 關聯規則。
+    回 {itemsets:[{items,support,count}], rules:[{antecedent,consequent,support,confidence,lift,count}]}。
+    方法論一＝高 support 的有效組合；方法論二＝高 lift（強關聯）的切角。純本地、毫秒級。"""
+    from itertools import combinations
+    from collections import Counter
+    txns = []
+    for a in per_article:
+        items = {k["keyword"] for k in (a.get("keywords") or [])[:ASSOC_TOP_KW]
+                 if k.get("keyword")}
+        if items:
+            txns.append(items)
+    n = len(txns)
+    if n < 4:
+        return {"itemsets": [], "rules": []}
+    one, pair = Counter(), Counter()
+    for t in txns:
+        for it in t:
+            one[it] += 1
+        for a, b in combinations(sorted(t), 2):
+            pair[(a, b)] += 1
+    min_count = max(2, int(ASSOC_MIN_SUPPORT * n))
+    freq_pairs = sorted([(p, c) for p, c in pair.items() if c >= min_count],
+                        key=lambda x: -x[1])
+    itemsets = [{"items": list(p), "support": round(c / n, 3), "count": c}
+                for p, c in freq_pairs[:20]]
+    rules = []
+    for (a, b), c in freq_pairs:
+        for x, y in ((a, b), (b, a)):
+            conf = c / one[x]
+            lift = conf / (one[y] / n)
+            if conf >= ASSOC_MIN_CONF and lift > 1.0:
+                rules.append({"antecedent": x, "consequent": y,
+                              "support": round(c / n, 3), "confidence": round(conf, 3),
+                              "lift": round(lift, 2), "count": c})
+    rules.sort(key=lambda r: (-r["lift"], -r["confidence"]))
+    return {"itemsets": itemsets, "rules": rules[:ASSOC_MAX_RULES]}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Path 1d：Cloud Natural Language 實體 + 情感（需 language.googleapis.com；優雅降級）
+# ──────────────────────────────────────────────────────────────────────
+NL_MAX_DOCS = 40
+
+
+def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
+    """Cloud NL：實體抽取（salience）+ 整篇情感。中文用 analyze_entities + analyze_sentiment
+    （entity-sentiment 對中文支援有限，故分開）。未啟用 API / 未安裝套件 → 回 enabled=False 降級。
+    回 {entities:[{name,type,salience,mentions}], avg_sentiment, n_docs, enabled, reason?}。"""
+    try:
+        from google.cloud import language_v1 as language
+    except Exception:
+        return {"entities": [], "enabled": False, "reason": "google-cloud-language 未安裝"}
+    try:
+        client = language.LanguageServiceClient()
+    except Exception as e:
+        return {"entities": [], "enabled": False, "reason": str(e)}
+    from collections import defaultdict
+    agg = defaultdict(lambda: {"salience": 0.0, "mentions": 0, "type": ""})
+    sent_sum, sent_docs, used = 0.0, 0, 0
+    for c in contents[:NL_MAX_DOCS]:
+        text = ((c.get("title", "") or "") + "\n"
+                + (c.get("text") or c.get("content") or ""))[:8000].strip()
+        if len(text) < 30:
+            continue
+        doc = {"content": text, "type_": language.Document.Type.PLAIN_TEXT}
+        try:
+            er = client.analyze_entities(
+                request={"document": doc, "encoding_type": language.EncodingType.UTF8})
+        except Exception as e:
+            return {"entities": [], "enabled": False,
+                    "reason": f"API 失敗（是否已啟用 language.googleapis.com？）：{e}"}
+        used += 1
+        for ent in er.entities:
+            a = agg[ent.name]
+            a["salience"] += ent.salience
+            a["mentions"] += len(ent.mentions)
+            a["type"] = language.Entity.Type(ent.type_).name
+        try:
+            sr = client.analyze_sentiment(
+                request={"document": doc, "encoding_type": language.EncodingType.UTF8})
+            sent_sum += sr.document_sentiment.score
+            sent_docs += 1
+        except Exception:
+            pass
+    if used == 0:
+        return {"entities": [], "enabled": False, "reason": "無可分析文本"}
+    ents = [{"name": k, "type": v["type"], "salience": round(v["salience"], 4),
+             "mentions": v["mentions"]} for k, v in agg.items()]
+    ents.sort(key=lambda e: -e["salience"])
+    return {"entities": ents[:25], "enabled": True, "n_docs": used,
+            "avg_sentiment": round(sent_sum / sent_docs, 3) if sent_docs else None}
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Path 1 主函式
 # ──────────────────────────────────────────────────────────────────────
 
@@ -272,7 +391,31 @@ def run(contents: List[Dict], project_id: str,
     # ⭐ 為每個主題群算「代表詞彙」：彙整該群文章的 per-article TF-IDF 關鍵字，取權重總和 Top N。
     _attach_cluster_keywords(cluster_result, tfidf.get("per_article", []))
 
-    return {"tfidf": tfidf, "clusters": cluster_result}
+    # Path 1c：關聯探勘（純本地、毫秒級，不會失敗就降級空集）
+    _log("[Path 1c] 關聯規則挖掘（頻繁共現 + 規則）...")
+    try:
+        assoc = run_association(tfidf.get("per_article", []))
+        _log(f"[Path 1c] 完成，共 {len(assoc.get('rules', []))} 條規則／"
+             f"{len(assoc.get('itemsets', []))} 組頻繁組合")
+    except Exception as e:
+        _log(f"[Path 1c] ⚠️ 關聯探勘失敗（略過）：{e}")
+        assoc = {"itemsets": [], "rules": []}
+
+    # Path 1d：Cloud NL 實體 + 情感（未啟用 API 會優雅降級 enabled=False）
+    _log("[Path 1d] Cloud Natural Language 實體／情感分析...")
+    try:
+        entities = run_entities_sentiment(contents)
+        if entities.get("enabled"):
+            _log(f"[Path 1d] 完成，{entities.get('n_docs')} 篇／"
+                 f"{len(entities.get('entities', []))} 個實體")
+        else:
+            _log(f"[Path 1d] 降級略過：{entities.get('reason', '未知')}")
+    except Exception as e:
+        _log(f"[Path 1d] ⚠️ 失敗（略過）：{e}")
+        entities = {"entities": [], "enabled": False, "reason": str(e)}
+
+    return {"tfidf": tfidf, "clusters": cluster_result,
+            "assoc": assoc, "entities": entities}
 
 
 def _attach_cluster_keywords(cluster_result: Dict, per_article: List[Dict],
