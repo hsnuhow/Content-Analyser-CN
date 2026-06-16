@@ -47,6 +47,10 @@ SERVICE_NAME="content-analyser"
 CRAWLER_SERVICE="content-crawler"
 ANALYSIS_SERVICE="analysis-pipeline"
 REGION="asia-east1"
+# Cloud Tasks 佇列（並行安全的爬蟲/擷取/研究派送）。佇列需先手動建立 + 授權（見檔頭）。
+# 建好佇列後，把 content-crawler 的 CRAWLER_USE_QUEUE 設為 1 才會啟用（預設 0 走背景執行緒 fallback）。
+TASKS_QUEUE="${TASKS_QUEUE:-crawler-tasks}"
+TASKS_LOCATION="${TASKS_LOCATION:-$REGION}"
 
 echo "========================================================"
 echo "Content Analyser CN — 完整部署（三個 Cloud Run 服務）"
@@ -79,6 +83,8 @@ gcloud builds submit crawler-service --tag gcr.io/$PROJECT_ID/$CRAWLER_SERVICE
 # crawler 環境完全由本腳本定義（標準、自洽）：
 #   非機密 → --set-env-vars；機密（API 金鑰 + 住宅代理憑證）→ --set-secrets。
 #   前置：PROXY_* 六個 secret 需已建立（見檔頭與 §6.2），否則此步會失敗。
+# ⚠️ concurrency=1：佇列模式下每台 instance 一次只跑 1 個 Chrome（杜絕多任務疊加 OOM）。
+#   CRAWLER_USE_QUEUE 預設不設（=0 走背景執行緒 fallback）；佇列建好後手動 update-env-vars 設 1 啟用。
 gcloud run deploy $CRAWLER_SERVICE \
   --image gcr.io/$PROJECT_ID/$CRAWLER_SERVICE \
   --platform managed \
@@ -87,13 +93,20 @@ gcloud run deploy $CRAWLER_SERVICE \
   --memory 4Gi \
   --cpu 2 \
   --timeout 300 \
-  --concurrency 4 \
-  --set-env-vars "ENABLE_YOUTUBE_TRANSCRIPT=1" \
+  --concurrency 1 \
+  --max-instances 10 \
+  --set-env-vars "ENABLE_YOUTUBE_TRANSCRIPT=1,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,TASKS_QUEUE=$TASKS_QUEUE,TASKS_LOCATION=$TASKS_LOCATION" \
   --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,PROXY_HOST=PROXY_HOST:latest,PROXY_PORT=PROXY_PORT:latest,PROXY_USER=PROXY_USER:latest,PROXY_PASS=PROXY_PASS:latest,PROXY_PROVIDER=PROXY_PROVIDER:latest"
 
 CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE \
   --region $REGION --platform managed --format 'value(status.url)')
 echo ">>> content-crawler URL: $CRAWLER_URL"
+
+# WORKER_URL = crawler 自身 URL（Cloud Tasks 把任務 POST 回本服務的 /api/*/run）。
+# 首次部署時 URL 才已知，故以二次 update 注入（URL 穩定，之後部署沿用）。
+gcloud run services update $CRAWLER_SERVICE --region $REGION --platform managed \
+  --update-env-vars "WORKER_URL=$CRAWLER_URL" >/dev/null
+echo ">>> content-crawler WORKER_URL 已注入：$CRAWLER_URL"
 
 # ========================================================
 # 2) 部署 analysis-pipeline（分析引擎）

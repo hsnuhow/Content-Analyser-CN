@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-非同步批次爬取任務
+批次爬取任務
 
-由 app.py 的背景 thread 呼叫。逐一爬取 URL，即時將進度與結果
-寫入 Firestore crawl_jobs/{job_id}，供呼叫端（content-analyser UI / Colab）輪詢。
+兩種執行模式（同一套爬取序列 `_crawl_sequence`，差別只在如何被觸發/聚合）：
+- **佇列模式（並行安全，正式）**：app.py 切塊 + Cloud Tasks 入列 → 每塊由 `run_crawl_chunk`
+  在「請求生命週期內同步」跑（Cloud Run concurrency=1 → 每台一次只 1 個 Chrome），
+  完成計數寫回 job 文件，全部塊完成才標 completed。
+- **背景執行緒模式（fallback）**：佇列 env 未設定時，app.py 用背景 thread 呼叫 `run_crawl_batch`
+  （舊行為，供 local / 未設佇列環境；多用戶並行有 OOM 風險，故正式環境應啟用佇列）。
+
+進度與結果即時寫入 Firestore crawl_jobs/{job_id}，供呼叫端輪詢。
 """
+import math
 import time
 import traceback
 import concurrent.futures
@@ -17,12 +24,12 @@ JOBS_COLLECTION = "crawl_jobs"
 
 # ── 防卡死 / 成本守衛常數 ──
 RECYCLE_EVERY = 12           # 每爬 N 篇回收重建 driver，釋放 Chrome 記憶體（防 OOM）。
-                             # 廣告/追蹤封鎖 + 關圖後單頁記憶體大降，故由 6 放寬到 12，
-                             # 減少 driver 冷啟動次數（每次 16–40s），加快整批速度。
-PAGE_HARD_TIMEOUT = 240      # 傳入 scrape 的內部（檢查點式）硬時限；重站(Hearst listicle/gallery)需此時間抽完
-PAGE_WATCHDOG = 290          # 單頁看門狗：> 內部時限 + 緩衝；超過代表卡在步驟內，強制中止
-MAX_CONSECUTIVE_HANGS = 3    # 連續 N 篇看門狗逾時 → 疑系統性問題，提前中止整批
-BATCH_MAX_SECONDS = 2700     # 整批總時限（45 分）backstop，避免長批次無限耗時/費用（搭配重啟續爬）
+PAGE_HARD_TIMEOUT = 240      # 傳入 scrape 的內部（檢查點式）硬時限
+PAGE_WATCHDOG = 290          # 單頁看門狗：超過代表卡在步驟內，強制中止
+MAX_CONSECUTIVE_HANGS = 3    # 連續 N 篇看門狗逾時 → 疑系統性問題，提前中止
+BATCH_MAX_SECONDS = 2700     # 整批（背景執行緒模式）總時限（45 分）backstop
+CHUNK_SIZE = 6               # 佇列模式：每個 Cloud Tasks 任務處理幾個 URL（worst 6×240s<30min 派送上限）
+CHUNK_MAX_SECONDS = 1500     # 單塊（單任務）時限（25 分）< Cloud Tasks 派送上限 30 分，留緩衝
 
 
 def _update_job(db, job_id: str, **fields):
@@ -36,11 +43,7 @@ def _update_job(db, job_id: str, **fields):
 
 
 def _is_cancelled(db, job_id: str) -> bool:
-    """合作式取消：讀 job 文件，若 cancel_requested=True 或文件已被刪除 → 視為取消。
-
-    呼叫端（content-analyser）透過 POST /api/crawl/<id>/cancel 設旗標，
-    或直接刪除文件。背景迴圈於每篇前檢查，收到即停止。
-    """
+    """合作式取消：cancel_requested=True 或文件被刪除 → 視為取消。"""
     try:
         snap = db.collection(JOBS_COLLECTION).document(job_id).get()
         if not snap.exists:
@@ -51,8 +54,7 @@ def _is_cancelled(db, job_id: str) -> bool:
 
 
 def _write_result(db, job_id: str, idx: int, result: dict) -> None:
-    """單篇結果寫入子集合 crawl_jobs/{job_id}/results/{idx}，避免 job 文件超過 1MB
-    （內嵌全部結果會在約 100 篇內文時撐爆單文件上限）。idx 補零以維持排序。"""
+    """單篇結果寫入子集合 crawl_jobs/{job_id}/results/{idx}（idx 補零維持排序、retry 冪等覆蓋）。"""
     try:
         (db.collection(JOBS_COLLECTION).document(job_id)
          .collection("results").document(f"{idx:05d}").set(result))
@@ -60,16 +62,15 @@ def _write_result(db, job_id: str, idx: int, result: dict) -> None:
         print(f"[CrawlJob] 寫入 result {idx} 失敗: {e}", flush=True)
 
 
-def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
-                    gemini_api_key: str, db) -> None:
-    """背景執行：逐一爬取 urls，結果寫入 crawl_jobs/{job_id}。
-
-    批次內重用同一個 HeadlessCrawler（driver），省去每篇的冷啟動
-    （undetected-chromedriver 初始化約 40–50 秒）。driver 若 crash，
-    scrape() 內會自動關閉，下一篇會重新初始化。
-    """
-    def _log(msg):
-        print(f"[CrawlJob {job_id[:8]}] {msg}", flush=True)
+# ──────────────────────────────────────────────────────────────────────
+# 共用爬取序列（背景批次與佇列分塊都呼叫，確保看門狗/回收/Tier2-3 邏輯單一來源）
+# ──────────────────────────────────────────────────────────────────────
+def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
+                    is_cancelled_fn=None, deadline_sec=BATCH_MAX_SECONDS) -> dict:
+    """逐一爬取 urls（含看門狗 / driver 回收 / Tier2-3 / force_close），每篇呼叫
+    record_fn(local_index, url, result) 由呼叫端持久化（決定全域 index 與進度）。
+    回 {counts, aborted, processed}。aborted 可能為 'cancelled' / 時限說明 / None。"""
+    counts = {"success": 0, "skipped": 0, "failed": 0}
 
     def _new_crawler() -> HeadlessCrawler:
         c = HeadlessCrawler()
@@ -98,25 +99,20 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
 
     def _scrape_one(url: str) -> dict:
         try:
-            # Tier 1：keep_driver=True，批次重用直連 driver，不在每篇結束時 quit。
             result = crawler.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT, keep_driver=True)
         except UnsupportedSiteError as e:
             return {"status": "skipped", "url": url, "error": str(e)}
         except Exception as e:
             return {"status": "failed", "url": url, "error": str(e)}
-        # Tier 2/3：env 控制、預設關閉；未設定時直接回傳 Tier 1 結果。
         try:
             from tiered_fallback import run_tier23
             return run_tier23(url, result, gemini_api_key,
-                              proxied_scrape_fn=_proxied_scrape, log_fn=_log)
+                              proxied_scrape_fn=_proxied_scrape, log_fn=log)
         except Exception as e:
-            _log(f"[Tier2/3] 協調失敗（回退 Tier1）：{e}")
+            log(f"[Tier2/3] 協調失敗（回退 Tier1）：{e}")
             return result
 
     def _scrape_with_watchdog(url: str):
-        """單頁硬性看門狗：在獨立 thread 跑 _scrape_one，超過 PAGE_WATCHDOG 仍未回 →
-        判定卡死（步驟內 hang，內部 checkpoint 時限攔不住）。回 (result, hung: bool)。
-        hung=True 時呼叫端須砍掉並重建 driver 以解除卡住的 Chrome。"""
         ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         fut = ex.submit(_scrape_one, url)
         try:
@@ -125,11 +121,9 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
             return ({"status": "failed", "url": url,
                      "error": f"看門狗逾時（>{PAGE_WATCHDOG}s）已強制中止，頁面疑似無回應"}, True)
         finally:
-            ex.shutdown(wait=False)  # 不等待：卡住的 thread 待 driver 被砍後自然結束
+            ex.shutdown(wait=False)
 
     def _force_close(c, timeout: int = 15):
-        """關閉 driver，最多等 timeout 秒；逾時直接 kill Chrome 進程。
-        避免 close() 本身卡在 wedged Chrome 而阻塞整批；也確保記憶體立即釋放。"""
         if c is None:
             return
         cex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -141,119 +135,196 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
                 proc = getattr(getattr(drv, "service", None), "process", None)
                 if proc:
                     proc.kill()
-                    _log("close() 逾時，已強制 kill Chrome 進程")
+                    log("close() 逾時，已強制 kill Chrome 進程")
             except Exception:
                 pass
         finally:
             cex.shutdown(wait=False)
+
+    li = [0]
+
+    def _emit(url, result):
+        st = result.get("status")
+        if st in counts:
+            counts[st] += 1
+        record_fn(li[0], url, result)
+        li[0] += 1
+
+    aborted = None
+    start_ts = time.time()
+    consecutive_hangs = 0
+    total = len(urls)
+    try:
+        for i, url in enumerate(urls):
+            if is_cancelled_fn and is_cancelled_fn():
+                aborted = "cancelled"
+                break
+            if time.time() - start_ts > deadline_sec:
+                aborted = f"超過 {deadline_sec}s 時限"
+                for u in urls[i:]:
+                    _emit(u, {"status": "failed", "url": u,
+                              "error": aborted + "，未爬取", "unattempted": True})
+                break
+            if i > 0 and i % RECYCLE_EVERY == 0:
+                _force_close(crawler)
+                crawler = _new_crawler()
+                log(f"已回收並重建 driver（第 {i} 篇前），釋放記憶體")
+
+            u = (url or "").strip()
+            if not u:
+                _emit(u, {"status": "failed", "url": u, "error": "Empty URL"})
+                consecutive_hangs = 0
+                continue
+            if not (u.startswith("http://") or u.startswith("https://")):
+                _emit(u, {"status": "failed", "url": u, "error": "Invalid URL"})
+                consecutive_hangs = 0
+                continue
+
+            log(f"({i + 1}/{total}) {u}")
+            _t0 = time.time()
+            result, hung = _scrape_with_watchdog(u)
+            result["elapsed_sec"] = round(time.time() - _t0, 1)
+            result["hung"] = hung
+            if hung:
+                log("⏱ 看門狗逾時，強制砍掉並重建 driver（解除卡死的 Chrome）")
+                _force_close(crawler)
+                crawler = _new_crawler()
+                consecutive_hangs += 1
+            else:
+                consecutive_hangs = 0
+            _emit(u, result)
+
+            if consecutive_hangs >= MAX_CONSECUTIVE_HANGS:
+                aborted = f"連續 {consecutive_hangs} 篇看門狗逾時，疑系統性問題"
+                for uu in urls[i + 1:]:
+                    _emit(uu, {"status": "failed", "url": uu,
+                               "error": aborted + "，未爬取", "unattempted": True})
+                break
+    finally:
+        try:
+            crawler.close()
+        except Exception:
+            pass
+    return {"counts": counts, "aborted": aborted, "processed": li[0]}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 背景執行緒模式（fallback，佇列未啟用時用）
+# ──────────────────────────────────────────────────────────────────────
+def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
+                    gemini_api_key: str, db) -> None:
+    """整批在單一背景執行緒內爬完（舊行為）。僅 fallback；多用戶並行有 OOM 風險。"""
+    def _log(msg):
+        print(f"[CrawlJob {job_id[:8]}] {msg}", flush=True)
 
     try:
         total = len(urls)
         _update_job(db, job_id, status="running", progress=2, total=total,
                     log=f"開始爬取 {total} 個網址...")
 
-        # 結果寫入子集合（不再內嵌於 job 文件）→ 無單文件 1MB 上限，批次數量不受限。
-        counts = {"success": 0, "skipped": 0, "failed": 0}
-        idx = 0
+        def record(local_i, url, result):
+            _write_result(db, job_id, local_i, result)
+            prog = 2 + int((local_i + 1) / total * 95)
+            _update_job(db, job_id, progress=prog,
+                        log=f"({local_i + 1}/{total}) {result.get('status')}: "
+                            f"{result.get('title') or url}")
 
-        def _record(result: dict) -> dict:
-            nonlocal idx
-            _write_result(db, job_id, idx, result)
-            st = result.get("status")
-            if st in counts:
-                counts[st] += 1
-            idx += 1
-            return result
-
-        start_ts = time.time()
-        consecutive_hangs = 0
-        aborted = None  # 提前中止原因（連續卡死 / 總時限）
-
-        for i, url in enumerate(urls):
-            # 合作式取消檢查：使用者強制停止 → 立即停止爬取。
-            if _is_cancelled(db, job_id):
-                _log("收到取消請求，停止爬取")
-                _update_job(db, job_id, status="cancelled",
-                            log=f"已取消（完成 {idx}/{total}）")
-                return
-
-            # 批次總時限 backstop：超過即收尾，剩餘標未爬取。
-            if time.time() - start_ts > BATCH_MAX_SECONDS:
-                aborted = f"批次超過 {BATCH_MAX_SECONDS}s 總時限"
-                for u in urls[i:]:
-                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取",
-                             "unattempted": True})
-                break
-
-            # 每 RECYCLE_EVERY 篇回收 driver，釋放 Chrome 記憶體（防長批次 OOM）。
-            #   學到的選擇器已持久化於 Firestore，重建 driver 不會遺失（下次自動載回）。
-            if i > 0 and i % RECYCLE_EVERY == 0:
-                _force_close(crawler)          # 先關舊（超時保護）
-                crawler = _new_crawler()        # 再建新 → 全程不會兩個 Chrome 並存
-                _log(f"已回收並重建 driver（第 {i} 篇前），釋放記憶體")
-
-            url = (url or "").strip()
-            if not url:
-                result = _record({"status": "failed", "url": url, "error": "Empty URL"})
-                consecutive_hangs = 0
-            elif not (url.startswith("http://") or url.startswith("https://")):
-                result = _record({"status": "failed", "url": url, "error": "Invalid URL"})
-                consecutive_hangs = 0
-            else:
-                _log(f"({i+1}/{total}) {url}")
-                _t0 = time.time()
-                result, hung = _scrape_with_watchdog(url)
-                # 觀測 metric：每篇耗時與是否被看門狗砍，供事後調校時限/回收頻率。
-                result["elapsed_sec"] = round(time.time() - _t0, 1)
-                result["hung"] = hung
-                if hung:
-                    _log(f"⏱ 看門狗逾時，強制砍掉並重建 driver（解除卡死的 Chrome）")
-                    _force_close(crawler)         # 先砍掉卡死的 driver（釋放記憶體，避免並存）
-                    crawler = _new_crawler()       # 再建新供下一篇
-                    consecutive_hangs += 1
-                else:
-                    consecutive_hangs = 0
-                _record(result)
-
-            prog = 2 + int((i + 1) / total * 95)
-            _update_job(
-                db, job_id,
-                progress=prog,
-                log=f"({i+1}/{total}) {result.get('status')}: {result.get('title') or url}",
-            )
-
-            # 連續卡死中止：疑系統性問題（Chrome 壞 / 代理掛 / 站台全無回應），省費用。
-            if consecutive_hangs >= MAX_CONSECUTIVE_HANGS:
-                aborted = f"連續 {consecutive_hangs} 篇看門狗逾時，疑系統性問題"
-                for u in urls[i + 1:]:
-                    _record({"status": "failed", "url": u, "error": aborted + "，未爬取",
-                             "unattempted": True})
-                break
-
-        done_log = (f"完成：成功 {counts['success']}、略過 {counts['skipped']}、"
-                    f"失敗 {counts['failed']}")
-        if aborted:
-            done_log = f"提前中止（{aborted}）。{done_log}"
-
-        _update_job(
-            db, job_id,
-            status="completed",
-            progress=100,
-            log=done_log,
-            succeeded=counts["success"],
-            skipped=counts["skipped"],
-            failed=counts["failed"],
-            completed_at=firestore.SERVER_TIMESTAMP,
-        )
+        out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
+                              is_cancelled_fn=lambda: _is_cancelled(db, job_id),
+                              deadline_sec=BATCH_MAX_SECONDS)
+        if out["aborted"] == "cancelled":
+            _log("收到取消請求，停止爬取")
+            _update_job(db, job_id, status="cancelled",
+                        log=f"已取消（完成 {out['processed']}/{total}）")
+            return
+        c = out["counts"]
+        done_log = (f"完成：成功 {c['success']}、略過 {c['skipped']}、失敗 {c['failed']}")
+        if out["aborted"]:
+            done_log = f"提前中止（{out['aborted']}）。{done_log}"
+        _update_job(db, job_id, status="completed", progress=100, log=done_log,
+                    succeeded=c["success"], skipped=c["skipped"], failed=c["failed"],
+                    completed_at=firestore.SERVER_TIMESTAMP)
         _log(f"✅ 批次爬取結束：{done_log}")
-
     except Exception as e:
         _log(f"CRITICAL ERROR: {e}")
         traceback.print_exc()
         _update_job(db, job_id, status="failed", log=f"系統錯誤: {e}")
-    finally:
-        # 批次結束統一關閉重用的 driver。
-        try:
-            crawler.close()
-        except Exception:
-            pass
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 佇列模式（並行安全，正式）：每塊一個同步 worker
+# ──────────────────────────────────────────────────────────────────────
+def _complete_chunk(db, job_id: str, chunk_index: int, n_chunks: int,
+                    counts: dict, cancelled: bool = False) -> None:
+    """交易式記錄『某塊已完成』+ 聚合計數；全部塊完成才標 completed。冪等（retry 覆蓋同 key）。"""
+    ref = db.collection(JOBS_COLLECTION).document(job_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def _txn(txn):
+        snap = ref.get(transaction=txn)
+        if not snap.exists:
+            return
+        d = snap.to_dict() or {}
+        cd = d.get("chunks_done") or {}
+        cd[str(chunk_index)] = {"s": counts["success"], "k": counts["skipped"],
+                                "f": counts["failed"]}
+        agg = {"s": 0, "k": 0, "f": 0}
+        for v in cd.values():
+            agg["s"] += v.get("s", 0)
+            agg["k"] += v.get("k", 0)
+            agg["f"] += v.get("f", 0)
+        done_chunks = len(cd)
+        cur = d.get("status")
+        upd = {"chunks_done": cd, "succeeded": agg["s"], "skipped": agg["k"],
+               "failed": agg["f"], "updated_at": firestore.SERVER_TIMESTAMP,
+               "progress": min(99, int(done_chunks / max(1, n_chunks) * 100))}
+        if cancelled and cur not in ("completed", "failed"):
+            upd["status"] = "cancelled"
+            upd["log"] = f"已取消（{done_chunks}/{n_chunks} 塊回報）"
+        elif done_chunks >= n_chunks and cur not in ("cancelled", "failed"):
+            upd["status"] = "completed"
+            upd["progress"] = 100
+            upd["completed_at"] = firestore.SERVER_TIMESTAMP
+            upd["log"] = f"完成：成功 {agg['s']}、略過 {agg['k']}、失敗 {agg['f']}"
+        elif cur not in ("completed", "cancelled", "failed"):
+            upd["status"] = "running"
+            upd["log"] = f"已完成 {done_chunks}/{n_chunks} 塊"
+        txn.update(ref, upd)
+
+    try:
+        _txn(transaction)
+    except Exception as e:
+        print(f"[CrawlChunk] 完成計數交易失敗: {e}", flush=True)
+
+
+def run_crawl_chunk(job_id: str, urls: list, chunk_index: int, n_chunks: int,
+                    offset: int, use_gemini: bool, gemini_api_key: str, db) -> None:
+    """同步處理單一塊（Cloud Tasks worker 呼叫）。在請求生命週期內跑完 → 每台 instance 1 Chrome。"""
+    def _log(msg):
+        print(f"[CrawlChunk {job_id[:8]}#{chunk_index}] {msg}", flush=True)
+
+    if _is_cancelled(db, job_id):
+        _log("job 已取消，跳過此塊")
+        _complete_chunk(db, job_id, chunk_index, n_chunks,
+                        {"success": 0, "skipped": 0, "failed": 0}, cancelled=True)
+        return
+
+    def record(local_i, url, result):
+        _write_result(db, job_id, offset + local_i, result)
+
+    out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
+                          is_cancelled_fn=lambda: _is_cancelled(db, job_id),
+                          deadline_sec=CHUNK_MAX_SECONDS)
+    _complete_chunk(db, job_id, chunk_index, n_chunks, out["counts"],
+                    cancelled=(out["aborted"] == "cancelled"))
+    _log(f"塊完成：{out['counts']}（aborted={out['aborted']}）")
+
+
+def chunk_urls(urls: list):
+    """把 urls 切成 [(chunk_index, offset, [urls...]), ...]，供 app.py 入列。"""
+    chunks = []
+    for ci in range(math.ceil(len(urls) / CHUNK_SIZE)):
+        offset = ci * CHUNK_SIZE
+        chunks.append((ci, offset, urls[offset:offset + CHUNK_SIZE]))
+    return chunks

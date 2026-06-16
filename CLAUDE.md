@@ -974,6 +974,14 @@ combined_jobs/{job_id}            整合報告任務狀態（階段③：文字 
 | `ENABLE_YOUTUBE_TRANSCRIPT` | deploy.sh --set-env-vars | `1` = 啟用 YouTube 字幕擷取 |
 | `CHROME_BIN` / `CHROMEDRIVER_PATH` | Dockerfile 固定 | |
 | `CRAWLER_DISABLE_IMAGES` | （選用）| 關閉圖片載入省記憶體 |
+| `CRAWLER_USE_QUEUE` | update-env-vars | **並行安全開關**：`1` = 用 Cloud Tasks 佇列（concurrency=1，每台 1 Chrome）；未設/`0` = 背景執行緒 fallback（多用戶並行有 OOM 風險）。佇列建好+授權後才設 1 |
+| `TASKS_QUEUE` / `TASKS_LOCATION` | deploy.sh --set-env-vars | Cloud Tasks 佇列名稱 / region（預設 `crawler-tasks` / asia-east1）|
+| `WORKER_URL` | deploy.sh 二次注入 | crawler 自身 URL（Cloud Tasks 把 `/api/*/run` 任務 POST 回本服務）|
+| `GOOGLE_CLOUD_PROJECT` | deploy.sh --set-env-vars | Cloud Tasks queue path 用 |
+
+> 並行架構：爬取/擷取/研究的重活由 Cloud Tasks 限速派送到同步 worker（`/api/crawl/run`、
+> `/api/extract-images/run`、`/api/research/run`），每台 instance concurrency=1 → 一次只 1 個 Chrome；
+> Cloud Tasks `max-concurrent-dispatches` + Cloud Run `max-instances` 共同封頂並行數。見 changelog 2026-06-16。
 
 > Tier 3 住宅代理是否實際啟用，另由 Firestore `system/config.tier3_enabled`（admin 控制台切換）決定；
 > 上述 PROXY_* 為憑證來源，兩者搭配才生效。

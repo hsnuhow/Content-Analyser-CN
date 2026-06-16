@@ -39,7 +39,7 @@ from crawl_job import run_crawl_batch, JOBS_COLLECTION
 RESEARCH_JOBS = "research_jobs"
 IMAGE_JOBS = "image_extract_jobs"
 
-SERVICE_VERSION = "1.6.1"
+SERVICE_VERSION = "1.7.0"
 
 
 def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
@@ -280,26 +280,76 @@ def crawl_batch():
     urls = safe_urls
 
     job_id = str(uuid.uuid4())
+    from crawl_job import chunk_urls, CHUNK_SIZE
+    import task_queue
+    chunks = chunk_urls(urls)
+    use_queue = task_queue.tasks_enabled()
     db.collection(JOBS_COLLECTION).document(job_id).set({
         "job_id": job_id,
-        "status": "pending",
+        "status": "queued" if use_queue else "pending",
         "progress": 0,
         "log": "任務已建立，等待執行...",
         "total": len(urls),
-        "results": [],
+        "n_chunks": len(chunks),
+        "chunks_done": {},
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "completed_at": None,
     })
 
-    t = threading.Thread(
-        target=run_crawl_batch,
-        args=(job_id, urls, use_gemini, gemini_api_key, db),
-        daemon=True,
-    )
-    t.start()
+    if use_queue:
+        # 並行安全：切塊入列 Cloud Tasks，每塊由 /api/crawl/run 同步處理（concurrency=1）。
+        enq_ok = 0
+        for ci, offset, chunk in chunks:
+            if task_queue.enqueue("/api/crawl/run", {
+                "job_id": job_id, "urls": chunk, "chunk_index": ci,
+                "n_chunks": len(chunks), "offset": offset,
+                "use_gemini": use_gemini, "gemini_api_key": gemini_api_key,
+            }):
+                enq_ok += 1
+        if enq_ok < len(chunks):
+            # 入列未全部成功 → 回報，避免任務「永遠跑不完」
+            db.collection(JOBS_COLLECTION).document(job_id).update({
+                "status": "failed",
+                "log": f"入列失敗（{enq_ok}/{len(chunks)} 塊成功）",
+                "updated_at": firestore.SERVER_TIMESTAMP})
+            return jsonify({"status": "failed",
+                            "error": f"Cloud Tasks 入列失敗（{enq_ok}/{len(chunks)}）"}), 502
+    else:
+        # Fallback（佇列未設定）：單一背景執行緒爬完。多用戶並行有 OOM 風險。
+        threading.Thread(target=run_crawl_batch,
+                         args=(job_id, urls, use_gemini, gemini_api_key, db),
+                         daemon=True).start()
 
-    return jsonify({"job_id": job_id, "status": "pending"}), 202
+    return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending"}), 202
+
+
+@app.route("/api/crawl/run", methods=["POST"])
+@require_api_key
+def crawl_run():
+    """Cloud Tasks worker：同步處理單一塊（請求生命週期內跑完，concurrency=1 → 1 Chrome/instance）。
+    成功回 200；例外回 500 讓 Cloud Tasks 重試（結果 doc id 以全域 index 命名 → 重試冪等覆蓋）。"""
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("job_id")
+    chunk = data.get("urls") or []
+    if not job_id or not isinstance(chunk, list):
+        return jsonify({"status": "failed", "error": "缺少 job_id 或 urls"}), 400
+    from crawl_job import run_crawl_chunk
+    try:
+        run_crawl_chunk(
+            job_id, chunk,
+            int(data.get("chunk_index", 0)), int(data.get("n_chunks", 1)),
+            int(data.get("offset", 0)),
+            bool(data.get("use_gemini", False)),
+            data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY"),
+            db,
+        )
+    except Exception as e:
+        print(f"[CrawlRun] 塊處理失敗（將由 Cloud Tasks 重試）: {e}", flush=True)
+        return jsonify({"status": "failed", "error": str(e)}), 500
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/api/crawl/<job_id>", methods=["GET"])
@@ -380,14 +430,40 @@ def research():
                         "blocked": blocked}), 400
 
     job_id = str(uuid.uuid4())
+    import task_queue
+    use_queue = task_queue.tasks_enabled()
     db.collection(RESEARCH_JOBS).document(job_id).set({
-        "job_id": job_id, "status": "pending", "progress": 0,
+        "job_id": job_id, "status": "queued" if use_queue else "pending", "progress": 0,
         "log": "研究任務已建立...", "n_urls": len(safe_urls),
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
     })
-    threading.Thread(target=_run_research_job, args=(job_id, safe_urls), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "pending"}), 202
+    # 研究單次 ≤10 網域×120s < 派送上限 → 一個任務即可，不分塊。
+    if use_queue and task_queue.enqueue("/api/research/run",
+                                        {"job_id": job_id, "urls": safe_urls}):
+        pass
+    else:
+        threading.Thread(target=_run_research_job, args=(job_id, safe_urls), daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending"}), 202
+
+
+@app.route("/api/research/run", methods=["POST"])
+@require_api_key
+def research_run():
+    """Cloud Tasks worker：同步跑選擇器研究（請求生命週期內，concurrency=1）。"""
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("job_id")
+    urls = data.get("urls") or []
+    if not job_id or not isinstance(urls, list):
+        return jsonify({"status": "failed", "error": "缺少 job_id 或 urls"}), 400
+    try:
+        _run_research_job(job_id, urls)
+    except Exception as e:
+        print(f"[ResearchRun] 失敗（將重試）: {e}", flush=True)
+        return jsonify({"status": "failed", "error": str(e)}), 500
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/api/research/<job_id>", methods=["GET"])
@@ -434,17 +510,57 @@ def extract_images():
                         "blocked": blocked}), 400
 
     job_id = str(uuid.uuid4())
+    from image_extract import chunk_image_urls, run_image_extract_batch
+    import task_queue
+    chunks = chunk_image_urls(safe_urls)
+    use_queue = task_queue.tasks_enabled()
     db.collection(IMAGE_JOBS).document(job_id).set({
-        "job_id": job_id, "status": "pending", "progress": 0,
+        "job_id": job_id, "status": "queued" if use_queue else "pending", "progress": 0,
         "log": "影像擷取任務已建立...", "total": len(safe_urls),
+        "n_chunks": len(chunks), "chunks_done": {},
         "done": 0, "n_images": 0,
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
     })
-    from image_extract import run_image_extract_batch
-    threading.Thread(target=run_image_extract_batch,
-                     args=(job_id, safe_urls, db), daemon=True).start()
-    return jsonify({"job_id": job_id, "status": "pending"}), 202
+    if use_queue:
+        enq_ok = 0
+        for ci, offset, chunk in chunks:
+            if task_queue.enqueue("/api/extract-images/run", {
+                "job_id": job_id, "urls": chunk, "chunk_index": ci,
+                "n_chunks": len(chunks), "offset": offset,
+            }):
+                enq_ok += 1
+        if enq_ok < len(chunks):
+            db.collection(IMAGE_JOBS).document(job_id).update({
+                "status": "failed", "log": f"入列失敗（{enq_ok}/{len(chunks)} 塊）",
+                "updated_at": firestore.SERVER_TIMESTAMP})
+            return jsonify({"status": "failed",
+                            "error": f"Cloud Tasks 入列失敗（{enq_ok}/{len(chunks)}）"}), 502
+    else:
+        threading.Thread(target=run_image_extract_batch,
+                         args=(job_id, safe_urls, db), daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending"}), 202
+
+
+@app.route("/api/extract-images/run", methods=["POST"])
+@require_api_key
+def extract_images_run():
+    """Cloud Tasks worker：同步擷取單一塊的大圖。"""
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    data = request.get_json(silent=True) or {}
+    job_id = data.get("job_id")
+    chunk = data.get("urls") or []
+    if not job_id or not isinstance(chunk, list):
+        return jsonify({"status": "failed", "error": "缺少 job_id 或 urls"}), 400
+    from image_extract import run_image_extract_chunk
+    try:
+        run_image_extract_chunk(job_id, chunk, int(data.get("chunk_index", 0)),
+                                int(data.get("n_chunks", 1)), int(data.get("offset", 0)), db)
+    except Exception as e:
+        print(f"[ExtractRun] 塊處理失敗（將重試）: {e}", flush=True)
+        return jsonify({"status": "failed", "error": str(e)}), 500
+    return jsonify({"status": "ok"}), 200
 
 
 @app.route("/api/extract-images/<job_id>", methods=["GET"])

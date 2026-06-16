@@ -313,10 +313,15 @@ def extract_images_from_url(url: str, log: Callable[[str], None],
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 非同步批次（與文字爬蟲、研究器同樣的 job 模式；獨立 collection）
+# 非同步：佇列分塊（並行安全，正式）+ 背景執行緒（fallback）
 # ──────────────────────────────────────────────────────────────────────
+import math
+
+IMG_CHUNK_SIZE = 8        # 佇列模式：每任務處理幾個 URL（圖擷取靜態優先，較輕，可比爬蟲大）
+
+
 def _write_result(db, job_id: str, idx: int, result: dict) -> None:
-    """單筆結果寫入子集合 image_extract_jobs/{job_id}/results/{idx}（避免單文件 1MB）。"""
+    """單筆結果寫入子集合 image_extract_jobs/{job_id}/results/{idx}（idx 補零、retry 冪等覆蓋）。"""
     try:
         (db.collection(JOBS_COLLECTION).document(job_id)
          .collection("results").document(f"{idx:05d}").set(result))
@@ -324,13 +329,42 @@ def _write_result(db, job_id: str, idx: int, result: dict) -> None:
         print(f"[ImageExtract] 寫入 result {idx} 失敗: {e}", flush=True)
 
 
-def run_image_extract_batch(job_id: str, urls: list, db) -> None:
-    """背景執行：逐一擷取 urls 的主文大圖，結果寫 image_extract_jobs/{job_id}。
-
-    批次內共用單一 HeadlessCrawler（driver 僅在首次需要 Chrome 補位時才建立），
-    靜態能取圖的站完全不啟動 Chrome。"""
-    from firebase_admin import firestore
+def _extract_sequence(urls, log, record_fn) -> dict:
+    """共用擷取序列：逐一擷取 urls 的大圖（靜態優先、Chrome 補位），每篇呼叫
+    record_fn(local_index, result)。回 {n_images, processed}。"""
     from crawler import HeadlessCrawler
+    crawler = HeadlessCrawler(log_callback=log)  # driver lazy，靜態站不開 Chrome
+    n_images = 0
+    try:
+        for i, url in enumerate(urls):
+            try:
+                r = extract_images_from_url(url, log, shared_crawler=crawler)
+            except Exception as e:
+                r = {"url": url, "status": "failed", "source": "", "count": 0,
+                     "images": [], "error": str(e)}
+                log(f"[ImageExtract] {url} 例外：{e}")
+            n_images += r.get("count", 0)
+            record_fn(i, r)
+    finally:
+        try:
+            crawler.close()
+        except Exception:
+            pass
+    return {"n_images": n_images, "processed": len(urls)}
+
+
+def chunk_image_urls(urls: list):
+    """切塊 [(chunk_index, offset, [urls...]), ...]，供 app.py 入列。"""
+    out = []
+    for ci in range(math.ceil(len(urls) / IMG_CHUNK_SIZE)):
+        off = ci * IMG_CHUNK_SIZE
+        out.append((ci, off, urls[off:off + IMG_CHUNK_SIZE]))
+    return out
+
+
+def run_image_extract_batch(job_id: str, urls: list, db) -> None:
+    """Fallback（佇列未啟用）：單一背景執行緒擷取所有 urls 的大圖。"""
+    from firebase_admin import firestore
 
     def _update(**fields):
         try:
@@ -343,30 +377,71 @@ def run_image_extract_batch(job_id: str, urls: list, db) -> None:
         print(f"[ImageExtract {job_id[:8]}] {msg}", flush=True)
         _update(log=msg)
 
-    crawler = HeadlessCrawler(log_callback=_log)  # driver lazy，靜態站不會開 Chrome
     total = len(urls)
-    n_images = 0
     try:
         _update(status="running", log=f"開始擷取 {total} 個 URL 的主文大圖...")
-        for i, url in enumerate(urls):
-            try:
-                r = extract_images_from_url(url, _log, shared_crawler=crawler)
-            except Exception as e:
-                r = {"url": url, "status": "failed", "source": "", "count": 0,
-                     "images": [], "error": str(e)}
-                _log(f"[ImageExtract] {url} 例外：{e}")
-            _write_result(db, job_id, i, r)
-            n_images += r.get("count", 0)
-            _update(progress=int((i + 1) / total * 100),
-                    done=i + 1, total=total, n_images=n_images)
-        _update(status="completed", progress=100, n_images=n_images,
-                log=f"完成：{total} 個 URL、共 {n_images} 張大圖",
+
+        def record(local_i, result):
+            _write_result(db, job_id, local_i, result)
+            _update(progress=int((local_i + 1) / total * 100),
+                    done=local_i + 1, total=total)
+
+        out = _extract_sequence(urls, _log, record)
+        _update(status="completed", progress=100, n_images=out["n_images"],
+                log=f"完成：{total} 個 URL、共 {out['n_images']} 張大圖",
                 completed_at=firestore.SERVER_TIMESTAMP)
     except Exception as e:
         print(f"[ImageExtract] 批次失敗: {e}", flush=True)
         _update(status="failed", log=f"批次失敗：{e}")
-    finally:
-        try:
-            crawler.close()
-        except Exception:
-            pass
+
+
+def _complete_image_chunk(db, job_id: str, chunk_index: int, n_chunks: int,
+                          n_images: int, n_urls: int) -> None:
+    """交易式記錄某塊完成 + 聚合 n_images/done；全部塊完成才標 completed。冪等。"""
+    from firebase_admin import firestore
+    ref = db.collection(JOBS_COLLECTION).document(job_id)
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def _txn(txn):
+        snap = ref.get(transaction=txn)
+        if not snap.exists:
+            return
+        d = snap.to_dict() or {}
+        cd = d.get("chunks_done") or {}
+        cd[str(chunk_index)] = {"img": n_images, "n": n_urls}
+        tot_img = sum(v.get("img", 0) for v in cd.values())
+        tot_done = sum(v.get("n", 0) for v in cd.values())
+        done_chunks = len(cd)
+        upd = {"chunks_done": cd, "n_images": tot_img, "done": tot_done,
+               "progress": min(99, int(done_chunks / max(1, n_chunks) * 100)),
+               "updated_at": firestore.SERVER_TIMESTAMP}
+        if done_chunks >= n_chunks and d.get("status") not in ("failed",):
+            upd["status"] = "completed"
+            upd["progress"] = 100
+            upd["completed_at"] = firestore.SERVER_TIMESTAMP
+            upd["log"] = f"完成：{tot_done} 個 URL、共 {tot_img} 張大圖"
+        elif d.get("status") not in ("completed", "failed"):
+            upd["status"] = "running"
+            upd["log"] = f"已完成 {done_chunks}/{n_chunks} 塊"
+        txn.update(ref, upd)
+
+    try:
+        _txn(transaction)
+    except Exception as e:
+        print(f"[ImageExtract] 完成計數交易失敗: {e}", flush=True)
+
+
+def run_image_extract_chunk(job_id: str, urls: list, chunk_index: int,
+                            n_chunks: int, offset: int, db) -> None:
+    """同步處理單一塊（Cloud Tasks worker 呼叫）。"""
+    def _log(msg: str):
+        print(f"[ImageChunk {job_id[:8]}#{chunk_index}] {msg}", flush=True)
+
+    def record(local_i, result):
+        _write_result(db, job_id, offset + local_i, result)
+
+    out = _extract_sequence(urls, _log, record)
+    _complete_image_chunk(db, job_id, chunk_index, n_chunks,
+                          out["n_images"], out["processed"])
+    _log(f"塊完成：{out['n_images']} 張圖")
