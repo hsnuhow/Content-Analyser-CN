@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-16 新增：主文大圖擷取（影像服務階段①＋UI 入口，已部署 crawler 1.6.0 / analyser 00029）
+影像視覺分析服務的第一階段：只取圖、不碰文字，擷取主文容器內的大圖（供後續色調/色澤/主題視覺分析參考）。
+- **crawler 端點**（`image_extract.py` + `app.py`）：`POST /api/extract-images` + `GET /api/extract-images/<job_id>`（非同步、require_api_key、SSRF 過濾）。
+  - **重用文字爬蟲主文選擇器**（learned_selectors → SITE_TEMPLATE → 啟發式）解析容器，只蒐集容器內 `<img>`/`<picture><source>`，容器外（banner/icon/縮圖）一律濾掉。
+  - **靜態優先、Chrome 補位**：先抓靜態 HTML，靜態無圖才開 Chrome（JS/lazyload 站）；靜態能取圖的站完全不啟動 Chrome。
+  - **輕量過濾**：srcset 取最大、lazy 屬性、絕對化、去重、廣告網域、icon/logo/sprite 路徑、`.svg`、明確小尺寸（<200px）。
+  - **隨機抽樣**：蒐集全部合格大圖（安全上限 300）後 `random.sample` 抽**最多 10 張**（樣本不偏向版面開頭），依版面順序輸出。
+  - 結果寫 `image_extract_jobs/{id}/results`。與文字爬取 `scrape()` 嚴格分離（不並行、不互相拖累）。
+- **content-analyser UI 入口**（補「用戶操作邏輯漏洞」：先前只有 crawler 端點、無入口）：
+  - `crawler_client`：`submit_extract_images` / `get_extract_images_status`。
+  - `project_routes`：`extract_images_dataset`(POST，Editor↑，取成功項 URL) + `extract_images_status`(GET 輪詢)，job_id 存 `dataset.image_job_id`。
+  - `dataset_detail.html`：completed 時「🖼 擷取主文大圖（N）」按鈕 + 結果面板（每篇隨機抽到的大圖縮圖牆，連原圖）。
+- **端到端實測通過**（CHANEL 聖誕資料集，經正式 UI）：19 個成功項 → **131 張大圖**；voguehk 10 張全為 CHANEL 聖誕珠寶/腕錶主文大圖、零 banner/icon；SSR 站走靜態、elle/mintnews 等走 Chrome 補位。
+  - 註：Hearst（elle）CDN 防盜連使縮圖在站內內嵌破圖，但 URL 正確、原圖可開；階段②下載時帶 referer 即可解。
+- 文件：附錄 B 新端點、附錄 C `image_extract_jobs`。
+
 ## 2026-06-16 新增：選擇器研究工具（on-demand AI agent，B1+B2，已部署 crawler 00052 / analyser 00028）
 爬完出現失敗項時，用戶可觸發「選擇器研究」——一個 in-code tool-use 閉環 agent，研究失敗網域、產出候選選擇器或失敗診斷，經 admin 確認後升級為主爬蟲知識：
 - **B1（crawler 核心）**：`research.py` agent 閉環（開樣本→Gemini 提選擇器→**實測抽到幾字/像不像正文**→不夠好回饋再修，上限 6 步/120s/域→第二樣本交叉驗證）。重用 `HeadlessCrawler` 的 Chrome/DOM 工具（不肥大主爬蟲）；用系統 GENAI_API_KEY；與爬蟲不並行。失敗則分類診斷（403→Tier3 / JS空殼 / 列表頁 / 無正文）。`POST /api/research` + `GET /api/research/<job_id>`（非同步）。`site_learning` 加候選 CRUD + promote。

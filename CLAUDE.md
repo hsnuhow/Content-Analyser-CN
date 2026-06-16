@@ -802,6 +802,8 @@ Content-Analyser-CN/
 | `POST /api/crawl/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
 | `POST /api/research` | 非同步「選擇器研究」（對失敗 URL，on-demand），回傳 `job_id`。body `{urls:[...]}` |
 | `GET /api/research/{job_id}` | 查詢研究進度與結果（`result.candidates` / `result.diagnoses`）|
+| `POST /api/extract-images` | 非同步「主文大圖擷取」（只取圖、不碰文字；靜態優先 Chrome 補位），回傳 `job_id`。body `{urls:[...]}` |
+| `GET /api/extract-images/{job_id}` | 查詢擷取進度與結果（`results:[{url,status,source,count,images:[{src,width,height,alt}]}]`，每篇隨機抽最多 10 張）|
 | `POST /api/crawl/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 
 回傳：`{status: success/skipped/failed, url, title, content, length}`
@@ -911,6 +913,10 @@ crawl_jobs/{job_id}               非同步爬取任務狀態（job 文件保持
 
 research_jobs/{job_id}            選擇器研究任務狀態（on-demand，自管暫存）
   status / progress / log / result{candidates[], diagnoses[]}
+
+image_extract_jobs/{job_id}       主文大圖擷取任務狀態（on-demand，自管暫存）
+  status / progress / log / total / done / n_images
+  results/{idx}                   ⭐子集合：{url,status,source,count,images:[{src,width,height,alt}]}
 
 selector_candidates/{domain}      研究工具產出的候選選擇器（per-domain）
   selectors[] / cms / validated_chars / sample_urls[] / diagnosis

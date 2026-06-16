@@ -52,6 +52,14 @@
       <button type="submit" class="btn btn-sm btn-outline-info">🔬 研究失敗項（{{ failed_count }}）</button>
     </form>
     {% endif %}
+    {% set success_count = (dataset['items'] or []) | selectattr('status', 'equalto', 'success') | list | length %}
+    {% if success_count > 0 %}
+    <form method="POST" action="{{ url_for('project_bp.extract_images_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('對 {{ success_count }} 個成功項擷取主文大圖？（只取圖、與文字爬取分離，每篇隨機抽最多 10 張）');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-outline-success">🖼 擷取主文大圖（{{ success_count }}）</button>
+    </form>
+    {% endif %}
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
           onsubmit="return confirm('確定刪除此資料集？此操作不可還原。');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -122,6 +130,42 @@
           document.getElementById('researchLog').textContent='研究失敗：'+(d.log||'');
         } else { setTimeout(pollR,4000); }
       }).catch(()=>setTimeout(pollR,6000));
+  })();
+  </script>
+  {% endif %}
+
+  {# 主文大圖擷取結果（image_job_id 存在時）#}
+  {% if dataset.image_job_id %}
+  <div class="card shadow-sm mb-4 border-success">
+    <div class="card-header fw-semibold">🖼 主文大圖擷取結果</div>
+    <div class="card-body">
+      <div id="imgLog" class="text-muted small mb-2">擷取進行中...</div>
+      <div id="imgResult"></div>
+    </div>
+  </div>
+  <script>
+  (function pollImg(){
+    const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    fetch("{{ url_for('project_bp.extract_images_status', pid=pid, did=dataset.id) }}")
+      .then(r=>r.json()).then(d=>{
+        document.getElementById('imgLog').textContent = d.log || d.status || '';
+        if(d.status==='completed'){
+          const rs=d.results||[]; let h=`<div class="mb-2 small text-muted">共 ${d.n_images||0} 張大圖</div>`;
+          rs.forEach(it=>{
+            if(!(it.images||[]).length) return;
+            h+=`<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count||0} 張・${esc(it.source||'')}）</span></div><div class="d-flex flex-wrap gap-2">`;
+            (it.images||[]).forEach(im=>{
+              h+=`<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
+            });
+            h+=`</div></div>`;
+          });
+          document.getElementById('imgResult').innerHTML = h || '<div class="text-muted">無擷取到大圖。</div>';
+        } else if(d.status==='failed'){
+          document.getElementById('imgLog').textContent='擷取失敗：'+(d.log||'');
+        } else if(d.status==='none'){
+          document.getElementById('imgLog').textContent='（無擷取任務）';
+        } else { setTimeout(pollImg,4000); }
+      }).catch(()=>setTimeout(pollImg,6000));
   })();
   </script>
   {% endif %}
