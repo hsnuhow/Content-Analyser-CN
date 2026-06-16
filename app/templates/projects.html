@@ -2,7 +2,7 @@
 {% block content %}
 <div class="container py-4">
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2 class="mb-0">我的分析專案</h2>
+    <h2 class="mb-0">{% if is_admin %}所有分析專案 <span class="badge bg-warning text-dark align-middle">管理員：全站視角</span>{% else %}我的分析專案{% endif %}</h2>
     <a href="{{ url_for('project_bp.new_project') }}" class="btn btn-primary">
       ＋ 建立新專案
     </a>
@@ -28,6 +28,7 @@
               {{ role }}
             </span>
             &nbsp;{{ p.members|length }} 位成員
+            {% if p._foreign %}<br><span class="badge bg-warning text-dark mt-1">管理員檢視</span> <span class="text-muted">owner：{{ p.owner }}</span>{% endif %}
           </div>
         </div>
         <div class="card-footer bg-transparent d-flex gap-2">
