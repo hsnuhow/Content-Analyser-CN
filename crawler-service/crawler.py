@@ -268,6 +268,8 @@ SITE_TEMPLATES = {
     'vogue_tw': {
         'indicators': ['vogue.com.tw'],
         'selectors': [
+            # 同 GQ TW（Condé Nast）：主文容器為 ArticlePageChunksContent-<hash>，用前綴屬性選擇器。
+            '[class*="ArticlePageChunksContent"]', '[class*="ArticlePageChunks"]',
             '[class*="ArticleBody"]', '[class*="article-body"]',
             '[class*="RichText"]', '[class*="richtext"]',
             '[class*="ContentBody"]', '[class*="StoryBody"]',
@@ -278,12 +280,34 @@ SITE_TEMPLATES = {
     'gq_tw': {
         'indicators': ['gq.com.tw'],
         'selectors': [
+            # GQ TW 實際主文容器為 styled-components `ArticlePageChunksContent-<hash>`；
+            # hash 為建構期雜湊（每次部署變）→ 用前綴屬性選擇器抓穩定的元件名。
+            '[class*="ArticlePageChunksContent"]', '[class*="ArticlePageChunks"]',
             '[class*="ArticleBody"]', '[class*="article-body"]',
             '[class*="RichText"]', '[class*="richtext"]',
             '[class*="ContentBody"]', '[class*="StoryBody"]',
             '.article-content', '[itemprop="articleBody"]',
             'article', 'main',
         ]
+    },
+    # ── 台灣汽車/設計媒體（2026-06 保時捷專案實機 DOM 確認）──
+    'tvbscars': {
+        # 地球黃金線（cars.tvbs.com.tw）：WordPress 風格，正文在 .entry-content。
+        'indicators': ['cars.tvbs.com.tw'],
+        'selectors': ['.entry-content', '.cs-entry__content-wrap',
+                      '[itemprop="articleBody"]', 'article'],
+    },
+    'sicar': {
+        # SiCAR 愛車酷：Tailwind 版型，正文容器穩定 class 為 .release_content（外層 #article_content）。
+        'indicators': ['sicar.com.tw'],
+        'selectors': ['.release_content', '#article_content .release_content',
+                      '#article_content', 'article'],
+    },
+    'ppaper': {
+        # ppaper.net：WordPress（Astra 主題 + Elementor）。正文在 article.elementor / .site-content。
+        'indicators': ['ppaper.net'],
+        'selectors': ['article.elementor', '.ast-container', '.site-content',
+                      '.entry-content', 'article'],
     },
     # ── 聯合報 (udn.com) ──
     'udn': {
