@@ -20,7 +20,8 @@ from .services import (
     list_all_users, approve_user, reject_user,
     create_api_key, list_api_keys, revoke_api_key, reactivate_api_key,
 )
-from .crawler_client import check_crawler_health, cleanup_crawl_jobs
+from .crawler_client import (check_crawler_health, cleanup_crawl_jobs,
+                             submit_research, get_research_status)
 from .analysis_client import (check_health as check_analysis_health,
                               cleanup_analysis_jobs)
 from firebase_admin import firestore
@@ -335,3 +336,99 @@ def force_kill_crawler():
         'info'
     )
     return redirect(url_for('admin_bp.admin_dashboard'))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 選擇器研究候選確認（research tool 產出 → admin 確認後升級為主爬蟲知識）
+# ──────────────────────────────────────────────────────────────────────
+def _cand_doc_id(domain: str) -> str:
+    # 與 crawler-service/site_learning._doc_id 一致（doc id 命名約定）
+    return domain.replace('/', '_').replace('.', '_')[:200]
+
+
+@bp.route('/selector-candidates')
+@admin_required
+def selector_candidates():
+    """列出研究工具產出的候選選擇器，供 admin 確認升級或拒絕。"""
+    pending, others = [], []
+    try:
+        for d in db.collection('selector_candidates').stream():
+            c = d.to_dict() or {}
+            (pending if c.get('status') == 'pending' else others).append(c)
+    except Exception as e:
+        flash(f'讀取候選失敗：{e}', 'danger')
+    pending.sort(key=lambda c: c.get('proposed_at') or '', reverse=True)
+    return render_template('admin_selector_candidates.html',
+                           user=session.get('user'),
+                           pending=pending, others=others,
+                           active_research_job=session.get('_research_job'))
+
+
+@bp.route('/selector-candidates/<path:domain>/approve', methods=['POST'])
+@admin_required
+def approve_selector_candidate(domain):
+    """確認候選：把首選選擇器升級進 learned_selectors（主爬蟲執行時即讀取）。"""
+    try:
+        cref = db.collection('selector_candidates').document(_cand_doc_id(domain))
+        snap = cref.get()
+        if not snap.exists:
+            flash(f'找不到候選：{domain}', 'danger')
+            return redirect(url_for('admin_bp.selector_candidates'))
+        c = snap.to_dict() or {}
+        sels = c.get('selectors') or []
+        if not sels:
+            flash(f'候選無選擇器：{domain}', 'danger')
+            return redirect(url_for('admin_bp.selector_candidates'))
+        # per-domain 升級：寫 learned_selectors（與 crawler site_learning 同 collection/key）
+        db.collection('learned_selectors').document(_cand_doc_id(domain)).set({
+            'domain': domain, 'selector': sels[0],
+            'chars': c.get('validated_chars', 0), 'cms': c.get('cms', ''),
+            'updated_at': firestore.SERVER_TIMESTAMP, 'source': 'research_approved',
+        }, merge=True)
+        cref.set({'status': 'approved', 'approved_at': firestore.SERVER_TIMESTAMP}, merge=True)
+        flash(f'✅ 已升級 {domain} → {sels[0]}（主爬蟲下次爬該網域即採用）', 'success')
+    except Exception as e:
+        flash(f'升級失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.selector_candidates'))
+
+
+@bp.route('/research-url', methods=['POST'])
+@admin_required
+def research_url():
+    """主動研究指定 URL（不限失敗項；供測試/主動建模板）。"""
+    raw = (request.form.get('urls', '') or '').strip()
+    urls = [u.strip() for u in raw.replace(',', '\n').splitlines() if u.strip()]
+    if not urls:
+        flash('請輸入至少一個 URL。', 'danger')
+        return redirect(url_for('admin_bp.selector_candidates'))
+    result = submit_research(urls[:10])
+    if 'error' in result:
+        flash(f'啟動研究失敗：{result["error"]}', 'danger')
+        return redirect(url_for('admin_bp.selector_candidates'))
+    session['_research_job'] = result.get('job_id')
+    flash(f'已啟動主動研究（{len(urls[:10])} 個 URL）。完成後此頁顯示候選/診斷。', 'success')
+    return redirect(url_for('admin_bp.selector_candidates'))
+
+
+@bp.route('/research-url/status')
+@admin_required
+def research_url_status():
+    """輪詢主動研究結果（JSON）。"""
+    job_id = request.args.get('job') or session.get('_research_job')
+    if not job_id:
+        return jsonify({'status': 'none'}), 200
+    job = get_research_status(job_id)
+    return jsonify({'status': job.get('status', 'unknown'),
+                    'log': job.get('log', ''), 'result': job.get('result', {})}), 200
+
+
+@bp.route('/selector-candidates/<path:domain>/reject', methods=['POST'])
+@admin_required
+def reject_selector_candidate(domain):
+    try:
+        db.collection('selector_candidates').document(_cand_doc_id(domain)).set(
+            {'status': 'rejected', 'rejected_at': firestore.SERVER_TIMESTAMP}, merge=True)
+        flash(f'已拒絕候選：{domain}', 'warning')
+    except Exception as e:
+        flash(f'拒絕失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.selector_candidates'))

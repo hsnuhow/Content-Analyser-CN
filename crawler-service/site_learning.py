@@ -105,3 +105,89 @@ def detect_cms(html: str) -> str:
     if "wp-content" in h or "wp-includes" in h:
         return "wordpress"
     return "generic"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 選擇器研究候選（research tool 產出 → admin 確認後升級為 learned_selectors）
+# ──────────────────────────────────────────────────────────────────────
+_CANDIDATES_COLLECTION = "selector_candidates"
+
+
+def save_selector_candidate(domain: str, selectors: list, cms: str = "",
+                            validated_chars: int = 0, sample_urls: list = None,
+                            diagnosis: str = "") -> bool:
+    """研究工具產出 → 寫入 selector_candidates/{domain}（待 admin 確認）。no-op on failure。
+
+    per-domain 隔離：候選只進該網域自己的文件，錯誤無法擴散到別的網域。
+    """
+    if not domain:
+        return False
+    try:
+        from firebase_admin import firestore
+        _client().collection(_CANDIDATES_COLLECTION).document(_doc_id(domain)).set({
+            "domain": domain,
+            "selectors": list(selectors or []),
+            "cms": cms,
+            "validated_chars": int(validated_chars or 0),
+            "sample_urls": list(sample_urls or []),
+            "diagnosis": diagnosis,
+            "status": "pending",
+            "proposed_at": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+        print(f"[Research] 候選已存：{domain} → {selectors}（{validated_chars} 字）", flush=True)
+        return True
+    except Exception as e:
+        print(f"[Research] 候選儲存失敗（略過）：{e}", flush=True)
+        return False
+
+
+def list_selector_candidates(status: str = None) -> list:
+    """列出候選（供 admin 確認頁）。status 可篩 'pending'/'approved'/'rejected'。"""
+    try:
+        col = _client().collection(_CANDIDATES_COLLECTION)
+        docs = col.where("status", "==", status).stream() if status else col.stream()
+        return [d.to_dict() | {"_id": d.id} for d in docs]
+    except Exception as e:
+        print(f"[Research] 列出候選失敗：{e}", flush=True)
+        return []
+
+
+def promote_candidate_to_learned(domain: str) -> bool:
+    """admin 確認後：把候選的首選選擇器升級進 learned_selectors（主爬蟲執行時即讀取）。
+    並把候選標記 approved。per-domain，只影響該網域。"""
+    if not domain:
+        return False
+    try:
+        from firebase_admin import firestore
+        cref = _client().collection(_CANDIDATES_COLLECTION).document(_doc_id(domain))
+        snap = cref.get()
+        if not snap.exists:
+            return False
+        d = snap.to_dict() or {}
+        sels = d.get("selectors") or []
+        if not sels:
+            return False
+        save_learned_selector(domain, sels[0], chars=d.get("validated_chars", 0),
+                              cms=d.get("cms", ""))
+        cref.set({"status": "approved",
+                  "approved_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        _CACHE["ts"] = 0.0  # 失效 learned_selectors 快取，下次重讀
+        print(f"[Research] 候選升級為已學：{domain} → {sels[0]}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[Research] 候選升級失敗：{e}", flush=True)
+        return False
+
+
+def reject_candidate(domain: str) -> bool:
+    """admin 拒絕候選。"""
+    if not domain:
+        return False
+    try:
+        from firebase_admin import firestore
+        _client().collection(_CANDIDATES_COLLECTION).document(_doc_id(domain)).set(
+            {"status": "rejected", "rejected_at": firestore.SERVER_TIMESTAMP}, merge=True)
+        return True
+    except Exception as e:
+        print(f"[Research] 候選拒絕失敗：{e}", flush=True)
+        return False

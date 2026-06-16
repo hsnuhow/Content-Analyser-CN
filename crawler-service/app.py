@@ -34,6 +34,8 @@ from crawler import HeadlessCrawler, UnsupportedSiteError
 from auth import is_authorized
 from crawl_job import run_crawl_batch, JOBS_COLLECTION
 
+RESEARCH_JOBS = "research_jobs"
+
 SERVICE_VERSION = "1.5.0"
 
 
@@ -323,6 +325,81 @@ def get_crawl_job(job_id):
         print(f"[Crawler] 讀取 results 子集合失敗: {e}", flush=True)
         data.setdefault("results", [])
     return jsonify(data), 200
+
+
+def _run_research_job(job_id: str, urls: list):
+    """背景執行：選擇器研究 agent，結果寫 research_jobs/{job_id}。"""
+    def _update(**fields):
+        try:
+            db.collection(RESEARCH_JOBS).document(job_id).update(
+                {**fields, "updated_at": firestore.SERVER_TIMESTAMP})
+        except Exception as e:
+            print(f"[Research] job 更新失敗: {e}", flush=True)
+
+    def _log(msg: str):
+        print(msg, flush=True)
+        _update(log=msg)
+
+    try:
+        from research import run_research
+        _update(status="running", log="研究啟動...")
+        out = run_research(urls, _log)
+        _update(status="completed", result=out, progress=100,
+                log=(f"完成：{len(out.get('candidates', []))} 個候選、"
+                     f"{len(out.get('diagnoses', []))} 個診斷"),
+                completed_at=firestore.SERVER_TIMESTAMP)
+    except Exception as e:
+        print(f"[Research] 研究任務失敗: {e}", flush=True)
+        _update(status="failed", log=f"研究失敗：{e}")
+
+
+@app.route("/api/research", methods=["POST"])
+@require_api_key
+def research():
+    """非同步「選擇器研究」：對失敗 URL 依網域研究、產出候選選擇器 + 失敗診斷。
+    on-demand、低頻、用戶觸發、與爬蟲不並行。
+
+    Request: {"urls": [...]}（通常是爬取失敗的 URL）
+    Response: {"job_id": "...", "status": "pending"}
+    """
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    data = request.get_json(silent=True) or {}
+    urls = data.get("urls") or []
+    if not isinstance(urls, list) or not urls:
+        return jsonify({"status": "failed", "error": "Missing or empty 'urls' list"}), 400
+    safe_urls, blocked = [], []
+    for u in urls:
+        ok, reason = _is_safe_url((u or "").strip())
+        (safe_urls if ok else blocked).append(u if ok else {"url": u, "reason": reason})
+    if not safe_urls:
+        return jsonify({"status": "failed", "error": "無合法 URL（全被 SSRF 過濾）",
+                        "blocked": blocked}), 400
+
+    job_id = str(uuid.uuid4())
+    db.collection(RESEARCH_JOBS).document(job_id).set({
+        "job_id": job_id, "status": "pending", "progress": 0,
+        "log": "研究任務已建立...", "n_urls": len(safe_urls),
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
+    })
+    threading.Thread(target=_run_research_job, args=(job_id, safe_urls), daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/research/<job_id>", methods=["GET"])
+@require_api_key
+def get_research_job(job_id):
+    """查詢研究任務進度與結果（candidates / diagnoses）。"""
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    try:
+        doc = db.collection(RESEARCH_JOBS).document(job_id).get()
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"Firestore 查詢失敗: {e}"}), 500
+    if not doc.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
+    return jsonify(doc.to_dict()), 200
 
 
 @app.route("/api/crawl/<job_id>/cancel", methods=["POST"])

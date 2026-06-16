@@ -800,6 +800,8 @@ Content-Analyser-CN/
 | `POST /api/crawl/batch` | 非同步批次（最多 100），回傳 `job_id` |
 | `GET /api/crawl/{job_id}` | 查詢非同步爬取進度與結果 |
 | `POST /api/crawl/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
+| `POST /api/research` | 非同步「選擇器研究」（對失敗 URL，on-demand），回傳 `job_id`。body `{urls:[...]}` |
+| `GET /api/research/{job_id}` | 查詢研究進度與結果（`result.candidates` / `result.diagnoses`）|
 | `POST /api/crawl/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 
 回傳：`{status: success/skipped/failed, url, title, content, length}`
@@ -905,6 +907,18 @@ api_keys/{key_id}                 外部工具金鑰（Admin 管理）
 crawl_jobs/{job_id}               非同步爬取任務狀態（job 文件保持輕量）
   status / progress / log / cancel_requested
   results/{idx}                   ⭐子集合（idx 補零排序，避免 1MB 文件上限）
+                                  （每筆另含觀測 metric：elapsed_sec / hung）
+
+research_jobs/{job_id}            選擇器研究任務狀態（on-demand，自管暫存）
+  status / progress / log / result{candidates[], diagnoses[]}
+
+selector_candidates/{domain}      研究工具產出的候選選擇器（per-domain）
+  selectors[] / cms / validated_chars / sample_urls[] / diagnosis
+  status                          pending | approved | rejected
+  → admin 後台確認 → 升級寫入 learned_selectors（主爬蟲執行時讀取）
+
+learned_selectors/{domain}        已學/已確認選擇器（主爬蟲 load_learned_selectors 讀，60s 快取）
+  domain / selector / chars / cms / source
 
 # analysis-pipeline 自管（獨立）：
 analysis_jobs/{job_id}            非同步任務狀態

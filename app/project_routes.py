@@ -29,7 +29,8 @@ from io import BytesIO
 from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
 from .analysis_client import submit_analysis, get_job_status, cancel_analysis
-from .crawler_client import submit_crawl_batch, get_crawl_status, cancel_crawl
+from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
+                             submit_research, get_research_status)
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -1247,6 +1248,61 @@ def recrawl_dataset(pid, did, project, role):
               count=len(target_urls), project_id=pid)
     flash(f'已啟動重爬 {len(target_urls)} 項，完成後{"整批替換" if mode == "all" else "合併保留已成功項"}。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/research', methods=['POST'])
+@project_access_required(min_role='editor')
+def research_dataset(pid, did, project, role):
+    """🔬 研究失敗項：對資料集中失敗的 URL 觸發選擇器研究 agent（on-demand）。
+    產出候選選擇器（待 admin 確認升級）與失敗診斷。與爬蟲不並行。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        abort(404)
+    dataset = ds_doc.to_dict()
+    if dataset.get('status') == 'crawling':
+        flash('資料集正在爬取中，請先等爬完再研究。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    items = _load_dataset_items(pid, did)
+    failed_urls = list(dict.fromkeys(
+        it.get('url') for it in items
+        if it.get('status') == 'failed' and it.get('url')))
+    if not failed_urls:
+        flash('沒有失敗的項目可研究。', 'info')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    result = submit_research(failed_urls)
+    if 'error' in result:
+        flash(f'啟動研究失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    (db.collection('projects').document(pid).collection('datasets').document(did)
+     .update({'research_job_id': result.get('job_id'),
+              'research_status': 'running',
+              'updated_at': firestore.SERVER_TIMESTAMP}))
+    log_usage('research', detail=dataset.get('name', ''),
+              count=len(failed_urls), project_id=pid)
+    flash(f'已啟動「失敗項研究」（{len(failed_urls)} 個 URL）。完成後此頁會顯示候選選擇器與診斷。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/research/status')
+@project_access_required(min_role='viewer')
+def research_status(pid, did, project, role):
+    """輪詢研究任務進度與結果（JSON）。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        return jsonify({'error': '找不到資料集'}), 404
+    job_id = (ds_doc.to_dict() or {}).get('research_job_id')
+    if not job_id:
+        return jsonify({'status': 'none'}), 200
+    job = get_research_status(job_id)
+    return jsonify({
+        'status': job.get('status', 'unknown'),
+        'log': job.get('log', ''),
+        'result': job.get('result', {}),
+    }), 200
 
 
 @bp.route('/<pid>/analyses/combined', methods=['POST'])
