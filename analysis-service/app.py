@@ -24,6 +24,7 @@ from firebase_admin import firestore
 from flask import Flask, request, jsonify
 
 from pipeline import run_analysis, JOBS_COLLECTION
+from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLECTION
 from auth import is_authorized
 
 SERVICE_VERSION = "1.1.0"
@@ -225,6 +226,88 @@ def get_job(job_id: str):
         safe_fields["error"] = job.get("log", "")
 
     return jsonify(safe_fields), 200
+
+
+@app.route("/api/analyse-images", methods=["POST"])
+@require_api_key
+def analyse_images():
+    """提交影像視覺分析（非同步，階段②）。對主文大圖做色盤 + Gemini 視覺分析 → 報告。
+
+    Request body:
+    {
+      "report_title": "...",
+      "images": [{"src": "...", "alt": "...", "source_url": "文章URL（破解防盜連）"}],
+      "llm_provider": "gemini", "llm_model": "gemini-2.5-flash", "llm_api_key": "..."
+    }
+    Response: {"job_id": "...", "status": "pending"}
+    """
+    data = request.get_json(silent=True) or {}
+    report_title = (data.get("report_title") or "").strip()
+    if not report_title:
+        return jsonify({"status": "failed", "error": "缺少 report_title"}), 400
+    images = data.get("images")
+    if not isinstance(images, list) or not images:
+        return jsonify({"status": "failed", "error": "缺少 images 或為空列表"}), 400
+    if len(images) > 200:
+        return jsonify({"status": "failed", "error": "每次最多 200 張圖"}), 400
+
+    llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
+    llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
+    llm_api_key = (data.get("llm_api_key") or "").strip()
+    try:
+        temperature = max(0.0, min(1.0, float(data.get("temperature", 0.3))))
+    except (TypeError, ValueError):
+        temperature = 0.3
+    if not llm_api_key:
+        return jsonify({"status": "failed",
+                        "error": "缺少 llm_api_key。請在 Project 設定中配置 LLM API Key。"}), 400
+    if llm_provider not in ("gemini", "claude"):
+        return jsonify({"status": "failed",
+                        "error": f"影像分析僅支援 'gemini'、'claude'（建議 gemini），不支援：'{llm_provider}'。"}), 400
+    if not llm_model:
+        return jsonify({"status": "failed", "error": "缺少 llm_model。"}), 400
+
+    job_id = str(uuid.uuid4())
+    db.collection(IMAGE_JOBS_COLLECTION).document(job_id).set({
+        "job_id": job_id, "status": "pending", "progress": 0,
+        "log": "任務已建立，等待執行...", "report_title": report_title,
+        "n_images": len(images), "llm_provider": llm_provider, "llm_model": llm_model,
+        "result_markdown": None,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
+    })
+    llm_cfg = {"provider": llm_provider, "model": llm_model,
+               "api_key": llm_api_key, "temperature": temperature,
+               "thinking": bool(data.get("thinking", False))}
+    threading.Thread(target=run_image_analysis,
+                     args=(job_id, report_title, images, llm_cfg, db),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/analyse-images/<job_id>", methods=["GET"])
+@require_api_key
+def get_image_job(job_id: str):
+    """查詢影像視覺分析任務進度與結果（不回傳 llm_api_key）。"""
+    try:
+        doc = db.collection(IMAGE_JOBS_COLLECTION).document(job_id).get()
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"Firestore 查詢失敗：{e}"}), 500
+    if not doc.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+    job = doc.to_dict()
+    safe = {
+        "job_id": job.get("job_id"), "status": job.get("status"),
+        "progress": job.get("progress", 0), "log": job.get("log", ""),
+        "report_title": job.get("report_title"), "n_images": job.get("n_images"),
+        "n_success": job.get("n_success"),
+        "llm_provider": job.get("llm_provider"), "llm_model": job.get("llm_model"),
+    }
+    if job.get("status") == "completed":
+        safe["result_markdown"] = job.get("result_markdown", "")
+    if job.get("status") == "failed":
+        safe["error"] = job.get("log", "")
+    return jsonify(safe), 200
 
 
 @app.route("/api/analyse/<job_id>/cancel", methods=["POST"])

@@ -28,7 +28,8 @@ from io import BytesIO
 
 from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
-from .analysis_client import submit_analysis, get_job_status, cancel_analysis
+from .analysis_client import (submit_analysis, get_job_status, cancel_analysis,
+                              submit_image_analysis, get_image_analysis_status)
 from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
                              submit_research, get_research_status,
                              submit_extract_images, get_extract_images_status)
@@ -1359,6 +1360,84 @@ def extract_images_status(pid, did, project, role):
         'log': job.get('log', ''),
         'n_images': job.get('n_images', 0),
         'results': job.get('results', []),
+    }), 200
+
+
+@bp.route('/<pid>/datasets/<did>/analyse-images', methods=['POST'])
+@project_access_required(min_role='editor')
+def analyse_images_dataset(pid, did, project, role):
+    """🎨 大圖視覺分析（階段②）：把已擷取的主文大圖送 analysis-pipeline 做
+    色調/色澤/主題/視覺吸睛要素分析，產出視覺報告。需先完成「擷取主文大圖」。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        abort(404)
+    dataset = ds_doc.to_dict()
+    image_job_id = dataset.get('image_job_id')
+    if not image_job_id:
+        flash('請先「擷取主文大圖」，再進行視覺分析。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    job = get_extract_images_status(image_job_id)
+    if job.get('status') != 'completed':
+        flash('大圖擷取尚未完成，請稍候再分析。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    images = []
+    for it in (job.get('results') or []):
+        src_url = it.get('url')
+        for im in (it.get('images') or []):
+            if im.get('src'):
+                images.append({'src': im['src'], 'alt': im.get('alt', ''),
+                               'source_url': src_url})
+    if not images:
+        flash('沒有可分析的大圖。', 'info')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    cfg = project.get('llm_config', {}) or {}
+    provider = (cfg.get('provider') or 'gemini').lower()
+    model = cfg.get('model') or 'gemini-2.5-flash'
+    api_key = cfg.get('api_key') or ''
+    if not api_key:
+        flash('請先在專案設定填入 LLM API Key。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    if provider not in ('gemini', 'claude'):
+        flash('影像視覺分析僅支援 Gemini 或 Claude（建議 Gemini），請於專案設定切換。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    title = f"{dataset.get('name', '')}（視覺分析）"
+    result = submit_image_analysis(title, images, provider, model, api_key,
+                                   temperature=cfg.get('temperature', 0.3))
+    if 'error' in result:
+        flash(f'啟動視覺分析失敗：{result["error"]}', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    (db.collection('projects').document(pid).collection('datasets').document(did)
+     .update({'image_analysis_job_id': result.get('job_id'),
+              'image_analysis_status': 'running',
+              'updated_at': firestore.SERVER_TIMESTAMP}))
+    log_usage('analyse_images', detail=dataset.get('name', ''),
+              count=len(images), project_id=pid)
+    flash(f'已啟動「大圖視覺分析」（{len(images)} 張）。完成後此頁會顯示視覺報告。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/analyse-images/status')
+@project_access_required(min_role='viewer')
+def analyse_images_status(pid, did, project, role):
+    """輪詢大圖視覺分析任務進度與結果（result_markdown）。"""
+    ds_doc = (db.collection('projects').document(pid)
+              .collection('datasets').document(did).get())
+    if not ds_doc.exists:
+        return jsonify({'error': '找不到資料集'}), 404
+    job_id = (ds_doc.to_dict() or {}).get('image_analysis_job_id')
+    if not job_id:
+        return jsonify({'status': 'none'}), 200
+    job = get_image_analysis_status(job_id)
+    return jsonify({
+        'status': job.get('status', 'unknown'),
+        'log': job.get('log', ''),
+        'n_images': job.get('n_images'),
+        'n_success': job.get('n_success'),
+        'result_markdown': job.get('result_markdown', ''),
     }), 200
 
 
