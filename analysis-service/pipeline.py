@@ -151,6 +151,7 @@ def run_analysis(job_id: str, report_title: str,
                     contents=contents,
                     project_id=project_id,
                     log_fn=lambda m: _update_job(db, job_id, log=m),
+                    db=db,  # 供 embedding 內容快取（embeddings/{key}）
                 )
                 nlp_results.update(result)
                 _progress(40, f"Path 1 完成：{result['clusters'].get('n_clusters', 0)} 個語意群組")
@@ -204,11 +205,12 @@ def run_analysis(job_id: str, report_title: str,
             nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
             _log("⚠️ Path 1 thread 逾時（600s）")
 
-        # L4 防 race：Path 1 逾時時 daemon thread 仍可能寫 nlp_results / search_extent_results。
-        # 逾時即視為數值層失敗，丟棄部分結果並擋下 LLM。
+        # Path 1 逾時：run_nlp 早已把 tfidf/clusters 寫入 nlp_results，逾時多半卡在其後的
+        # label_clusters / search-extent（仍在 daemon thread 內）。保留已完成的數值結果
+        # （TF-IDF 是閘門核心），只清空仍可能被 thread 寫入的 search_extent，避免 race。
         if path1_timed_out:
-            nlp_results = {}
             search_extent_results = {}
+            _log("⚠️ Path 1 逾時，保留已完成數值結果、清空 search-extent")
 
         # ── 數值層閘門判定 ──
         # 數值核心 = TF-IDF top_keywords。沒有它就代表數值探勘整體失敗 → 不進 LLM、直接失敗。

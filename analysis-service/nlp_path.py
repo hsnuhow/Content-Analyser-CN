@@ -10,6 +10,7 @@ Path 1：數值分析層
 """
 import os
 import re
+import concurrent.futures
 from typing import List, Dict, Any, Callable, Optional
 
 import numpy as np
@@ -73,10 +74,20 @@ _STOPWORDS = frozenset([
 
 TOP_KEYWORDS = 25
 TOP_PER_ARTICLE = 10
-EMBEDDING_BATCH = 20    # 每批筆數（5→20：大幅減少往返次數，避免 SSL 中斷/逾時累積拖到十幾分鐘）
-EMBEDDING_RETRIES = 3   # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
-MAX_EMBED_CHARS = 1000  # 向量化時每篇取前 N 字（控制 token 成本）
+EMBED_MODEL = "text-multilingual-embedding-002"  # 向量化模型（換模型時改這裡 + bump，快取 key 含此值會自動失效重算）
+EMBED_DIM = 768                                  # 該模型預設維度（納入快取 key，避免跨模型/維度污染）
+EMBED_CACHE_COLLECTION = "embeddings"            # Firestore 快取 collection：embeddings/{sha256(model:dim:text)}
+EMBEDDING_BATCH = 20      # 每批筆數
+EMBEDDING_RETRIES = 2     # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
+EMBEDDING_WORKERS = 4     # 並行批次數：批次彼此獨立，並行送可把總時間壓到 ≈ 最慢一批
+EMBED_CALL_TIMEOUT_MS = 60000  # 單次 embed_content HTTP 逾時（毫秒）：避免單一呼叫無限掛住拖到數分鐘
+MAX_EMBED_CHARS = 1000    # 向量化時每篇取前 N 字（控制 token 成本）
 MAX_CLUSTERS = 8
+
+# 慢且可降級的步驟各自的硬時限：超過即降級（單群／停用），絕不拖垮整個 Path 1。
+# 數值閘門核心是 TF-IDF（秒級）+ 關聯規則（毫秒級），分群與 Cloud NL 都是 best-effort。
+CLUSTER_DEADLINE_SEC = 240   # Vertex embedding + KMeans 全程上限
+NL_DEADLINE_SEC = 120        # Cloud NL 實體 / 情感全程上限
 
 
 def _tokenize(text: str) -> List[str]:
@@ -157,44 +168,110 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
 def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
     """呼叫 Vertex AI text-multilingual-embedding-002，取得語意向量。
     使用 Application Default Credentials（Cloud Run Service Account）。
+
+    批次彼此獨立 → 並行送（EMBEDDING_WORKERS）並依批起始索引重組，確保 embeddings[i] ↔ texts[i] 對位。
+    每次呼叫帶 HTTP 逾時（EMBED_CALL_TIMEOUT_MS），避免單一掛住的呼叫拖到數分鐘。
     """
     from google import genai
+    from google.genai import types
+    import time as _time
 
     client = genai.Client(
         vertexai=True,
         project=project_id,
         location="us-central1",
+        http_options=types.HttpOptions(timeout=EMBED_CALL_TIMEOUT_MS),
     )
 
-    import time as _time
-    all_embeddings: List[List[float]] = []
-    for i in range(0, len(texts), EMBEDDING_BATCH):
-        batch = texts[i: i + EMBEDDING_BATCH]
-        # 暫時性錯誤（SSL EOF / 5xx / 逾時）短退避重試，避免單批失敗就整個分群被丟棄。
+    batch_starts = list(range(0, len(texts), EMBEDDING_BATCH))
+
+    def _embed_batch(start: int) -> List[List[float]]:
+        batch = texts[start: start + EMBEDDING_BATCH]
         last = None
         for attempt in range(EMBEDDING_RETRIES):
             try:
                 resp = client.models.embed_content(
-                    model="text-multilingual-embedding-002",
+                    model=EMBED_MODEL,
                     contents=batch,
                 )
-                for emb in resp.embeddings:
-                    all_embeddings.append(list(emb.values))
-                last = None
-                break
+                return [list(emb.values) for emb in resp.embeddings]
             except Exception as e:
                 last = e
                 if attempt < EMBEDDING_RETRIES - 1:
-                    print(f"[nlp] embedding 批 {i//EMBEDDING_BATCH} 暫時性失敗，"
+                    print(f"[nlp] embedding 批 @{start} 暫時性失敗，"
                           f"{1.5*(attempt+1):.1f}s 後重試：{e}", flush=True)
                     _time.sleep(1.5 * (attempt + 1))
-        if last is not None:
-            raise last  # 重試後仍失敗 → 上拋讓 run_semantic_clustering 降級（而非靜默錯位）
+        raise last  # 重試後仍失敗 → 上拋讓 run_semantic_clustering 降級
 
+    results: Dict[int, List[List[float]]] = {}
+    workers = min(EMBEDDING_WORKERS, len(batch_starts)) or 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_embed_batch, s): s for s in batch_starts}
+        for fut in concurrent.futures.as_completed(futs):
+            results[futs[fut]] = fut.result()  # 任一批拋出 → 整體上拋降級
+
+    all_embeddings: List[List[float]] = []
+    for s in batch_starts:
+        all_embeddings.extend(results[s])
     return all_embeddings
 
 
-def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, Any]:
+def _emb_key(text: str) -> str:
+    """快取 key：sha256(model:dim:text)。含 model+dim → 換模型/維度自動失效，不會誤用舊向量。"""
+    import hashlib
+    return hashlib.sha256(
+        f"{EMBED_MODEL}:{EMBED_DIM}:{text}".encode("utf-8")).hexdigest()
+
+
+def _embed_texts(texts: List[str], project_id: str, db=None) -> List[List[float]]:
+    """帶 Firestore 快取的向量化：先查 embeddings/{key}，只對 miss 呼叫 Vertex，再寫回。
+    db=None 或任何快取層錯誤 → 退回純 _get_embeddings（快取絕不擋分析）。對位以 texts 順序重組。"""
+    if db is None:
+        return _get_embeddings(texts, project_id)
+    try:
+        keys = [_emb_key(t) for t in texts]
+        uniq = list(dict.fromkeys(keys))  # 去重（同文多篇只查/算一次）
+        col = db.collection(EMBED_CACHE_COLLECTION)
+        cached: Dict[str, List[float]] = {}
+        refs = [col.document(k) for k in uniq]
+        for snap in db.get_all(refs):
+            if snap.exists:
+                v = (snap.to_dict() or {}).get("vector")
+                if v:
+                    cached[snap.id] = list(v)
+        miss_keys = [k for k in uniq if k not in cached]
+        # miss 的代表文字（每個 uniq key 對到首次出現的 text）
+        key_to_text = {}
+        for t, k in zip(texts, keys):
+            key_to_text.setdefault(k, t)
+        if miss_keys:
+            miss_vecs = _get_embeddings([key_to_text[k] for k in miss_keys], project_id)
+            if len(miss_vecs) == len(miss_keys):
+                from firebase_admin import firestore as _fs
+                batch = db.batch()
+                for k, vec in zip(miss_keys, miss_vecs):
+                    cached[k] = vec
+                    batch.set(col.document(k), {
+                        "vector": vec, "model": EMBED_MODEL, "dim": EMBED_DIM,
+                        "created_at": _fs.SERVER_TIMESTAMP,
+                    })
+                try:
+                    batch.commit()
+                except Exception as e:
+                    print(f"[nlp] embedding 快取寫回失敗（不影響分析）：{e}", flush=True)
+            else:
+                # 數量不符 → 不信快取，整批重算（安全）
+                return _get_embeddings(texts, project_id)
+        hits = len(uniq) - len(miss_keys)
+        print(f"[nlp] embedding 快取：{hits}/{len(uniq)} 命中，{len(miss_keys)} 新算", flush=True)
+        # 依原 texts 順序組回（重複文字共用同一向量）
+        return [cached[k] for k in keys]
+    except Exception as e:
+        print(f"[nlp] embedding 快取層錯誤，退回純向量化：{e}", flush=True)
+        return _get_embeddings(texts, project_id)
+
+
+def run_semantic_clustering(contents: List[Dict], project_id: str, db=None) -> Dict[str, Any]:
     """語意分群：Vertex AI Embedding → KMeans。
 
     回傳：
@@ -220,7 +297,7 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
         for c in contents
     ]
 
-    embeddings = _get_embeddings(texts, project_id)
+    embeddings = _embed_texts(texts, project_id, db)
     # 對位防呆：分群用 labels[i] ↔ contents[i] 對應。若 embeddings 數量與 texts 不符
     # （某批少回 → 錯位），後續會把文章分到錯群 → 寧可降級單群，不冒錯位風險。
     if len(embeddings) < 2 or len(embeddings) != len(texts):
@@ -256,22 +333,38 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
 # ──────────────────────────────────────────────────────────────────────
 # Path 1c：關聯規則挖掘（FP 風格的頻繁組合 + 規則；純本地、快）
 # ──────────────────────────────────────────────────────────────────────
-ASSOC_TOP_KW = 8          # 每篇取前 N 個 TF-IDF 關鍵字當「品項」
-ASSOC_MIN_SUPPORT = 0.15  # 頻繁組合最低支持度（出現於 ≥15% 篇）
+ASSOC_VOCAB = 30          # 以語料級 Top N 關鍵字為「品項詞彙」（含主題核心詞，非各篇獨特詞）
+ASSOC_MIN_SUPPORT = 0.10  # 頻繁組合最低支持度（出現於 ≥10% 篇）
 ASSOC_MIN_CONF = 0.5      # 關聯規則最低信賴度
 ASSOC_MAX_RULES = 15
 
 
-def run_association(per_article: List[Dict]) -> Dict[str, Any]:
-    """關聯探勘：以每篇 top 關鍵字為「交易品項」，找頻繁共現組合 + 關聯規則。
-    回 {itemsets:[{items,support,count}], rules:[{antecedent,consequent,support,confidence,lift,count}]}。
-    方法論一＝高 support 的有效組合；方法論二＝高 lift（強關聯）的切角。純本地、毫秒級。"""
+def _article_terms(text: str) -> set:
+    """文章詞集合（unigram + bigram），與 TfidfVectorizer(ngram(1,2)) 同口徑：
+    _tokenize 出 unigram，相鄰兩詞以空白接合成 bigram，供與語料級關鍵字詞彙比對。"""
+    toks = _tokenize(text)
+    terms = set(toks)
+    for i in range(len(toks) - 1):
+        terms.add(toks[i] + " " + toks[i + 1])
+    return terms
+
+
+def run_association(tfidf: Dict, contents: List[Dict]) -> Dict[str, Any]:
+    """關聯探勘：以「語料級 Top 關鍵字」為品項詞彙，各篇的籃子＝它實際含有的那些詞，
+    找頻繁共現組合 + 關聯規則。回 {itemsets, rules}。
+    為何不用每篇 TF-IDF top 詞：那取的是「獨特詞」，主題核心詞（如品牌/車系，IDF 低）反被排除，
+    導致跨篇湊不出重複組合。改用語料級詞彙 → 浮出「Taycan＋電動」這類真正有意義的主題共現。
+    方法論一＝高 support 有效組合；方法論二＝高 lift（強關聯）切角。純本地、毫秒級。"""
     from itertools import combinations
     from collections import Counter
+    vocab = {k["keyword"] for k in (tfidf.get("top_keywords") or [])[:ASSOC_VOCAB]
+             if k.get("keyword")}
+    if not vocab:
+        return {"itemsets": [], "rules": []}
     txns = []
-    for a in per_article:
-        items = {k["keyword"] for k in (a.get("keywords") or [])[:ASSOC_TOP_KW]
-                 if k.get("keyword")}
+    for c in contents:
+        text = f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
+        items = _article_terms(text) & vocab
         if items:
             txns.append(items)
     n = len(txns)
@@ -283,7 +376,7 @@ def run_association(per_article: List[Dict]) -> Dict[str, Any]:
             one[it] += 1
         for a, b in combinations(sorted(t), 2):
             pair[(a, b)] += 1
-    min_count = max(2, int(ASSOC_MIN_SUPPORT * n))
+    min_count = max(3, int(ASSOC_MIN_SUPPORT * n))
     freq_pairs = sorted([(p, c) for p, c in pair.items() if c >= min_count],
                         key=lambda x: -x[1])
     itemsets = [{"items": list(p), "support": round(c / n, 3), "count": c}
@@ -304,7 +397,7 @@ def run_association(per_article: List[Dict]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 # Path 1d：Cloud Natural Language 實體 + 情感（需 language.googleapis.com；優雅降級）
 # ──────────────────────────────────────────────────────────────────────
-NL_MAX_DOCS = 40
+NL_MAX_DOCS = 25  # 取樣篇數：每篇 2 次 API 呼叫（實體+情感），控制在 NL_DEADLINE_SEC 內完成
 
 
 def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
@@ -361,8 +454,8 @@ def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 
 def run(contents: List[Dict], project_id: str,
-        log_fn: Optional[Callable] = None) -> Dict[str, Any]:
-    """Path 1 主函式：TF-IDF + Vertex AI 語意分群。"""
+        log_fn: Optional[Callable] = None, db=None) -> Dict[str, Any]:
+    """Path 1 主函式：TF-IDF + Vertex AI 語意分群。db 供 embedding 快取（None 則不快取）。"""
 
     def _log(msg: str):
         print(msg, flush=True)
@@ -377,14 +470,29 @@ def run(contents: List[Dict], project_id: str,
     top5 = [k["keyword"] for k in tfidf["top_keywords"][:5]]
     _log(f"[Path 1a] 完成。Top 5：{top5}")
 
+    def _degraded_clusters() -> Dict[str, Any]:
+        """分群降級：全部歸一群（報告仍可用，只是少了語意切分）。"""
+        return {"clusters": [{"cluster_id": 0, "articles": [
+            {"url": c.get("url", ""), "title": c.get("title", "")} for c in contents
+        ]}], "n_clusters": 1 if contents else 0}
+
     cluster_result: Dict[str, Any] = {"clusters": [], "n_clusters": 0}
     if project_id:
         _log("[Path 1b] Vertex AI 語意分群...")
+        # best-effort + 硬時限：embedding 偶有數分鐘級延遲/SSL 重試，超過 CLUSTER_DEADLINE_SEC
+        # 即降級單群，絕不拖垮 Path 1（TF-IDF 已成功，數值閘門不該被分群慢度卡死）。
         try:
-            cluster_result = run_semantic_clustering(contents, project_id)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+                cluster_result = _ex.submit(
+                    run_semantic_clustering, contents, project_id, db
+                ).result(timeout=CLUSTER_DEADLINE_SEC)
             _log(f"[Path 1b] 完成，共 {cluster_result['n_clusters']} 個主題群")
+        except concurrent.futures.TimeoutError:
+            _log(f"[Path 1b] ⚠️ 分群超過 {CLUSTER_DEADLINE_SEC}s，降級單群繼續")
+            cluster_result = _degraded_clusters()
         except Exception as e:
-            _log(f"[Path 1b] ⚠️ Vertex AI 失敗（略過分群）：{e}")
+            _log(f"[Path 1b] ⚠️ Vertex AI 失敗（降級單群）：{e}")
+            cluster_result = _degraded_clusters()
     else:
         _log("[Path 1b] 略過（未設定 GOOGLE_CLOUD_PROJECT）")
 
@@ -394,22 +502,27 @@ def run(contents: List[Dict], project_id: str,
     # Path 1c：關聯探勘（純本地、毫秒級，不會失敗就降級空集）
     _log("[Path 1c] 關聯規則挖掘（頻繁共現 + 規則）...")
     try:
-        assoc = run_association(tfidf.get("per_article", []))
+        assoc = run_association(tfidf, contents)
         _log(f"[Path 1c] 完成，共 {len(assoc.get('rules', []))} 條規則／"
              f"{len(assoc.get('itemsets', []))} 組頻繁組合")
     except Exception as e:
         _log(f"[Path 1c] ⚠️ 關聯探勘失敗（略過）：{e}")
         assoc = {"itemsets": [], "rules": []}
 
-    # Path 1d：Cloud NL 實體 + 情感（未啟用 API 會優雅降級 enabled=False）
+    # Path 1d：Cloud NL 實體 + 情感（best-effort + 硬時限；未啟用 API / 逾時皆優雅降級）
     _log("[Path 1d] Cloud Natural Language 實體／情感分析...")
     try:
-        entities = run_entities_sentiment(contents)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            entities = _ex.submit(run_entities_sentiment, contents).result(
+                timeout=NL_DEADLINE_SEC)
         if entities.get("enabled"):
             _log(f"[Path 1d] 完成，{entities.get('n_docs')} 篇／"
                  f"{len(entities.get('entities', []))} 個實體")
         else:
             _log(f"[Path 1d] 降級略過：{entities.get('reason', '未知')}")
+    except concurrent.futures.TimeoutError:
+        _log(f"[Path 1d] ⚠️ 超過 {NL_DEADLINE_SEC}s，降級略過")
+        entities = {"entities": [], "enabled": False, "reason": f"逾時 >{NL_DEADLINE_SEC}s"}
     except Exception as e:
         _log(f"[Path 1d] ⚠️ 失敗（略過）：{e}")
         entities = {"entities": [], "enabled": False, "reason": str(e)}
