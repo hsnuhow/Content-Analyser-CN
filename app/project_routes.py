@@ -638,11 +638,14 @@ def analysis_status(pid, aid, project, role):
     analysis = doc.to_dict()
     status = analysis.get('status', 'pending')
 
-    # 若還在進行中，向 analysis-pipeline 查詢最新進度
+    # 若還在進行中，向 analysis-pipeline 查詢最新進度（視覺分析查影像端點）
     if status in ('pending', 'running'):
         job_id = analysis.get('job_id')
         if job_id:
-            pipeline_status = get_job_status(job_id)
+            if analysis.get('kind') == 'visual':
+                pipeline_status = get_image_analysis_status(job_id)
+            else:
+                pipeline_status = get_job_status(job_id)
             new_status = pipeline_status.get('status', status)
             progress = pipeline_status.get('progress', analysis.get('progress', 0))
             log = pipeline_status.get('log', analysis.get('log', ''))
@@ -1410,35 +1413,31 @@ def analyse_images_dataset(pid, did, project, role):
         flash(f'啟動視覺分析失敗：{result["error"]}', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
-    (db.collection('projects').document(pid).collection('datasets').document(did)
-     .update({'image_analysis_job_id': result.get('job_id'),
-              'image_analysis_status': 'running',
-              'updated_at': firestore.SERVER_TIMESTAMP}))
-    log_usage('analyse_images', detail=dataset.get('name', ''),
-              count=len(images), project_id=pid)
-    flash(f'已啟動「大圖視覺分析」（{len(images)} 張）。完成後此頁會顯示視覺報告。', 'success')
-    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
-
-
-@bp.route('/<pid>/datasets/<did>/analyse-images/status')
-@project_access_required(min_role='viewer')
-def analyse_images_status(pid, did, project, role):
-    """輪詢大圖視覺分析任務進度與結果（result_markdown）。"""
-    ds_doc = (db.collection('projects').document(pid)
-              .collection('datasets').document(did).get())
-    if not ds_doc.exists:
-        return jsonify({'error': '找不到資料集'}), 404
-    job_id = (ds_doc.to_dict() or {}).get('image_analysis_job_id')
-    if not job_id:
-        return jsonify({'status': 'none'}), 200
-    job = get_image_analysis_status(job_id)
-    return jsonify({
-        'status': job.get('status', 'unknown'),
-        'log': job.get('log', ''),
-        'n_images': job.get('n_images'),
-        'n_success': job.get('n_success'),
-        'result_markdown': job.get('result_markdown', ''),
-    }), 200
+    # 與文字分析一致：建一筆正式 analyses doc（kind='visual'）→ 進「歷史分析」清單、
+    # 有獨立報告頁、可下載/改名/刪除。result_markdown 由 analysis_status 輪詢時持久化。
+    job_id = result.get('job_id')
+    analysis_ref = (db.collection('projects').document(pid)
+                    .collection('analyses').document())
+    analysis_ref.set({
+        'id': analysis_ref.id,
+        'job_id': job_id,
+        'kind': 'visual',
+        'report_title': title,
+        'status': 'pending',
+        'progress': 0,
+        'log': '影像視覺分析已提交，等待處理...',
+        'n_images': len(images),
+        'llm_provider': provider,
+        'llm_model': model,
+        'submitted_by': current_user_email(),
+        'submitted_at': firestore.SERVER_TIMESTAMP,
+        'completed_at': None,
+        'result_markdown': None,
+        'source_dataset': did,
+    })
+    log_usage('analyse_images', detail=title, count=len(images), project_id=pid)
+    flash(f'已提交「大圖視覺分析」（{len(images)} 張）。完成後會列入歷史分析。', 'success')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
 
 
 @bp.route('/<pid>/analyses/combined', methods=['POST'])

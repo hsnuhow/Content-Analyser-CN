@@ -197,8 +197,10 @@
               <a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=a.id) }}"
                  class="text-decoration-none flex-grow-1 me-2">
                 <strong>{{ a.report_title }}</strong>
+                {% if a.kind == 'visual' %}<span class="badge bg-info text-dark">🎨 視覺分析</span>{% endif %}
                 <div class="text-muted small">
-                  {{ a.n_articles }} 篇 · {{ a.llm_provider }} / {{ a.llm_model }}
+                  {% if a.kind == 'visual' %}{{ a.n_images }} 張圖 · 視覺分析 · {{ a.llm_provider }} / {{ a.llm_model }}
+                  {% else %}{{ a.n_articles }} 篇 · {{ a.llm_provider }} / {{ a.llm_model }}{% endif %}
                 </div>
               </a>
               <div class="d-flex align-items-center gap-2">
