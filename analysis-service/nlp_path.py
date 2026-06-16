@@ -74,6 +74,9 @@ _STOPWORDS = frozenset([
 
 TOP_KEYWORDS = 25
 TOP_PER_ARTICLE = 10
+EMBED_MODEL = "text-multilingual-embedding-002"  # 向量化模型（換模型時改這裡 + bump，快取 key 含此值會自動失效重算）
+EMBED_DIM = 768                                  # 該模型預設維度（納入快取 key，避免跨模型/維度污染）
+EMBED_CACHE_COLLECTION = "embeddings"            # Firestore 快取 collection：embeddings/{sha256(model:dim:text)}
 EMBEDDING_BATCH = 20      # 每批筆數
 EMBEDDING_RETRIES = 2     # 單批暫時性失敗（SSL EOF / 5xx / 逾時）重試次數
 EMBEDDING_WORKERS = 4     # 並行批次數：批次彼此獨立，並行送可把總時間壓到 ≈ 最慢一批
@@ -188,7 +191,7 @@ def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
         for attempt in range(EMBEDDING_RETRIES):
             try:
                 resp = client.models.embed_content(
-                    model="text-multilingual-embedding-002",
+                    model=EMBED_MODEL,
                     contents=batch,
                 )
                 return [list(emb.values) for emb in resp.embeddings]
@@ -213,7 +216,62 @@ def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
     return all_embeddings
 
 
-def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, Any]:
+def _emb_key(text: str) -> str:
+    """快取 key：sha256(model:dim:text)。含 model+dim → 換模型/維度自動失效，不會誤用舊向量。"""
+    import hashlib
+    return hashlib.sha256(
+        f"{EMBED_MODEL}:{EMBED_DIM}:{text}".encode("utf-8")).hexdigest()
+
+
+def _embed_texts(texts: List[str], project_id: str, db=None) -> List[List[float]]:
+    """帶 Firestore 快取的向量化：先查 embeddings/{key}，只對 miss 呼叫 Vertex，再寫回。
+    db=None 或任何快取層錯誤 → 退回純 _get_embeddings（快取絕不擋分析）。對位以 texts 順序重組。"""
+    if db is None:
+        return _get_embeddings(texts, project_id)
+    try:
+        keys = [_emb_key(t) for t in texts]
+        uniq = list(dict.fromkeys(keys))  # 去重（同文多篇只查/算一次）
+        col = db.collection(EMBED_CACHE_COLLECTION)
+        cached: Dict[str, List[float]] = {}
+        refs = [col.document(k) for k in uniq]
+        for snap in db.get_all(refs):
+            if snap.exists:
+                v = (snap.to_dict() or {}).get("vector")
+                if v:
+                    cached[snap.id] = list(v)
+        miss_keys = [k for k in uniq if k not in cached]
+        # miss 的代表文字（每個 uniq key 對到首次出現的 text）
+        key_to_text = {}
+        for t, k in zip(texts, keys):
+            key_to_text.setdefault(k, t)
+        if miss_keys:
+            miss_vecs = _get_embeddings([key_to_text[k] for k in miss_keys], project_id)
+            if len(miss_vecs) == len(miss_keys):
+                from firebase_admin import firestore as _fs
+                batch = db.batch()
+                for k, vec in zip(miss_keys, miss_vecs):
+                    cached[k] = vec
+                    batch.set(col.document(k), {
+                        "vector": vec, "model": EMBED_MODEL, "dim": EMBED_DIM,
+                        "created_at": _fs.SERVER_TIMESTAMP,
+                    })
+                try:
+                    batch.commit()
+                except Exception as e:
+                    print(f"[nlp] embedding 快取寫回失敗（不影響分析）：{e}", flush=True)
+            else:
+                # 數量不符 → 不信快取，整批重算（安全）
+                return _get_embeddings(texts, project_id)
+        hits = len(uniq) - len(miss_keys)
+        print(f"[nlp] embedding 快取：{hits}/{len(uniq)} 命中，{len(miss_keys)} 新算", flush=True)
+        # 依原 texts 順序組回（重複文字共用同一向量）
+        return [cached[k] for k in keys]
+    except Exception as e:
+        print(f"[nlp] embedding 快取層錯誤，退回純向量化：{e}", flush=True)
+        return _get_embeddings(texts, project_id)
+
+
+def run_semantic_clustering(contents: List[Dict], project_id: str, db=None) -> Dict[str, Any]:
     """語意分群：Vertex AI Embedding → KMeans。
 
     回傳：
@@ -239,7 +297,7 @@ def run_semantic_clustering(contents: List[Dict], project_id: str) -> Dict[str, 
         for c in contents
     ]
 
-    embeddings = _get_embeddings(texts, project_id)
+    embeddings = _embed_texts(texts, project_id, db)
     # 對位防呆：分群用 labels[i] ↔ contents[i] 對應。若 embeddings 數量與 texts 不符
     # （某批少回 → 錯位），後續會把文章分到錯群 → 寧可降級單群，不冒錯位風險。
     if len(embeddings) < 2 or len(embeddings) != len(texts):
@@ -380,8 +438,8 @@ def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 
 def run(contents: List[Dict], project_id: str,
-        log_fn: Optional[Callable] = None) -> Dict[str, Any]:
-    """Path 1 主函式：TF-IDF + Vertex AI 語意分群。"""
+        log_fn: Optional[Callable] = None, db=None) -> Dict[str, Any]:
+    """Path 1 主函式：TF-IDF + Vertex AI 語意分群。db 供 embedding 快取（None 則不快取）。"""
 
     def _log(msg: str):
         print(msg, flush=True)
@@ -410,7 +468,7 @@ def run(contents: List[Dict], project_id: str,
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
                 cluster_result = _ex.submit(
-                    run_semantic_clustering, contents, project_id
+                    run_semantic_clustering, contents, project_id, db
                 ).result(timeout=CLUSTER_DEADLINE_SEC)
             _log(f"[Path 1b] 完成，共 {cluster_result['n_clusters']} 個主題群")
         except concurrent.futures.TimeoutError:

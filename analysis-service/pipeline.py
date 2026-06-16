@@ -151,6 +151,7 @@ def run_analysis(job_id: str, report_title: str,
                     contents=contents,
                     project_id=project_id,
                     log_fn=lambda m: _update_job(db, job_id, log=m),
+                    db=db,  # 供 embedding 內容快取（embeddings/{key}）
                 )
                 nlp_results.update(result)
                 _progress(40, f"Path 1 完成：{result['clusters'].get('n_clusters', 0)} 個語意群組")
