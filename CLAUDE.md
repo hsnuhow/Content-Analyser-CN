@@ -819,6 +819,8 @@ Content-Analyser-CN/
 | `POST /api/analyse/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 | `POST /api/analyse-images` | 提交大圖視覺分析（非同步，階段②）。body `{report_title, images:[{src,alt,source_url}], llm_provider(gemini\|claude), llm_model, llm_api_key}`，回 `{job_id}` |
 | `GET /api/analyse-images/{job_id}` | 查詢視覺分析進度與結果（`result_markdown`、`n_success`）|
+| `POST /api/synthesize-combined` | 提交整合報告（非同步，階段③）。body `{report_title, text_markdown, visual_markdown, topic?, llm_provider, llm_model, llm_api_key}`，回 `{job_id}` |
+| `GET /api/synthesize-combined/{job_id}` | 查詢整合報告進度與結果（`result_markdown`）|
 
 `POST /api/analyse` body：
 ```json
@@ -935,6 +937,13 @@ analysis_jobs/{job_id}            非同步任務狀態
 image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
   status / progress / log / report_title / n_images / n_success / n_tier3 / result_markdown
   （n_tier3：因需 Tier3 住宅代理而跳過的圖數，如 s.yimg.com 等機房IP 被封的站）
+
+combined_jobs/{job_id}            整合報告任務狀態（階段③：文字 × 視覺，自管暫存）
+  status / progress / log / report_title / result_markdown
+
+# content-analyser：analyses/{aid} 以 kind 區分三類報告
+#   （無 kind 或 text）文字分析 / 'visual' 視覺分析 / 'combined' 整合報告
+#   visual: n_images, source_dataset；combined: source_text, source_visual
 ```
 
 ---
