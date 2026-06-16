@@ -44,7 +44,7 @@
       <input type="hidden" name="mode" value="all">
       <button type="submit" class="btn btn-sm btn-outline-secondary">↻ 重爬全部</button>
     </form>
-    {% set failed_count = (dataset.items or []) | selectattr('status', 'equalto', 'failed') | list | length %}
+    {% set failed_count = (dataset['items'] or []) | selectattr('status', 'equalto', 'failed') | list | length %}
     {% if failed_count > 0 %}
     <form method="POST" action="{{ url_for('project_bp.research_dataset', pid=pid, did=dataset.id) }}"
           onsubmit="return confirm('對 {{ failed_count }} 個失敗項做選擇器研究？（與爬蟲不並行，約數分鐘）');">
