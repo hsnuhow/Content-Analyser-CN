@@ -102,6 +102,78 @@ class LLMClient:
             raise last_exc
         raise LLMError(f"LLM 呼叫失敗（{self.provider}）：{last_exc}") from last_exc
 
+    def generate_vision(self, prompt: str, image_bytes: bytes, mime_type: str,
+                        temperature: float = None, max_tokens: int = None) -> str:
+        """影像理解：傳入圖片 bytes + 提示，回傳模型對圖片的文字分析。
+        目前支援 gemini / claude（皆原生 vision）；失敗或逾時拋 LLMError。
+        與 generate() 同樣對暫時性錯誤做指數退避重試。"""
+        if temperature is None:
+            temperature = self.temperature
+        if max_tokens is None:
+            max_tokens = self.max_tokens
+
+        def _call():
+            if self.provider == "gemini":
+                return self._call_gemini_vision(prompt, image_bytes, mime_type,
+                                                temperature, max_tokens)
+            elif self.provider == "claude":
+                return self._call_claude_vision(prompt, image_bytes, mime_type,
+                                                temperature, max_tokens)
+            raise LLMError(f"影像分析目前僅支援 gemini / claude，不支援 '{self.provider}'。")
+
+        last_exc = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    return executor.submit(_call).result(timeout=LLM_TIMEOUT_SEC)
+            except concurrent.futures.TimeoutError:
+                last_exc = LLMError(f"影像分析逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
+            except Exception as e:
+                last_exc = e
+                if not _is_retryable(e) or attempt == MAX_RETRIES - 1:
+                    break
+                delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+                print(f"[LLMClient] {self.provider} vision 暫時性錯誤，{delay:.1f}s 後重試"
+                      f"（{attempt + 1}/{MAX_RETRIES}）：{e}", flush=True)
+                time.sleep(delay)
+                continue
+        if isinstance(last_exc, LLMError):
+            raise last_exc
+        raise LLMError(f"影像分析失敗（{self.provider}）：{last_exc}") from last_exc
+
+    def _call_gemini_vision(self, prompt: str, image_bytes: bytes, mime_type: str,
+                            temperature: float, max_tokens: int) -> str:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=self.api_key)
+        cfg_kwargs = dict(temperature=temperature, max_output_tokens=max_tokens)
+        if "2.5" in self.model and not self.thinking:
+            try:
+                cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            except Exception:
+                pass
+        parts = [types.Part.from_bytes(data=image_bytes, mime_type=mime_type), prompt]
+        resp = client.models.generate_content(
+            model=self.model, contents=parts,
+            config=types.GenerateContentConfig(**cfg_kwargs))
+        return (resp.text or "").strip()
+
+    def _call_claude_vision(self, prompt: str, image_bytes: bytes, mime_type: str,
+                            temperature: float, max_tokens: int) -> str:
+        import base64
+        import anthropic
+        client = anthropic.Anthropic(api_key=self.api_key)
+        b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+        msg = client.messages.create(
+            model=self.model, max_tokens=max_tokens, temperature=temperature,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": mime_type, "data": b64}},
+                {"type": "text", "text": prompt}]}])
+        txt = "".join(getattr(b, "text", "") for b in (msg.content or [])
+                      if getattr(b, "type", "") == "text")
+        return txt.strip()
+
     def _call_gemini(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:
         from google import genai

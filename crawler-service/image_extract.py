@@ -46,6 +46,22 @@ _JUNK_PATH_RE = re.compile(
 _LAZY_ATTRS = ["data-src", "data-original", "data-lazy", "data-lazy-src",
                "data-actualsrc", "data-echo", "data-hi-res-src"]
 
+_IMG_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif|bmp|tiff?)(\?|$)", re.I)
+
+
+def _looks_like_image_url(abs_url: str, page_url: str) -> bool:
+    """合理性網：擋掉解析錯誤產生的「非圖片」URL（如 srcset 切爛後 urljoin 出的文章相對垃圾）。
+    判定為圖片：路徑含圖片副檔名，或主機與文章不同（多為圖片 CDN）。"""
+    try:
+        p = urlparse(abs_url)
+    except Exception:
+        return False
+    if _IMG_EXT_RE.search(p.path):
+        return True
+    if p.netloc and p.netloc != urlparse(page_url).netloc:
+        return True
+    return False
+
 
 def _to_int(v) -> Optional[int]:
     try:
@@ -54,20 +70,46 @@ def _to_int(v) -> Optional[int]:
         return None
 
 
-def _best_from_srcset(srcset: str) -> Optional[str]:
-    """srcset（"u1 320w, u2 640w" 或 "u1 1x, u2 2x"）取尺寸描述最大者。"""
-    best_url, best_score = None, -1
-    for part in (srcset or "").split(","):
-        seg = part.strip().split()
-        if not seg:
+_DESC_RE = re.compile(r"^(\d+(?:\.\d+)?)([wx])$")
+
+
+def _parse_srcset(srcset: str):
+    """穩健解析 srcset → [(url, score)]。
+
+    重點：URL 本身可能含逗號（如 Hearst 的 crop 參數 `;0,0&resize=980:*`），
+    故**以空白切詞**而非用逗號切（用逗號切會把含逗號的 URL 切爛 → 產出垃圾 token）。
+    候選格式為「URL [描述符]」，候選間以逗號分隔；逗號會附在描述符或無描述符 URL 的尾端。
+    """
+    tokens = (srcset or "").split()
+    out = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok.endswith(","):              # 無描述符的 URL，逗號收尾 → 一個候選
+            url = tok[:-1]
+            if url:
+                out.append((url, 0.0))
+            i += 1
             continue
-        score = 0
-        if len(seg) > 1:
-            m = re.match(r"(\d+(?:\.\d+)?)(w|x)", seg[1])
+        url, score = tok, 0.0
+        if i + 1 < len(tokens):             # 下一個 token 可能是描述符（可能帶尾逗號）
+            m = _DESC_RE.match(tokens[i + 1].rstrip(","))
             if m:
                 score = float(m.group(1))
+                i += 2
+                out.append((url, score))
+                continue
+        out.append((url, score))
+        i += 1
+    return out
+
+
+def _best_from_srcset(srcset: str) -> Optional[str]:
+    """取 srcset 中尺寸描述最大者。"""
+    best_url, best_score = None, -1.0
+    for url, score in _parse_srcset(srcset):
         if score >= best_score:
-            best_url, best_score = seg[0], score
+            best_url, best_score = url, score
     return best_url
 
 
@@ -195,6 +237,8 @@ def _collect_images(html: str, base_url: str,
         key = abs_url.split("#")[0]
         if key in seen:
             continue
+        if not _looks_like_image_url(abs_url, base_url):
+            continue  # 擋掉解析錯誤產生的非圖片 URL（文章相對垃圾）
         cand = {
             "src": abs_url,
             "width": _to_int(img.get("width")),

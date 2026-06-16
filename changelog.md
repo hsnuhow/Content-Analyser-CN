@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-06-16 新增：大圖視覺分析（影像服務階段②，收進 analysis-pipeline，已部署 analysis 00017 / crawler 1.6.1）
+承接階段①的主文大圖，產出視覺分析報告（色調/色澤/主題/視覺吸睛要素），供製作圖素參考。
+- **analysis-pipeline**：
+  - `llm_client.generate_vision`（Gemini/Claude 原生 vision，含退避重試）。
+  - `image_report.py`（新）：下載（帶 Referer 破防盜連、SSRF 防護、大小/逾時上限、AVIF→jpeg 變體重試、
+    URL 與 Referer 皆 percent-encode）→ Pillow 色盤（主色 hex + 真實尺寸、二次濾小圖）→
+    Gemini 視覺分析 → 彙整整體視覺趨勢 → Markdown。限併發/圖數上限（40）成本守衛。
+  - `POST /api/analyse-images` + `GET /api/analyse-images/<job_id>`（非同步、不回傳 key）。requirements 加 Pillow。
+- **content-analyser UI 入口**：`analysis_client` 客戶端 + `project_routes`（analyse_images_dataset/status）
+  + `dataset_detail`「🎨 分析這些大圖」按鈕 + 視覺報告面板（marked+DOMPurify 渲染、可下載 MD）。
+- **下載韌性修正**（CHANEL 實測 14/40 → 30/40 後逐一拆解）：
+  - Stage① srcset 改**以空白切詞**（Hearst 圖 URL 內含逗號 crop 參數，原以逗號切會切爛 → 產垃圾 URL）
+    + 影像 URL 合理性網（無副檔名且同主機 → 擋）。→ elle/cosmo 垃圾消失。
+  - Stage② URL 與 **Referer** 皆 percent-encode（she.com 圖含中文檔名、文章 slug 含中文當 referer → latin-1 編碼錯誤）。
+  - 待辦：s.yimg.com（Yahoo）圖為 webp、住宅IP可下載，疑 GCP 機房IP 被封 → 需 Tier3 代理。
+- 文件：附錄 B `analyse-images`、附錄 C `image_analysis_jobs`。
+
 ## 2026-06-16 新增：主文大圖擷取（影像服務階段①＋UI 入口，已部署 crawler 1.6.0 / analyser 00029）
 影像視覺分析服務的第一階段：只取圖、不碰文字，擷取主文容器內的大圖（供後續色調/色澤/主題視覺分析參考）。
 - **crawler 端點**（`image_extract.py` + `app.py`）：`POST /api/extract-images` + `GET /api/extract-images/<job_id>`（非同步、require_api_key、SSRF 過濾）。

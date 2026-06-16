@@ -817,6 +817,8 @@ Content-Analyser-CN/
 | `GET /api/analyse/{job_id}` | 查詢進度與結果 |
 | `POST /api/analyse/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
 | `POST /api/analyse/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
+| `POST /api/analyse-images` | 提交大圖視覺分析（非同步，階段②）。body `{report_title, images:[{src,alt,source_url}], llm_provider(gemini\|claude), llm_model, llm_api_key}`，回 `{job_id}` |
+| `GET /api/analyse-images/{job_id}` | 查詢視覺分析進度與結果（`result_markdown`、`n_success`）|
 
 `POST /api/analyse` body：
 ```json
@@ -929,6 +931,9 @@ learned_selectors/{domain}        已學/已確認選擇器（主爬蟲 load_lea
 # analysis-pipeline 自管（獨立）：
 analysis_jobs/{job_id}            非同步任務狀態
   status / progress / log / cancel_requested / result_markdown
+
+image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
+  status / progress / log / report_title / n_images / n_success / result_markdown
 ```
 
 ---

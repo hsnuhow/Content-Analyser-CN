@@ -87,6 +87,53 @@ def submit_analysis(report_title: str, contents: list,
         return {"error": f"無法連線至分析服務：{e}"}
 
 
+def submit_image_analysis(report_title: str, images: list,
+                          llm_provider: str, llm_model: str, llm_api_key: str,
+                          temperature: float = 0.3,
+                          timeout: int = DEFAULT_TIMEOUT) -> dict:
+    """提交影像視覺分析任務（非同步，階段②）。回傳 {"job_id": ...} 或 {"error": ...}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交影像分析任務。"}
+    payload = {
+        "report_title": report_title,
+        "images": images,
+        "llm_provider": llm_provider,
+        "llm_model": llm_model,
+        "llm_api_key": llm_api_key,
+        "temperature": temperature,
+    }
+    try:
+        resp = requests.post(f"{base}/api/analyse-images", json=payload,
+                             headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"提交影像分析任務逾時（{timeout}s）。"}
+    except Exception as e:
+        return {"error": f"無法連線至分析服務：{e}"}
+
+
+def get_image_analysis_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
+    """查詢影像視覺分析任務進度與結果（result_markdown）。"""
+    base = _base_url()
+    if not base:
+        return {"status": "error", "error": "ANALYSIS_SERVICE_URL 未設定"}
+    try:
+        resp = requests.get(f"{base}/api/analyse-images/{job_id}",
+                            headers=_headers(), timeout=timeout)
+        if resp.status_code == 404:
+            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
+        if resp.status_code == 401:
+            return {"status": "error", "error": "金鑰驗證失敗（401）"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"status": "error", "error": "查詢逾時"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 def cancel_analysis(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """請求取消分析任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
     base = _base_url()
