@@ -44,6 +44,14 @@
       <input type="hidden" name="mode" value="all">
       <button type="submit" class="btn btn-sm btn-outline-secondary">↻ 重爬全部</button>
     </form>
+    {% set failed_count = (dataset.items or []) | selectattr('status', 'equalto', 'failed') | list | length %}
+    {% if failed_count > 0 %}
+    <form method="POST" action="{{ url_for('project_bp.research_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('對 {{ failed_count }} 個失敗項做選擇器研究？（與爬蟲不並行，約數分鐘）');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-outline-info">🔬 研究失敗項（{{ failed_count }}）</button>
+    </form>
+    {% endif %}
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
           onsubmit="return confirm('確定刪除此資料集？此操作不可還原。');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -86,6 +94,34 @@
         if(d.status==='completed'||d.status==='failed'){ location.reload(); }
         else { setTimeout(poll,3000); }
       }).catch(()=>setTimeout(poll,5000));
+  })();
+  </script>
+  {% endif %}
+
+  {# 失敗項研究結果（research_job_id 存在時）#}
+  {% if dataset.research_job_id %}
+  <div class="card shadow-sm mb-4 border-info">
+    <div class="card-header fw-semibold">🔬 失敗項選擇器研究</div>
+    <div class="card-body">
+      <div id="researchLog" class="text-muted small mb-2">研究進行中...</div>
+      <div id="researchResult"></div>
+    </div>
+  </div>
+  <script>
+  (function pollR(){
+    const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    fetch("{{ url_for('project_bp.research_status', pid=pid, did=dataset.id) }}")
+      .then(r=>r.json()).then(d=>{
+        document.getElementById('researchLog').textContent = d.log || d.status || '';
+        if(d.status==='completed'){
+          const res=d.result||{}; let h='';
+          (res.candidates||[]).forEach(c=>{ h+=`<div class="alert alert-success py-2 mb-2"><b>${esc(c.domain)}</b> → 候選 <code>${esc(c.selector)}</code>（${c.validated_chars||0} 字）— 待管理員於後台確認升級</div>`; });
+          (res.diagnoses||[]).forEach(g=>{ h+=`<div class="alert alert-warning py-2 mb-2"><b>${esc(g.domain)}</b>：${esc(g.diagnosis)}</div>`; });
+          document.getElementById('researchResult').innerHTML = h || '<div class="text-muted">無候選/診斷。</div>';
+        } else if(d.status==='failed'){
+          document.getElementById('researchLog').textContent='研究失敗：'+(d.log||'');
+        } else { setTimeout(pollR,4000); }
+      }).catch(()=>setTimeout(pollR,6000));
   })();
   </script>
   {% endif %}
