@@ -11,6 +11,8 @@
   POST /api/scrape/batch    爬取多網址（同步，最多 20）。
   POST /api/crawl/batch     爬取多網址（非同步），回傳 job_id。
   GET  /api/crawl/{job_id}  查詢非同步爬取進度與結果。
+  POST /api/extract-images  擷取多網址主文大圖（非同步），回傳 job_id。
+  GET  /api/extract-images/{job_id}  查詢影像擷取進度與結果。
 
 回傳格式（單篇）：
   成功: {"status": "success", "url", "title", "content", "length"}
@@ -35,8 +37,9 @@ from auth import is_authorized
 from crawl_job import run_crawl_batch, JOBS_COLLECTION
 
 RESEARCH_JOBS = "research_jobs"
+IMAGE_JOBS = "image_extract_jobs"
 
-SERVICE_VERSION = "1.5.0"
+SERVICE_VERSION = "1.6.0"
 
 
 def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
@@ -400,6 +403,72 @@ def get_research_job(job_id):
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
     return jsonify(doc.to_dict()), 200
+
+
+# ── 階段①：主文大圖擷取（只取圖、不碰文字；獨立端點，不在文字爬取流程內）──
+
+@app.route("/api/extract-images", methods=["POST"])
+@require_api_key
+def extract_images():
+    """非同步「主文大圖擷取」：對每個 URL 解析主文容器、蒐集容器內大圖
+    （靜態優先、Chrome 補位）。與文字爬蟲嚴格分離、低頻 on-demand。
+
+    Request: {"urls": [...]}
+    Response: {"job_id": "...", "status": "pending"}
+    """
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    data = request.get_json(silent=True) or {}
+    urls = data.get("urls") or []
+    if not isinstance(urls, list) or not urls:
+        return jsonify({"status": "failed", "error": "Missing or empty 'urls' list"}), 400
+    if len(urls) > 1000:
+        return jsonify({"status": "failed", "error": "Maximum 1000 URLs per job"}), 400
+    safe_urls, blocked = [], []
+    for u in urls:
+        ok, reason = _is_safe_url((u or "").strip())
+        (safe_urls if ok else blocked).append(u if ok else {"url": u, "reason": reason})
+    if blocked:
+        return jsonify({"status": "failed",
+                        "error": f"{len(blocked)} 個 URL 被 SSRF 過濾拒絕",
+                        "blocked": blocked}), 400
+
+    job_id = str(uuid.uuid4())
+    db.collection(IMAGE_JOBS).document(job_id).set({
+        "job_id": job_id, "status": "pending", "progress": 0,
+        "log": "影像擷取任務已建立...", "total": len(safe_urls),
+        "done": 0, "n_images": 0,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
+    })
+    from image_extract import run_image_extract_batch
+    threading.Thread(target=run_image_extract_batch,
+                     args=(job_id, safe_urls, db), daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/extract-images/<job_id>", methods=["GET"])
+@require_api_key
+def get_extract_images_job(job_id):
+    """查詢影像擷取任務進度與結果（results 子集合）。"""
+    if db is None:
+        return jsonify({"status": "failed", "error": "Firestore 未連線"}), 503
+    try:
+        doc = db.collection(IMAGE_JOBS).document(job_id).get()
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"Firestore 查詢失敗: {e}"}), 500
+    if not doc.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id: {job_id}"}), 404
+    data = doc.to_dict()
+    try:
+        sub = (db.collection(IMAGE_JOBS).document(job_id)
+               .collection("results").order_by("__name__").stream())
+        results = [r.to_dict() for r in sub]
+        data["results"] = results
+    except Exception as e:
+        print(f"[ImageExtract] 讀取 results 子集合失敗: {e}", flush=True)
+        data.setdefault("results", [])
+    return jsonify(data), 200
 
 
 @app.route("/api/crawl/<job_id>/cancel", methods=["POST"])
