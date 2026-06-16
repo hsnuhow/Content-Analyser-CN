@@ -8,30 +8,15 @@
 
 ---
 
-## 0. ⏳ 下次部署待辦（Pending — 部署前先完成）
+## 0. 部署待辦 / 近期狀態
 
-> 這些是已開發、但**刻意延到下次部署才啟用/定稿**的項目。下次部署前**務必逐項處理**。
-
-### P-1 爬蟲並行安全（Cloud Tasks 佇列化）— branch `feat/crawl-queue`（已 commit、未推送、未部署）
-多用戶同時爬蟲時，原「背景執行緒」模式會在 Cloud Run 上 OOM（見 [changelog](changelog.md) 2026-06-16、memory `concurrency-queue-migration`）。佇列化程式碼已完成且**預設關閉**（`CRAWLER_USE_QUEUE` 未設＝走原 fallback、零行為改變）。下次部署前：
-
-1. **先定稿/複審** `feat/crawl-queue`（切塊大小 CHUNK_SIZE=6 / IMG_CHUNK_SIZE=8、`max-concurrent-dispatches` 是否合適）。
-2. **手動建雲端資源**（Claude 不碰 IAM/建佇列）：
-   ```bash
-   gcloud services enable cloudtasks.googleapis.com
-   gcloud tasks queues create crawler-tasks --location=asia-east1 \
-     --max-concurrent-dispatches=8 --max-dispatches-per-second=5 --max-attempts=3
-   # 查 crawler 執行 SA（空白=預設 compute SA 315771250032-compute@developer.gserviceaccount.com）
-   gcloud run services describe content-crawler --region asia-east1 \
-     --format='value(spec.template.spec.serviceAccountName)'
-   gcloud projects add-iam-policy-binding content-analyser-cn \
-     --member="serviceAccount:315771250032-compute@developer.gserviceaccount.com" \
-     --role="roles/cloudtasks.enqueuer"
-   ```
-   （worker 端點走 allow-unauthenticated + X-API-Key，無需 Cloud Run invoker IAM。）
-3. **部署**（deploy.sh 已含 concurrency 4→1、max-instances 10、注入 TASKS_*/WORKER_URL）。先**不開**旗標部署（行為同現況）。
-4. **開啟**：`gcloud run services update content-crawler --region asia-east1 --update-env-vars CRAWLER_USE_QUEUE=1`（出問題 `--remove-env-vars CRAWLER_USE_QUEUE` 秒回退）。
-5. **驗證**：同時觸發 2–3 個不同資料集爬取，確認排隊完成、無 OOM。
+### ✅ P-1 爬蟲並行安全（Cloud Tasks 佇列化）— 已部署上線（2026-06-16）
+原「背景執行緒」模式多用戶並行會 OOM。已遷移為 Cloud Tasks 佇列 + 同步 worker：
+content-crawler `00057-7hp`、v1.7.0、**concurrency=1**、`CRAWLER_USE_QUEUE=1`；
+Cloud Tasks 佇列 `crawler-tasks`@asia-east1（RUNNING、max-concurrent-dispatches=8）；
+compute SA 已綁 `roles/cloudtasks.enqueuer`。crawl/extract-images/research 三條都走佇列分塊。
+- **秒回退**：`gcloud run services update content-crawler --region asia-east1 --remove-env-vars CRAWLER_USE_QUEUE`（改回背景執行緒 fallback）。
+- **⏳ 唯一未做**：線上並行實爬驗證（同時觸發 2–3 個爬取、確認排隊完成且無 OOM）。靜態設定已全數確認；發起任一爬取即走佇列。
 
 ---
 

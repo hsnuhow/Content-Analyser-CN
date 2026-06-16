@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-16 部署：爬蟲佇列化上線 + 保時捷選擇器模板（content-crawler 00057-7hp / v1.7.0）
+- **佇列化啟用**：merge `feat/crawl-queue` → main，部署 content-crawler concurrency=1 + `CRAWLER_USE_QUEUE=1`，
+  Cloud Tasks 佇列 `crawler-tasks`@asia-east1（RUNNING、max-concurrent-dispatches=8）、compute SA 綁 enqueuer。
+  crawl/extract-images/research 三條改走佇列分塊同步 worker → 杜絕多用戶並行 Chrome 疊加 OOM。秒回退：移除 `CRAWLER_USE_QUEUE`。
+- **選擇器模板**：merge `feat/porsche-templates` → main（先前已部署 00055/00056）。sicar/ppaper/tvbs 新模板、gq_tw/vogue_tw 前綴選擇器。
+- analysis-pipeline（00021）/ content-analyser（00032）本回合稍早已部署、即 main 程式碼，未重部。
+- ⏳ 唯一未做：線上並行實爬驗證（自動模式因「停止保時捷批次」邊界擋下主動重爬；設定已靜態確認）。
+
 ## 2026-06-16 補強：爬蟲並行安全（Cloud Tasks 佇列化，未部署，feature branch）
 解決「多用戶同時爬蟲 → 背景執行緒堆同台 instance → 多 Chrome 疊加 OOM」風險（背景執行緒模式騙過 Cloud Run 請求式擴縮 + CPU 節流挨餓）。改為佇列 + 同步 worker：
 - **content-crawler**：新增 `task_queue.py`（Cloud Tasks 入列、`tasks_enabled()` 由 `CRAWLER_USE_QUEUE=1` 明確開關）。
