@@ -92,6 +92,42 @@ _STOPWORDS = frozenset([
     *(_MEDIA_NAMES),
 ])
 
+# 社群/論壇 UI 雜訊（回覆、留言等）：**只在社群/論壇來源**移除，媒體站不動
+# （媒體文章的「回覆」可能是內容，如官方回覆）。依 URL 網域判定來源，因 dataset
+# items 的 source_type 多半未填。
+_SOCIAL_UI_STOPWORDS = (
+    '回覆', '留言', '回文', '樓主', '小編', '轉發', '推文', '引用', '私訊',
+    '回應', '回覆文', '原po', '原PO', '鄉民', '網友',
+)
+_SOCIAL_DOMAINS = (
+    'facebook.com', 'fb.com', 'fb.watch', 'instagram.com', 'threads.net',
+    'threads.com', 'dcard.tw', 'mobile01.com', 'ptt.cc', 'komica',
+    'eyny.com', 'gamer.com.tw', 'bahamut',
+)
+
+
+def _is_social_url(url: str) -> bool:
+    """URL 是否屬社群/論壇來源（Facebook/Instagram/Threads/Dcard/Mobile01/PTT/巴哈…）。"""
+    u = (url or '').lower()
+    return any(d in u for d in _SOCIAL_DOMAINS)
+
+
+def _strip_social_ui(text: str) -> str:
+    """移除社群 UI 雜訊詞（僅用於社群/論壇來源的文本，於斷詞前以空白取代）。"""
+    for w in _SOCIAL_UI_STOPWORDS:
+        if w in text:
+            text = text.replace(w, ' ')
+    return text
+
+
+def _text_for_keywords(content: Dict) -> str:
+    """組關鍵字/關聯用的文本：title + body；社群/論壇來源額外去 UI 雜訊。
+    （embedding 用原始文本、不經此處理，故快取 key 不受影響。）"""
+    t = f"{content.get('title', '')} {content.get('text') or content.get('content') or ''}"
+    if _is_social_url(content.get('url', '')):
+        t = _strip_social_ui(t)
+    return t
+
 TOP_KEYWORDS = 25
 TOP_PER_ARTICLE = 10
 EMBED_MODEL = "text-multilingual-embedding-002"  # 向量化模型（換模型時改這裡 + bump，快取 key 含此值會自動失效重算）
@@ -134,10 +170,7 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
       top_keywords: [{keyword, weight}]  全體 Top 25
       per_article:  [{url, title, keywords: [{keyword, weight}]}]
     """
-    texts = [
-        f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
-        for c in contents
-    ]
+    texts = [_text_for_keywords(c) for c in contents]
 
     # 單篇時 max_df=0.95 會把所有詞（df=100%）過濾掉，改為 1.0 保留所有詞
     effective_max_df = 1.0 if len(texts) <= 1 else 0.95
@@ -383,8 +416,7 @@ def run_association(tfidf: Dict, contents: List[Dict]) -> Dict[str, Any]:
         return {"itemsets": [], "rules": []}
     txns = []
     for c in contents:
-        text = f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
-        items = _article_terms(text) & vocab
+        items = _article_terms(_text_for_keywords(c)) & vocab
         if items:
             txns.append(items)
     n = len(txns)
@@ -462,8 +494,15 @@ def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
             pass
     if used == 0:
         return {"entities": [], "enabled": False, "reason": "無可分析文本"}
+    # Cloud NL 獨立於 jieba 抽實體，媒體名（如「地球黃金線」）與停用詞雜訊會混進來 →
+    # 比照關鍵字管道過濾：丟掉名稱屬媒體名/停用詞，或被媒體名包含（碎片，如「黃金」）的實體。
+    def _is_entity_noise(name: str) -> bool:
+        if name in _STOPWORDS or name in _MEDIA_NAMES:
+            return True
+        return any(name in m for m in _MEDIA_NAMES if len(name) >= 2)
     ents = [{"name": k, "type": v["type"], "salience": round(v["salience"], 4),
-             "mentions": v["mentions"]} for k, v in agg.items()]
+             "mentions": v["mentions"]} for k, v in agg.items()
+            if not _is_entity_noise(k)]
     ents.sort(key=lambda e: -e["salience"])
     return {"entities": ents[:25], "enabled": True, "n_docs": used,
             "avg_sentiment": round(sent_sum / sent_docs, 3) if sent_docs else None}
