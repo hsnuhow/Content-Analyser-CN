@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-16 修正：ETtoday 等 SSR 站靜態抽取（避開 Chrome 149 CDP 崩潰，未部署→隨批部署）
+ETtoday 無法爬取根因：站為 SSR（內文在靜態 HTML 的 `.story`），但爬蟲因「已知站」跳過 SSR 預探測、硬開 Chrome，而 Chrome 149 在其廣告/JS 重頁觸發 CDP bug `missing or invalid columnNumber` → driver 崩潰。修正（crawler.py，重用 `_extract_main_text`）：
+- 新增 `_static_extract(url)`：抓靜態 HTML 跑模板/啟發式抽正文，足量（≥400 字）即回（source=`static_template`）。
+- **prefer-static**：`PREFER_STATIC_DOMAINS`（ettoday.net）先試靜態、成功跳過 Chrome（proactive 避崩、更快）。
+- **Chrome 崩潰/例外後備**：scrape 的 `WebDriverException`/`Exception` 分支先試 `_static_extract` 救回（通用安全網，任何 SSR 站在 Chrome 死掉時可救）。
+- 本機驗證：speed.ettoday.net → 命中 ettoday 模板 `.story`、1144 字、未開 Chrome。
+
 ## 2026-06-16 新增：卡住任務收割機制（job reaper，未部署，feature branch feat/job-reaper）
 解決 job 卡在非終態（pending/queued/running）但 worker 已死 → 變孤兒、永不結束的問題（今天清掉 5 個 crawl_jobs 孤兒後加此機制防再發）。**全自動、零外部排程**：
 - **crawler / analysis 各加 `reaper.py`**：`reap_stale(db, collections, 60min)` 把「非終態且超過 60 分無更新」的 job 標 `failed`（reaped），再由既有「逾 N 天刪除」cleanup 回收。閾值 60 分 > 批次 45min / 單塊 25min。

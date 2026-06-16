@@ -519,6 +519,10 @@ HEURISTIC_CONF_THRESHOLD = 0.55
 MIN_LEARNED_CHARS = 300      # 已學/快取選擇器：讀取端採用前的最低字數（防誤學的寬選擇器污染）
 MIN_TEMPLATE_CHARS = 300     # 模板選擇器採用門檻
 MIN_FALLBACK_TRIGGER = 500   # scrape 層「主文過短」二級後備觸發門檻
+MIN_STATIC_CHARS = 400       # 靜態模板抽取（prefer-static / Chrome 崩潰後備）採用門檻
+# 已知 SSR（內文在靜態 HTML）且 Chrome 易崩/不必要的網域 → 優先用靜態模板抽取、跳過 Chrome。
+#   ETtoday：Chrome 149 在其廣告/JS 重頁觸發 CDP「missing or invalid columnNumber」崩潰；內文本就在靜態 HTML。
+PREFER_STATIC_DOMAINS = ("ettoday.net",)
 
 
 class UnsupportedSiteError(Exception):
@@ -1944,6 +1948,37 @@ class HeadlessCrawler:
         return {"status": "success", "url": url, "title": title,
                 "content": content, "length": len(content), "source": "ssr_preprobe"}
 
+    def _static_extract(self, url: str) -> Dict[str, Any]:
+        """抓靜態 HTML 並用「模板/啟發式」抽正文（_extract_main_text）。
+        用途：(1) prefer-static 網域（SSR、Chrome 易崩）先試靜態跳過 Chrome；
+              (2) Chrome 崩潰/失敗後的後備救援。
+        足量（≥MIN_STATIC_CHARS）回 result dict（source=static_template），否則 None。"""
+        import urllib.request
+        import html as _html
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if "html" not in (resp.headers.get("Content-Type", "") or "").lower():
+                    return None
+                html_raw = resp.read(3_000_000).decode("utf-8", "ignore")
+        except Exception as e:
+            self._log(f"[StaticExtract] 靜態抓取失敗：{e}")
+            return None
+        try:
+            content = self._extract_main_text(html_raw, url)
+        except Exception as e:
+            self._log(f"[StaticExtract] 抽取失敗：{e}")
+            return None
+        if not content or len(content) < MIN_STATIC_CHARS:
+            return None
+        m = (re.search(r'<meta property="og:title" content="([^"]*)"', html_raw)
+             or re.search(r'<title[^>]*>(.*?)</title>', html_raw, re.S | re.I))
+        title = _html.unescape(m.group(1).strip()) if m else url
+        self._log(f"[StaticExtract] ✅ 靜態模板抽取成功（{len(content)} 字），未用 Chrome")
+        return {"status": "success", "url": url, "title": title,
+                "content": content, "length": len(content), "source": "static_template"}
+
     # ──────────────────────────────────────────────────────────────────
     # YouTube：Tier 1（oEmbed/og 取標題+說明）+ Tier 2（Gemini 影片理解取口白）
     # ──────────────────────────────────────────────────────────────────
@@ -2147,6 +2182,14 @@ class HeadlessCrawler:
                         "error": "Instagram 公開貼文已封鎖 og 抓取，需 oEmbed API（Meta token）或登入瀏覽器手動蒐集。"}
             # threads 但無 og：往下走一般流程
 
+        # ⭐ prefer-static：已知 SSR 且 Chrome 易崩的網域（如 ETtoday）→ 先用靜態模板抽取、
+        #   成功就跳過 Chrome（避開 Chrome 149 的 CDP 崩潰、且更快）。
+        if any(d in url_l for d in PREFER_STATIC_DOMAINS):
+            st = self._static_extract(url)
+            if st is not None:
+                return st
+            self._log("[Crawler] prefer-static 抽取不足，回退 Chrome")
+
         # ⭐ SSR 輕量預探測：開 Chrome 前先抓靜態 HTML，若結構化內文（JSON-LD/RSC）已足量
         #   → 直接回傳、完全跳過 Chrome（最省成本、避免深滾卡死）。探測不足才走 Chrome。
         ssr = self._ssr_preprobe(url)
@@ -2335,14 +2378,22 @@ class HeadlessCrawler:
                 self._log(f"[Crawler] 部分結果抽取失敗: {pe}")
             return {"status": "failed", "url": url, "error": str(e)}
         except WebDriverException as e:
-            # driver 崩潰（invalid session / chrome crash）：強制關閉，
-            # 讓下次 scrape 重新初始化（即使 keep_driver=True）。
+            # driver 崩潰（invalid session / chrome crash，如 Chrome 149「missing or invalid
+            # columnNumber」）：強制關閉讓下次重啟；並用靜態模板抽取後備救援（SSR 站可救回）。
             self._log(f"[Crawler] WebDriver 崩潰，將重啟 driver: {e}")
             self._force_close_driver()
+            st = self._static_extract(url)
+            if st is not None:
+                self._log("[Crawler] Chrome 崩潰 → 靜態模板後備成功救回")
+                return st
             return {"status": "failed", "url": url, "error": f"WebDriver crash: {e}"}
         except Exception as e:
             self._log(f"[Crawler] CRITICAL ERROR during scrape for {url}: {e}")
             traceback.print_exc()
+            st = self._static_extract(url)
+            if st is not None:
+                self._log("[Crawler] Chrome 例外 → 靜態模板後備成功救回")
+                return st
             return {"status": "failed", "url": url, "error": str(e)}
         finally:
             self._log(f"====== Finished scrape for: {url} ======")
