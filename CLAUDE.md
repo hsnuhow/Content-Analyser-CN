@@ -933,7 +933,8 @@ analysis_jobs/{job_id}            非同步任務狀態
   status / progress / log / cancel_requested / result_markdown
 
 image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
-  status / progress / log / report_title / n_images / n_success / result_markdown
+  status / progress / log / report_title / n_images / n_success / n_tier3 / result_markdown
+  （n_tier3：因需 Tier3 住宅代理而跳過的圖數，如 s.yimg.com 等機房IP 被封的站）
 ```
 
 ---

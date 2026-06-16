@@ -14,7 +14,10 @@
   - Stage① srcset 改**以空白切詞**（Hearst 圖 URL 內含逗號 crop 參數，原以逗號切會切爛 → 產垃圾 URL）
     + 影像 URL 合理性網（無副檔名且同主機 → 擋）。→ elle/cosmo 垃圾消失。
   - Stage② URL 與 **Referer** 皆 percent-encode（she.com 圖含中文檔名、文章 slug 含中文當 referer → latin-1 編碼錯誤）。
-  - 待辦：s.yimg.com（Yahoo）圖為 webp、住宅IP可下載，疑 GCP 機房IP 被封 → 需 Tier3 代理。
+  - **Tier3 標註與跳過**：`TIER3_DOMAINS`（s.yimg.com 等機房IP 被封的站）遇到**直接跳過**
+    （不浪費 20s 下載逾時），報告標「跳過（需 Tier3）」；下載遇 403/401 亦動態標記 skipped_tier3。
+    job 加 `n_tier3`。待辦：未來補 Tier3 住宅代理下載再真正取這些圖。
+  - 線上實測：補 Referer fix 後 CHANEL 隨機 40 張 → **40/40 成功**。
 - 文件：附錄 B `analyse-images`、附錄 C `image_analysis_jobs`。
 
 ## 2026-06-16 新增：主文大圖擷取（影像服務階段①＋UI 入口，已部署 crawler 1.6.0 / analyser 00029）

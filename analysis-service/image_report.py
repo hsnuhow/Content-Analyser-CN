@@ -42,6 +42,19 @@ DEFAULT_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 _ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
+# 已知「需 Tier3 住宅代理」的網域：機房（GCP）IP 被封、直連必失敗。
+# 遇到直接跳過、不浪費下載逾時；報告標為「跳過（需 Tier3）」而非「失敗」。
+# 另：下載時遇 403/forbidden 也會動態標記為需 Tier3。
+TIER3_DOMAINS = {"s.yimg.com", "yimg.com"}
+
+
+def _host_needs_tier3(url: str) -> bool:
+    try:
+        h = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return any(h == d or h.endswith("." + d) for d in TIER3_DOMAINS)
+
 
 def _ip_blocked(ip: "ipaddress._BaseAddress") -> bool:
     return bool(ip.is_private or ip.is_loopback or ip.is_link_local
@@ -108,18 +121,23 @@ def _fetch(url: str, referer: str, log: Callable[[str], None]):
 
 
 def _download_image(url: str, referer: str, log: Callable[[str], None]):
-    """下載圖片 → (bytes, mime) 或 (None, None)。帶 Referer 破解防盜連；
-    遇到無法解碼的 AVIF 時，嘗試改寫 URL 取 jpeg 變體重試一次。"""
+    """下載圖片 → (bytes, mime, note)。note：""=正常／"tier3"=疑機房IP被封（403/401）。
+    失敗回 (None, None, note)。帶 Referer 破解防盜連；遇無法解碼的 AVIF 改取 jpeg 變體重試一次。"""
+    import urllib.error
     if not _is_safe_url(url):
         log(f"[ImageReport] SSRF 拒絕：{url}")
-        return None, None
+        return None, None, ""
     try:
         data, mime = _fetch(url, referer, log)
+    except urllib.error.HTTPError as e:
+        note = "tier3" if e.code in (401, 403) else ""
+        log(f"[ImageReport] 下載失敗（HTTP {e.code}）：{url}")
+        return None, None, note
     except Exception as e:
         log(f"[ImageReport] 下載失敗（{e}）：{url}")
-        return None, None
+        return None, None, ""
     if data is None:
-        return None, None
+        return None, None, ""
     if mime not in _ALLOWED_MIME:
         alt = _jpeg_variant(url)
         if alt and _is_safe_url(alt):
@@ -128,12 +146,12 @@ def _download_image(url: str, referer: str, log: Callable[[str], None]):
                 data2, mime2 = _fetch(alt, referer, log)
             except Exception as e:
                 log(f"[ImageReport] jpeg 變體下載失敗（{e}）：{alt}")
-                return None, None
+                return None, None, ""
             if data2 is not None and mime2 in _ALLOWED_MIME:
-                return data2, mime2
+                return data2, mime2, ""
         log(f"[ImageReport] 非支援圖片類型（{mime or '未知'}）：{url}")
-        return None, None
-    return data, mime
+        return None, None, ""
+    return data, mime, ""
 
 
 def _palette(image_bytes: bytes):
@@ -196,9 +214,19 @@ def _analyse_one(img: Dict, llm: LLMClient, log: Callable[[str], None]) -> Dict:
     if not src:
         out["error"] = "缺少 src"
         return out
-    data, mime = _download_image(src, referer, log)
+    # 已知需 Tier3 的網域 → 直接跳過，不浪費下載逾時
+    if _host_needs_tier3(src):
+        out["status"] = "skipped_tier3"
+        out["error"] = "需 Tier3 住宅代理（機房IP 被封），已跳過"
+        log(f"[ImageReport] 跳過（需 Tier3）：{src}")
+        return out
+    data, mime, note = _download_image(src, referer, log)
     if not data:
-        out["error"] = "下載失敗或類型不符"
+        if note == "tier3":
+            out["status"] = "skipped_tier3"
+            out["error"] = "需 Tier3 住宅代理（下載 403/401），已跳過"
+        else:
+            out["error"] = "下載失敗或類型不符"
         return out
     pal, dims = _palette(data)
     if pal:
@@ -249,8 +277,12 @@ def _aggregate_summary(items: List[Dict], llm: LLMClient,
 
 def _to_markdown(report_title: str, summary: str, items: List[Dict]) -> str:
     ok = [it for it in items if it.get("status") == "success"]
+    tier3 = [it for it in items if it.get("status") == "skipped_tier3"]
+    note = f"成功 {len(ok)} 張"
+    if tier3:
+        note += f"，跳過 {len(tier3)} 張（需 Tier3 住宅代理）"
     md = [f"# 視覺分析報告：{report_title}", "",
-          f"> 共分析 {len(items)} 張主文大圖，成功 {len(ok)} 張。", "",
+          f"> 共 {len(items)} 張主文大圖，{note}。", "",
           "## 一、整體視覺趨勢", "", summary, "", "## 二、逐圖視覺明細", ""]
     for i, it in enumerate(items, 1):
         a = it.get("analysis", {})
@@ -303,7 +335,8 @@ def build_image_report(report_title: str, images: List[Dict], llm_cfg: Dict,
     return {"markdown": _to_markdown(report_title, summary, items),
             "items": items, "summary": summary,
             "n_total": len(items),
-            "n_success": len([it for it in items if it.get("status") == "success"])}
+            "n_success": len([it for it in items if it.get("status") == "success"]),
+            "n_tier3": len([it for it in items if it.get("status") == "skipped_tier3"])}
 
 
 def run_image_analysis(job_id: str, report_title: str, images: List[Dict],
@@ -323,10 +356,12 @@ def run_image_analysis(job_id: str, report_title: str, images: List[Dict],
     try:
         _update(status="running", log=f"開始分析 {len(images)} 張圖...")
         out = build_image_report(report_title, images, llm_cfg, _log)
+        skip_note = f"，跳過 {out['n_tier3']} 張（需 Tier3）" if out.get("n_tier3") else ""
         _update(status="completed", progress=100,
                 result_markdown=out["markdown"],
                 n_images=out["n_total"], n_success=out["n_success"],
-                log=f"完成：{out['n_success']}/{out['n_total']} 張成功分析",
+                n_tier3=out.get("n_tier3", 0),
+                log=f"完成：{out['n_success']}/{out['n_total']} 張成功分析{skip_note}",
                 completed_at=firestore.SERVER_TIMESTAMP)
     except Exception as e:
         print(f"[ImageReport] 分析任務失敗: {e}", flush=True)
