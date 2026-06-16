@@ -333,22 +333,38 @@ def run_semantic_clustering(contents: List[Dict], project_id: str, db=None) -> D
 # ──────────────────────────────────────────────────────────────────────
 # Path 1c：關聯規則挖掘（FP 風格的頻繁組合 + 規則；純本地、快）
 # ──────────────────────────────────────────────────────────────────────
-ASSOC_TOP_KW = 8          # 每篇取前 N 個 TF-IDF 關鍵字當「品項」
-ASSOC_MIN_SUPPORT = 0.15  # 頻繁組合最低支持度（出現於 ≥15% 篇）
+ASSOC_VOCAB = 30          # 以語料級 Top N 關鍵字為「品項詞彙」（含主題核心詞，非各篇獨特詞）
+ASSOC_MIN_SUPPORT = 0.10  # 頻繁組合最低支持度（出現於 ≥10% 篇）
 ASSOC_MIN_CONF = 0.5      # 關聯規則最低信賴度
 ASSOC_MAX_RULES = 15
 
 
-def run_association(per_article: List[Dict]) -> Dict[str, Any]:
-    """關聯探勘：以每篇 top 關鍵字為「交易品項」，找頻繁共現組合 + 關聯規則。
-    回 {itemsets:[{items,support,count}], rules:[{antecedent,consequent,support,confidence,lift,count}]}。
-    方法論一＝高 support 的有效組合；方法論二＝高 lift（強關聯）的切角。純本地、毫秒級。"""
+def _article_terms(text: str) -> set:
+    """文章詞集合（unigram + bigram），與 TfidfVectorizer(ngram(1,2)) 同口徑：
+    _tokenize 出 unigram，相鄰兩詞以空白接合成 bigram，供與語料級關鍵字詞彙比對。"""
+    toks = _tokenize(text)
+    terms = set(toks)
+    for i in range(len(toks) - 1):
+        terms.add(toks[i] + " " + toks[i + 1])
+    return terms
+
+
+def run_association(tfidf: Dict, contents: List[Dict]) -> Dict[str, Any]:
+    """關聯探勘：以「語料級 Top 關鍵字」為品項詞彙，各篇的籃子＝它實際含有的那些詞，
+    找頻繁共現組合 + 關聯規則。回 {itemsets, rules}。
+    為何不用每篇 TF-IDF top 詞：那取的是「獨特詞」，主題核心詞（如品牌/車系，IDF 低）反被排除，
+    導致跨篇湊不出重複組合。改用語料級詞彙 → 浮出「Taycan＋電動」這類真正有意義的主題共現。
+    方法論一＝高 support 有效組合；方法論二＝高 lift（強關聯）切角。純本地、毫秒級。"""
     from itertools import combinations
     from collections import Counter
+    vocab = {k["keyword"] for k in (tfidf.get("top_keywords") or [])[:ASSOC_VOCAB]
+             if k.get("keyword")}
+    if not vocab:
+        return {"itemsets": [], "rules": []}
     txns = []
-    for a in per_article:
-        items = {k["keyword"] for k in (a.get("keywords") or [])[:ASSOC_TOP_KW]
-                 if k.get("keyword")}
+    for c in contents:
+        text = f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
+        items = _article_terms(text) & vocab
         if items:
             txns.append(items)
     n = len(txns)
@@ -360,7 +376,7 @@ def run_association(per_article: List[Dict]) -> Dict[str, Any]:
             one[it] += 1
         for a, b in combinations(sorted(t), 2):
             pair[(a, b)] += 1
-    min_count = max(2, int(ASSOC_MIN_SUPPORT * n))
+    min_count = max(3, int(ASSOC_MIN_SUPPORT * n))
     freq_pairs = sorted([(p, c) for p, c in pair.items() if c >= min_count],
                         key=lambda x: -x[1])
     itemsets = [{"items": list(p), "support": round(c / n, 3), "count": c}
@@ -486,7 +502,7 @@ def run(contents: List[Dict], project_id: str,
     # Path 1c：關聯探勘（純本地、毫秒級，不會失敗就降級空集）
     _log("[Path 1c] 關聯規則挖掘（頻繁共現 + 規則）...")
     try:
-        assoc = run_association(tfidf.get("per_article", []))
+        assoc = run_association(tfidf, contents)
         _log(f"[Path 1c] 完成，共 {len(assoc.get('rules', []))} 條規則／"
              f"{len(assoc.get('itemsets', []))} 組頻繁組合")
     except Exception as e:
