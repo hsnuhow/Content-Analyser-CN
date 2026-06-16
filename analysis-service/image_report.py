@@ -78,12 +78,25 @@ def _jpeg_variant(url: str) -> str:
     return new if new != url else None
 
 
+def _encode_url(url: str) -> str:
+    """percent-encode 路徑/查詢中的非 ASCII（如中文檔名），避免 urllib 的
+    UnicodeEncodeError；已編碼字元用 safe 保留、不重複編碼。"""
+    try:
+        import urllib.parse as up
+        p = up.urlsplit(url)
+        path = up.quote(p.path, safe="/%:@!$&'()*+,;=~-._")
+        query = up.quote(p.query, safe="/%:@!$&'()*+,;=~-._?")
+        return up.urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
+    except Exception:
+        return url
+
+
 def _fetch(url: str, referer: str, log: Callable[[str], None]):
     headers = {"User-Agent": DEFAULT_UA,
                "Accept": "image/jpeg,image/png,image/webp,*/*"}
     if referer:
         headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(_encode_url(url), headers=headers)
     with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
         mime = (resp.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
         data = resp.read(MAX_BYTES + 1)

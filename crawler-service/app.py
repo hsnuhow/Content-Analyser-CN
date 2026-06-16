@@ -39,7 +39,7 @@ from crawl_job import run_crawl_batch, JOBS_COLLECTION
 RESEARCH_JOBS = "research_jobs"
 IMAGE_JOBS = "image_extract_jobs"
 
-SERVICE_VERSION = "1.6.0"
+SERVICE_VERSION = "1.6.1"
 
 
 def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
