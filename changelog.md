@@ -9,8 +9,10 @@
   - pipeline：Path 1 逾時不再丟棄已完成數值結果，只清 search-extent；NL_MAX_DOCS 40→25。
   - **實測：embedding 46 篇 9 分鐘 → 52 秒。**
 - **A3 embedding 內容快取**：Firestore `embeddings/{sha256(model:dim:text)}` 存向量；向量化前先 `get_all` 查、只對 miss 呼叫 Vertex、再 `batch()` 寫回。key 含 model+dim → 換模型自動失效。完全 fail-safe（任何快取錯誤/數量不符 → 退回純向量化）。模型名抽成 `EMBED_MODEL`/`EMBED_DIM` 常數（仍用 002）。
-- **決策**：embedding 模型暫不換（gemini-embedding-001 單價 6× 但每次 <1¢，品質中等提升，先看 A0 結果再決定）；Vertex Batch Prediction 對 N=20–200 不值得，否決。
-- ⏳ 待調：關聯規則對 46 篇保時捷回 0 條（per-article TF-IDF 取的是「獨特詞」，min_support 0.15 太嚴 + 品牌詞 IDF 低不入籃）→ 需調 ASSOC 門檻/取詞策略。
+- **§3.1 關聯規則治本**：原以每篇 TF-IDF top 詞為品項 → 取到「獨特詞」、主題核心詞（品牌/車系 IDF 低）反被排除 → 46 篇回 0 條。改用**語料級 Top 30 關鍵字為品項詞彙**，各篇籃子＝它實際含有的那些（`_article_terms` 做 unigram+bigram，與 TfidfVectorizer ngram(1,2) 同口徑），support 0.15→0.10。實測 0 條 → **20 組共現 + 15 條規則**（電動車↔市場 lift 1.46、賽道↔設計 1.47、德國↔電動車 1.44 等）。
+- **決策**：embedding 模型暫不換（gemini-embedding-001 單價 6× 但每次 <1¢，品質中等提升，先看結果再決定）；Vertex Batch Prediction 對 N=20–200 不值得，否決。
+- **實測驗證（保時捷 46 篇，2026-06-16）**：總分析 ~3m45s（原整批失敗）；二次跑 embedding 快取 46/46 命中、Path 1b 4 秒；§3.2 Cloud NL 25 篇/25 實體、§1 摘要直接引用 salience 數值。
+- ⏳ 小調（非阻塞）：關聯品項詞彙偶有通用/媒體名雜訊（我們/提供/黃金←地球黃金線）→ 可補停用詞。
 
 
 ## 2026-06-16 新增：數值語意探勘層（關聯規則 + Cloud NL）+ 數值閘門（analysis-pipeline 00023-n7d / v1.2.0）
