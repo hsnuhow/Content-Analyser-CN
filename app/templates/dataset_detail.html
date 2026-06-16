@@ -109,7 +109,15 @@
   {# 失敗項研究結果（research_job_id 存在時）#}
   {% if dataset.research_job_id %}
   <div class="card shadow-sm mb-4 border-info">
-    <div class="card-header fw-semibold">🔬 失敗項選擇器研究</div>
+    <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+      <span>🔬 失敗項選擇器研究</span>
+      {% if role in ('owner', 'editor') %}
+      <form method="POST" action="{{ url_for('project_bp.research_clear', pid=pid, did=dataset.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="清除此結果面板">✕ 清除</button>
+      </form>
+      {% endif %}
+    </div>
     <div class="card-body">
       <div id="researchLog" class="text-muted small mb-2">研究進行中...</div>
       <div id="researchResult"></div>

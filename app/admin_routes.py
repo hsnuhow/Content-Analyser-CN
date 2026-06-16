@@ -422,6 +422,15 @@ def research_url_status():
                     'log': job.get('log', ''), 'result': job.get('result', {})}), 200
 
 
+@bp.route('/research-url/clear', methods=['POST'])
+@admin_required
+def research_url_clear():
+    """清除頁面上「主動研究指定 URL」的結果面板（清 session 鍵；候選清單不受影響）。"""
+    session.pop('_research_job', None)
+    flash('已清除主動研究結果面板。', 'success')
+    return redirect(url_for('admin_bp.selector_candidates'))
+
+
 @bp.route('/selector-candidates/<path:domain>/reject', methods=['POST'])
 @admin_required
 def reject_selector_candidate(domain):

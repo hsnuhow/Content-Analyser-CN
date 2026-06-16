@@ -157,24 +157,30 @@ def project_access_required(min_role: str = 'viewer'):
 @login_required
 def list_projects():
     email = current_user_email()
+    admin = is_admin()
 
     # 我是 Owner 的 Projects
     owner_docs = db.collection('projects').where('owner', '==', email).stream()
     projects = [d.to_dict() | {'id': d.id} for d in owner_docs]
 
-    # 我是成員的 Projects（Firestore 不直接支援 map key 查詢，用全掃方式）
-    # 小規模可接受；大規模應建立 subcollection
+    # 全掃：我是成員的 Projects；**管理員則納入所有人的所有專案**（全站視角）。
+    # 小規模可接受；大規模應建立 subcollection。
     all_docs = db.collection('projects').stream()
     seen_ids = {p['id'] for p in projects}
     for d in all_docs:
+        if d.id in seen_ids:
+            continue
         data = d.to_dict() | {'id': d.id}
-        if d.id not in seen_ids and email in data.get('members', {}):
+        if admin or email in data.get('members', {}):
+            # 標記非自己 owner / 非成員的專案（admin 視角才會出現）
+            data['_foreign'] = (data.get('owner') != email
+                                and email not in data.get('members', {}))
             projects.append(data)
 
     # 按建立時間排序；封存的排到最後（穩定排序，仍灰階顯示於同一列表）
     projects.sort(key=lambda p: p.get('created_at') or '', reverse=True)
     projects.sort(key=lambda p: 1 if p.get('archived') else 0)
-    return render_template('projects.html', projects=projects, is_admin=is_admin())
+    return render_template('projects.html', projects=projects, is_admin=admin)
 
 
 @bp.route('/new', methods=['GET'])
@@ -1333,6 +1339,18 @@ def research_status(pid, did, project, role):
         'log': job.get('log', ''),
         'result': job.get('result', {}),
     }), 200
+
+
+@bp.route('/<pid>/datasets/<did>/research/clear', methods=['POST'])
+@project_access_required(min_role='editor')
+def research_clear(pid, did, project, role):
+    """清除資料集頁上的「失敗項研究」結果面板（不影響已升級的 learned_selectors）。"""
+    (db.collection('projects').document(pid).collection('datasets').document(did)
+     .update({'research_job_id': firestore.DELETE_FIELD,
+              'research_status': firestore.DELETE_FIELD,
+              'updated_at': firestore.SERVER_TIMESTAMP}))
+    flash('已清除研究結果面板。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
 @bp.route('/<pid>/datasets/<did>/extract-images', methods=['POST'])
