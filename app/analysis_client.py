@@ -287,3 +287,22 @@ def get_audience_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
         return {"status": "error", "error": "查詢逾時"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+
+def trigger_kb_index(expert_slug: str, timeout: int = 120) -> dict:
+    """請 analysis-pipeline 重新索引某專家的參考文件（切塊 + 系統 SA embedding → kb_chunks）。
+    回 {"indexed": N} 或 {"error": ...}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定"}
+    try:
+        resp = requests.post(f"{base}/api/kb/index",
+                             json={"expert_slug": expert_slug},
+                             headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "分析服務金鑰驗證失敗（401）"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"索引逾時（{timeout}s），文件量大時可稍後重試。"}
+    except Exception as e:
+        return {"error": f"無法連線至分析服務：{e}"}
