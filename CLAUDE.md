@@ -821,8 +821,8 @@ Content-Analyser-CN/
 | `GET /api/analyse-images/{job_id}` | 查詢視覺分析進度與結果（`result_markdown`、`n_success`）|
 | `POST /api/synthesize-combined` | 提交整合報告（非同步，階段③）。body `{report_title, text_markdown, visual_markdown, topic?, llm_provider, llm_model, llm_api_key}`，回 `{job_id}` |
 | `GET /api/synthesize-combined/{job_id}` | 查詢整合報告進度與結果（`result_markdown`）|
-| `POST /api/audience-reports` | 提交三份延伸行動報告（非同步）。body `{report_title, source_markdown, llm_provider, llm_model, llm_api_key, temperature?}`，回 `{job_id}` |
-| `GET /api/audience-reports/{job_id}` | 查詢進度與結果；completed 回 `audience_reports{aeo,ecommerce,ads}`（三份 Markdown）|
+| `POST /api/audience-reports` | 提交延伸行動報告（非同步）。body `{report_title, source_markdown, experts:[{slug,label,prompt,playbook}], llm_provider, llm_model, llm_api_key, temperature?}`，回 `{job_id}`。experts 由 content-analyser 的知識庫（啟用專家）傳入 |
+| `GET /api/audience-reports/{job_id}` | 查詢進度與結果；completed 回 `audience_reports{<slug>: Markdown}`（每啟用專家一份）|
 
 `POST /api/analyse` body：
 ```json
@@ -939,7 +939,12 @@ analysis_jobs/{job_id}            非同步任務狀態
 
 audience_jobs/{job_id}            延伸行動報告任務狀態（自管暫存）
   status / progress / log / report_title
-  audience_reports: map           {aeo, ecommerce, ads}＝三份 Markdown（completed 時寫入）
+  audience_reports: map           {<slug>: Markdown}＝每啟用專家一份（completed 時寫入）
+
+# content-analyser 自管：知識庫專家（後台 /admin/knowledge 管理，模型 A）
+kb_experts/{slug}                 延伸報告專家（doc_id=slug，[a-z0-9-]，建立後不可改）
+  slug / label / prompt(persona) / playbook(方法論 md) / enabled / order
+  （啟用的專家＝報告頁可產生的延伸報告類型；生成用用戶 Key；Phase 2 再加 documents 子集合 + kb_chunks）
 
 image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
   status / progress / log / report_title / n_images / n_success / n_tier3 / result_markdown
@@ -956,8 +961,8 @@ embeddings/{key}                  embedding 內容快取（key=sha256(model:dim:
 #   （無 kind 或 text）文字分析 / 'visual' 視覺分析 / 'combined' 整合報告
 #   visual: n_images, source_dataset；combined: source_text, source_visual
 #   文字分析 completed 另存 numeric_exports{tfidf,association,entities}（三份 CSV，供 /download/<kind>.csv）
-#   分析師可手動產生延伸報告 → derived_reports{aeo,ecommerce,ads}（三份 Markdown）+ derive_status/derive_job_id
-#     （唯讀主報告、綁該 aid；主報告換＝新 aid＝重產。/derived/<kind> 檢視、/derived/<kind>.md 下載）
+#   分析師可手動產生延伸報告 → derived_reports{<slug>: Markdown} + derive_experts[{slug,label}] + derive_status/derive_job_id
+#     （依後台 kb_experts 啟用專家動態產生；唯讀主報告、綁該 aid；主報告換＝新 aid＝重產。/derived/<slug> 檢視、/derived/<slug>.md 下載）
 ```
 
 ---

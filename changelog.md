@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-17 新增：知識庫管理 + 延伸報告動態化（Phase 1，analysis 00030-d67 / analyser 00036-cnz）
+延伸報告從寫死三 persona 升級為「後台知識庫管理的動態專家」（模型 A：啟用的專家＝報告頁可產生的延伸報告類型）。生成仍用**用戶專案 LLM Key**，系統不負擔生成成本。
+- **後台 `/admin/knowledge`**：專家清單（啟用切換/排序/編輯/刪除）+ 建立（slug 不可改、顯示名、persona prompt、手冊 markdown）；首訪自動種子三專家（aeo/ecommerce/ads）+ 骨架方法論手冊（康泰打法待管理員補）；控制台加入口。
+- **kb_seed.py / kb_store.py**：`kb_experts`（doc_id=slug）CRUD + 冪等 seed + enabled/order。
+- **延伸報告動態化**：derive 觸發改撈「啟用專家」傳入 analysis-pipeline；存 `analyses/{aid}.derive_experts`(slug+label)；檢視/下載改動態 slug（`slug_ok` 驗證，非固定白名單）；報告頁依 derive_experts 動態列出。
+- **audience_reports.py**：改依 payload `experts[]`（{slug,label,prompt,playbook}）逐一並行生成，手冊常駐注入、主報告唯讀，本服務不持有專家定義。`/api/audience-reports` payload 加 `experts[]`（必填）。
+- 主報告 `result_markdown` 完全唯讀；`kb_experts` 為新 collection（回捲不影響舊功能）。回捲點 tag `snapshot-20260617-pre-knowledge-base`。
+- **Phase 2（另案）**：文件上傳 + 索引（Vertex 系統 SA embedding → kb_chunks）+ 生成時系統檢索 chunks 注入（解耦式 RAG：系統檢索、用戶 Key 生成）。
+
 ## 2026-06-17 新增：三份延伸行動報告（AEO / 品類經理 / 投放師）（analysis 00029-qcj / analyser 00035-ngp）
 主報告是分析員視角；新功能把它翻譯成三種角色的行動指引。**分析師在主報告完成並認可後手動按鈕觸發**，唯讀主報告、結果綁母分析（aid）；主報告換＝新 aid＝重產。
 - **analysis-pipeline**：新增 `audience_reports.py`（mirror combined_report 模式，輕量、3 份並行 LLM）。三份各有 persona prompt，從主報告 markdown 對應段落摘取 + 轉成行動語言：
