@@ -99,6 +99,8 @@ def create_app():
         resp.headers.setdefault('X-Frame-Options', 'DENY')
         resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
         resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        # 半內部服務：禁止搜尋引擎索引（比 robots.txt 更強，連被連結也不進搜尋結果）。
+        resp.headers.setdefault('X-Robots-Tag', 'noindex, nofollow, noarchive')
         resp.headers.setdefault('Content-Security-Policy', (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "

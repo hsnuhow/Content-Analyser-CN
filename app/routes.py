@@ -94,6 +94,13 @@ def auth():
     return render_template('login.html', is_dev=is_dev_env())
 
 
+@bp.route('/robots.txt')
+def robots_txt():
+    """禁止所有搜尋引擎爬取（半內部服務，不應被索引）。
+    搭配全域 X-Robots-Tag: noindex 標頭（見 app/__init__.py）形成雙層阻擋。"""
+    return ("User-agent: *\nDisallow: /\n", 200, {'Content-Type': 'text/plain; charset=utf-8'})
+
+
 @bp.route('/login')
 def login():
     redirect_uri = url_for('main_bp.callback', _external=True)
