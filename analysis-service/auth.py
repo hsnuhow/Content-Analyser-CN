@@ -11,12 +11,39 @@
 """
 import hmac
 import hashlib
+from datetime import datetime, timezone
 
 from firebase_admin import firestore
+
+# 外部 api_keys 每日呼叫上限（成本防護／縱深防禦）。系統金鑰（產品自用）不受此限。
+# 單把外部金鑰可於文件設 `daily_limit` 覆寫；未設則用此預設。
+DEFAULT_KEY_DAILY_LIMIT = 1000
 
 
 def _hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def _within_daily_quota(ref, data) -> bool:
+    """外部金鑰每日配額（best-effort，非安全邊界）：超過上限回 False。
+    以 UTC 日界重置；同一更新順帶累加當日計數與既有 call_count。"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    limit = data.get("daily_limit")
+    if not isinstance(limit, int) or limit <= 0:
+        limit = DEFAULT_KEY_DAILY_LIMIT
+    used = data.get("quota_count", 0) if data.get("quota_day") == today else 0
+    if used >= limit:
+        return False
+    try:
+        ref.update({
+            "last_used_at": firestore.SERVER_TIMESTAMP,
+            "call_count": firestore.Increment(1),
+            "quota_day": today,
+            "quota_count": (used + 1),
+        })
+    except Exception:
+        pass
+    return True
 
 
 def is_authorized(provided_key: str, system_key: str,
@@ -33,13 +60,10 @@ def is_authorized(provided_key: str, system_key: str,
         for d in docs:
             data = d.to_dict()
             if data.get('is_active') and required_permission in (data.get('permissions') or []):
-                try:
-                    d.reference.update({
-                        'last_used_at': firestore.SERVER_TIMESTAMP,
-                        'call_count': firestore.Increment(1),
-                    })
-                except Exception:
-                    pass
+                # 每日配額（成本防護）：超量則拒絕（系統金鑰已於上方提前放行，不受此限）。
+                if not _within_daily_quota(d.reference, data):
+                    print(f"[Auth] api_keys 已達每日配額上限，拒絕（{d.id}）", flush=True)
+                    return False
                 return True
     except Exception as e:
         print(f"[Auth] api_keys 查詢失敗: {e}", flush=True)

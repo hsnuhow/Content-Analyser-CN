@@ -122,6 +122,11 @@ def run_analysis(job_id: str, report_title: str,
                       and bool(llm_config.get("search_extent", True)))
         search_extent_results: Dict[int, Any] = {}
 
+        # 合作式停止旗標：某路逾時被放棄等待後，其仍在背景跑的 daemon thread 會據此跳過
+        # 尚未發出的昂貴呼叫（LLM / Google Ads），避免「結果註定丟棄卻仍燒成本」。
+        stop_path1 = threading.Event()   # Path 1：search-extent 迴圈
+        stop_path2 = threading.Event()   # Path 2：搜尋意圖批次 + 質化分析
+
         # ── 兩路平行執行 ──
         nlp_results: Dict[str, Any] = {}
         llm_results: Dict[str, Any] = {}
@@ -136,6 +141,9 @@ def run_analysis(job_id: str, report_title: str,
                 return
             done = 0
             for g in groups[:MAX_SEARCH_EXTENT_CLUSTERS]:
+                if stop_path1.is_set():
+                    _log("[search-extent] 上層已逾時，停止剩餘群的關鍵字擴展")
+                    break
                 seeds = [k for k in (g.get("keywords") or [])[:SEARCH_EXTENT_SEEDS_PER_CLUSTER] if k]
                 if not seeds:
                     continue
@@ -193,6 +201,7 @@ def run_analysis(job_id: str, report_title: str,
                     llm=llm,
                     log_fn=lambda m: _update_job(db, job_id, log=m),
                     input_scale=llm_config.get("input_scale", "standard"),
+                    should_stop=stop_path2.is_set,
                 )
                 llm_results.update(result)
                 n_intents = sum(len(a.get("search_intents", [])) for a in result.get("search_intents", []))
@@ -212,6 +221,7 @@ def run_analysis(job_id: str, report_title: str,
         t1.join(timeout=600)
         path1_timed_out = t1.is_alive()
         if path1_timed_out:
+            stop_path1.set()  # 通知仍在跑的 search-extent 迴圈停止後續呼叫
             nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
             _log("⚠️ Path 1 thread 逾時（600s）")
 
@@ -243,6 +253,7 @@ def run_analysis(job_id: str, report_title: str,
         t2.start()
         t2.join(timeout=600)
         if t2.is_alive():
+            stop_path2.set()  # 通知仍在跑的意圖批次/質化分析停止後續 LLM 呼叫
             llm_error.append("Path 2 超過 600s 未完成，已放棄等待")
             _log("⚠️ Path 2 thread 逾時（600s），停止任務")
 

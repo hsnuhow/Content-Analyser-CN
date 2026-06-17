@@ -28,6 +28,10 @@ DENOISE_MAX_TOKENS = 16384     # 大篇逐字稿輸出需足夠 token（避免 J
 MIN_DENOISE_CHARS = 800        # 太短的社群貼文免降噪（雜訊有限、省呼叫）
 MIN_KEEP_CHARS = 80            # cleaned 絕對過短（<80 字）才視為異常退回；雜訊重的貼文允許大幅瘦身
 DENOISE_WORKERS = 4
+# 成本上限：每次分析最多降噪篇數。降噪走系統 Vertex SA（成本由平台吸收），
+# 而 is_spoken_source 僅比對 URL 子字串、manual import 的 URL 完全可控，故須封頂
+# 避免「100 篇偽造 YT/FB URL」每次燒滿系統配額。超出上限的篇直接用原文進分析（不降噪）。
+MAX_DENOISE_ARTICLES = 30
 
 # 結構化輸出 schema：保證回完整 JSON（修大篇 JSON 截斷）
 _RESPONSE_SCHEMA = {
@@ -144,6 +148,13 @@ def denoise_contents(contents: List[Dict], project_id: str,
             targets.append((i, c))
     if not targets:
         return contents, []
+
+    # 成本封頂：超過 MAX_DENOISE_ARTICLES 的篇不降噪（用原文進分析），並明確記錄被略過數。
+    if len(targets) > MAX_DENOISE_ARTICLES:
+        skipped = len(targets) - MAX_DENOISE_ARTICLES
+        log(f"[降噪] 偵測 {len(targets)} 篇可降噪，超過上限 {MAX_DENOISE_ARTICLES}，"
+            f"僅降噪前 {MAX_DENOISE_ARTICLES} 篇，其餘 {skipped} 篇用原文（成本防護）。")
+        targets = targets[:MAX_DENOISE_ARTICLES]
 
     log(f"[降噪] {len(targets)} 篇口語/社群來源前處理（flash-lite）...")
 

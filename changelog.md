@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-17 修正：系統安全稽核 8 項修補（多 agent 稽核確認，尚未部署）
+多 agent 安全稽核（7 區塊：prompt 注入/Web 注入/溢位 DoS 成本/授權/機密/Cloud Run 韌性/Firestore，對抗式驗證）確認 8 項真實可觸發弱點（無 critical/high；2 medium + 6 low）。逐項修補：
+- **#1 CSV 公式注入（medium）** `report.py`：新增 `_csv_safe`，cell 以 `= + - @ \t \r` 開頭時前置單引號中和；`_to_csv` 對表頭與每格套用。擋不可信 keyword/entity/itemset 落入 CSV → Excel/Sheets 開啟求值（HYPERLINK/DDE）。數值權重為 float 不受影響。
+- **#2 手動匯入 OOM（medium）** `app/__init__.py` + `project_routes.py`：設 `MAX_CONTENT_LENGTH=16MB`（擋超大 body 在解析階段吃滿 1Gi 記憶體；Werkzeug 3.0.x 預設無上限）；`create_manual_dataset` 在 `json.loads` 前加 12MB 早期長度防護（明確訊息而非 413）。
+- **#3 label_clusters 未防注入（low）** `synthesis.py`：群關鍵字+標題（爬取衍生）改套 `INJECTION_GUARD` + `wrap_untrusted(tag=CLUSTERS)`，與 `run()` 一致；補上唯一漏網的注入點。
+- **#4 白名單撤銷對既有 session 無效（low）** `auth_guards.py` + `__init__.py` + `project_routes.py`：新增 `refresh_whitelist_status()`（TTL 60s 回查 Firestore），`login_required` 與 `project_access_required` 皆改用，撤銷最遲 60s 生效；`PERMANENT_SESSION_LIFETIME=12h` + `before_request` 標記 session permanent（滑動到期）。dev 環境視為 approved 不回查。
+- **#5 提交端點無速率/配額（low）** `analysis-service/auth.py` + `crawler-service/auth.py` + `deploy.sh`：外部 `api_keys` 路徑加每日配額（`_within_daily_quota`，預設 1000/日、UTC 日界重置、可於文件設 `daily_limit` 覆寫；超量回 False→401）；**系統金鑰（產品自用）走 compare_digest 提前放行、不受限**。`deploy.sh` 為 analysis-pipeline 與 content-analyser 補 `--max-instances 10`（爬蟲原已有），封頂 Cloud Run 成本爆量。
+- **#6 denoise 無降噪總量上限（low）** `denoise.py`：`MAX_DENOISE_ARTICLES=30` 封頂每次分析降噪篇數（超出用原文、明確記錄被略過數，非靜默截斷），擋偽造 100 篇 YT/FB URL 燒系統 Vertex 配額。
+- **#7 逾時後 daemon thread 續燒成本（low）** `llm_path.py` + `pipeline.py`：附加式 `should_stop` 回呼（預設 None 不改行為）；Path 2 逾時時排隊中的意圖批次/質化分析跳過後續 LLM 呼叫；Path 1 逾時時 search-extent 迴圈停止剩餘 Google Ads 呼叫。nlp embedding（系統成本、有 per-call timeout）未動以縮小風險面。
+- **#8 Gemini 金鑰入 URL query（low）** `project_routes.py`：模型清單查詢改用 `x-goog-api-key` header（對齊 OpenAI/Claude 分支），避免網路例外字串夾帶含金鑰 URL 落入 log。
+- 驗證：三服務 `py_compile` + `bash -n deploy.sh` 全過；`_csv_safe` 與 `_within_daily_quota` 單元邏輯測試通過。回捲點 tag `snapshot-20260617-pre-security-fix`。分支 `fix/security-audit`。
+- Firestore：`api_keys` 文件新增選用欄位 `quota_day`/`quota_count`/`daily_limit`（見附錄 C）。無對外 API schema 變更。
+
 ## 2026-06-17 新增：登入頁產品行銷文案 + 專案頁方法論/使用說明（content-analyser 00040-jth）
 - 登入頁（login.html）：landing 式行銷 hero，給初次接觸者——產品定位「讓內容團隊看見市場已驗證的有效方向」、三賣點（市場驗證/差異化切點/搜尋情境）、運作三步、白名單註記；保留 Google 登入卡。
 - 專案頁（projects.html）：頂部加可收合面板——方法論（市場基準線/差異化切點）+ 四步開始 + 選材小建議。給已登入要開始用的人。
