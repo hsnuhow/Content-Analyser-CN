@@ -24,6 +24,7 @@ from .crawler_client import (check_crawler_health, cleanup_crawl_jobs,
                              submit_research, get_research_status)
 from .analysis_client import (check_health as check_analysis_health,
                               cleanup_analysis_jobs)
+from . import kb_store
 from firebase_admin import firestore
 
 
@@ -441,3 +442,64 @@ def reject_selector_candidate(domain):
     except Exception as e:
         flash(f'拒絕失敗：{e}', 'danger')
     return redirect(url_for('admin_bp.selector_candidates'))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 知識庫管理（延伸報告專家）：模型 A，啟用的專家 = 可產生的延伸報告類型
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/knowledge')
+@admin_required
+def knowledge_base():
+    """知識庫專家清單（首次自動種子三專家）。"""
+    kb_store.seed_default_experts()
+    experts = kb_store.list_experts()
+    return render_template('admin_knowledge.html',
+                           user=session.get('user'), experts=experts)
+
+
+@bp.route('/knowledge/create', methods=['POST'])
+@admin_required
+def knowledge_create():
+    ok, msg = kb_store.create_expert(
+        slug=request.form.get('slug', ''),
+        label=request.form.get('label', ''),
+        prompt=request.form.get('prompt', ''),
+        playbook=request.form.get('playbook', ''),
+        enabled=(request.form.get('enabled') == '1'),
+        order=int(request.form.get('order') or 99),
+    )
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/update', methods=['POST'])
+@admin_required
+def knowledge_update(slug):
+    ok, msg = kb_store.update_expert(
+        slug,
+        label=request.form.get('label'),
+        prompt=request.form.get('prompt'),
+        playbook=request.form.get('playbook'),
+        order=int(request.form.get('order') or 99),
+    )
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/toggle', methods=['POST'])
+@admin_required
+def knowledge_toggle(slug):
+    enable = request.form.get('enable') == '1'
+    ok, msg = kb_store.update_expert(slug, enabled=enable)
+    flash(f'已{"啟用" if enable else "停用"}專家。' if ok else msg,
+          'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/delete', methods=['POST'])
+@admin_required
+def knowledge_delete(slug):
+    ok, msg = kb_store.delete_expert(slug)
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))

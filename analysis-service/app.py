@@ -415,10 +415,13 @@ def audience_reports_submit():
     data = request.get_json(silent=True) or {}
     report_title = (data.get("report_title") or "").strip()
     source_md = data.get("source_markdown") or ""
+    experts = data.get("experts") or []
     if not report_title:
         return jsonify({"status": "failed", "error": "缺少 report_title"}), 400
     if not source_md.strip():
         return jsonify({"status": "failed", "error": "缺少 source_markdown（主報告內容）"}), 400
+    if not isinstance(experts, list) or not experts:
+        return jsonify({"status": "failed", "error": "缺少 experts（請至後台知識庫啟用專家）"}), 400
     llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
     llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
     llm_api_key = (data.get("llm_api_key") or "").strip()
@@ -446,7 +449,7 @@ def audience_reports_submit():
                "api_key": llm_api_key, "temperature": temperature,
                "thinking": bool(data.get("thinking", False))}
     threading.Thread(target=run_audience_reports,
-                     args=(job_id, report_title, source_md, llm_cfg, db),
+                     args=(job_id, report_title, source_md, experts, llm_cfg, db),
                      daemon=True).start()
     return jsonify({"job_id": job_id, "status": "pending"}), 202
 

@@ -240,17 +240,19 @@ def get_job_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
         return {"status": "error", "error": str(e)}
 
 
-def submit_audience(report_title: str, source_markdown: str,
+def submit_audience(report_title: str, source_markdown: str, experts: list,
                     llm_provider: str, llm_model: str, llm_api_key: str,
                     temperature: float = 0.4,
                     timeout: int = DEFAULT_TIMEOUT) -> dict:
-    """提交三份延伸行動報告任務（非同步）。回傳 {"job_id": ...} 或 {"error": ...}。"""
+    """提交延伸行動報告任務（非同步）。experts=[{slug,label,prompt,playbook}]。
+    回傳 {"job_id": ...} 或 {"error": ...}。"""
     base = _base_url()
     if not base:
         return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交延伸報告任務。"}
     payload = {
         "report_title": report_title,
         "source_markdown": source_markdown,
+        "experts": experts,
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "llm_api_key": llm_api_key,

@@ -71,16 +71,15 @@
     </div>
     <div class="card-body">
       {% if analysis.derived_reports %}
-      {% set labels = {'aeo':'🔍 AEO 指引（被 AI 摘要選取）','ecommerce':'🛒 品類經理行銷指引','ads':'📣 投放師優化建議'} %}
       <div class="d-flex flex-column gap-2">
-        {% for k in ['aeo','ecommerce','ads'] %}
-        {% if analysis.derived_reports.get(k) %}
+        {% for e in (analysis.derive_experts or []) %}
+        {% if analysis.derived_reports.get(e.slug) %}
         <div class="d-flex justify-content-between align-items-center border rounded p-2">
-          <span>{{ labels[k] }}</span>
+          <span>{{ e.label }}</span>
           <span class="d-flex gap-2">
-            <a href="{{ url_for('project_bp.view_derived_report', pid=pid, aid=analysis.id, kind=k) }}"
+            <a href="{{ url_for('project_bp.view_derived_report', pid=pid, aid=analysis.id, kind=e.slug) }}"
                class="btn btn-sm btn-outline-primary">檢視</a>
-            <a href="{{ url_for('project_bp.download_derived_report', pid=pid, aid=analysis.id, kind=k) }}"
+            <a href="{{ url_for('project_bp.download_derived_report', pid=pid, aid=analysis.id, kind=e.slug) }}"
                class="btn btn-sm btn-outline-secondary">📥 .md</a>
           </span>
         </div>
@@ -112,8 +111,8 @@
       </script>
 
       {% else %}
-      <p class="text-muted small mb-3">主報告是給分析師看的數據與洞察。確認報告無誤後，可一鍵把它翻譯成三種角色的行動指引：
-        🔍 <strong>AEO 指引</strong>（增加被 AI 摘要選取的機率）· 🛒 <strong>品類經理行銷指引</strong> · 📣 <strong>投放師優化建議</strong>。</p>
+      <p class="text-muted small mb-3">主報告是給分析師看的數據與洞察。確認報告無誤後，可一鍵把它翻譯成各領域專家的行動指引
+        （由後台知識庫的啟用專家決定，如 AEO 指引、品類經理行銷指引、投放師優化建議…）。</p>
       {% if analysis.derive_status == 'failed' %}
       <div class="alert alert-warning py-2 small">上次產生失敗：{{ analysis.derive_error }}</div>
       {% endif %}
