@@ -107,6 +107,16 @@ def run_analysis(job_id: str, report_title: str,
             _update_job(db, job_id, status="failed", log=f"LLM 設定錯誤：{e}")
             return
 
+        # ── 前處理：口語/社群逐字稿降噪（A 抽取式降噪 + B 訊號抽取）──
+        # 系統 Vertex SA + flash-lite，進分析前先去雜訊（不摘要、逐字保留）。失敗退回原文。
+        source_signals: list = []
+        try:
+            import denoise
+            _progress(8, "前處理：口語/社群逐字稿降噪...")
+            contents, source_signals = denoise.denoise_contents(contents, project_id, _log)
+        except Exception as e:
+            _log(f"降噪前處理略過（用原文）：{e}")
+
         # ── search-extent 開關：URL/Key 已設定 + 本次未停用（預設開）──
         se_enabled = (search_extent_client.is_enabled()
                       and bool(llm_config.get("search_extent", True)))
@@ -259,6 +269,7 @@ def run_analysis(job_id: str, report_title: str,
             n_articles=len(contents),
             llm=llm,
             search_extent_results=se_frozen,
+            source_signals=source_signals,
         )
 
         if _cancelled_stop():
