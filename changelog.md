@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-17 新增：三份延伸行動報告（AEO / 品類經理 / 投放師）（analysis 00029-qcj / analyser 00035-ngp）
+主報告是分析員視角；新功能把它翻譯成三種角色的行動指引。**分析師在主報告完成並認可後手動按鈕觸發**，唯讀主報告、結果綁母分析（aid）；主報告換＝新 aid＝重產。
+- **analysis-pipeline**：新增 `audience_reports.py`（mirror combined_report 模式，輕量、3 份並行 LLM）。三份各有 persona prompt，從主報告 markdown 對應段落摘取 + 轉成行動語言：
+  - `aeo`：AEO 指引（核心情境題清單 / 答案型內容 / AI 易摘取格式 / 待答缺口）— 摘自 §4 搜尋情境 + §3.2 實體 + §7 缺口 + 附錄。
+  - `ecommerce`：品類經理行銷指引（核心訴求 / 標題內文圖片 / 差異化 / 廣告切入）— 摘自 §5 質化 + §6 建議 + §3 分群 + §7 缺口。
+  - `ads`：投放師優化建議（受眾分眾 / 文案切角 / 圖片素材 / 關鍵字切入）— 摘自 §4 情境 + §3 分群 + §2/§7 關鍵字 + §5 語言。
+  - 單份失敗降級不影響其他兩份。app.py 新增 `POST/GET /api/audience-reports`（`audience_jobs/{job_id}`）。
+- **content-analyser**：analysis_client 加 submit_audience/get_audience_status；project_routes 加 derive 觸發（editor）、derive/status 輪詢（完成存回 `analyses.derived_reports`）、檢視、下載 .md；analysis_detail 加產生按鈕 + 輪詢 + 3 份檢視/下載；新 `derived_report.html` 檢視頁（marked.js + DOMPurify）。
+- **主報告 result_markdown 完全唯讀、未改動**；延伸報告生命週期綁母分析 aid。
+- **實測（保時捷 46 篇報告延伸，00029-qcj）**：三份齊全、各 4 段、深度接地（引用 992.2/Taycan vs Model3/800V/德中台市場/客製化）；UI 6 顆鈕、view/download 端點皆 200；主報告未變。
+
 ## 2026-06-17 新增：三項數值分析 CSV 獨立下載（核實用）+ TF-IDF 25→50（analysis 00028-ggw / analyser 00034-g6w）
 依使用者「報告中列出三個數值分析結果、編成獨立下載檔供核實；TF-IDF 放寬到 50」需求。
 - **三項 CSV 匯出**（TF-IDF / 關聯規則 / Cloud NL 實體情感）：

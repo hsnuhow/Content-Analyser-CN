@@ -821,6 +821,8 @@ Content-Analyser-CN/
 | `GET /api/analyse-images/{job_id}` | 查詢視覺分析進度與結果（`result_markdown`、`n_success`）|
 | `POST /api/synthesize-combined` | 提交整合報告（非同步，階段③）。body `{report_title, text_markdown, visual_markdown, topic?, llm_provider, llm_model, llm_api_key}`，回 `{job_id}` |
 | `GET /api/synthesize-combined/{job_id}` | 查詢整合報告進度與結果（`result_markdown`）|
+| `POST /api/audience-reports` | 提交三份延伸行動報告（非同步）。body `{report_title, source_markdown, llm_provider, llm_model, llm_api_key, temperature?}`，回 `{job_id}` |
+| `GET /api/audience-reports/{job_id}` | 查詢進度與結果；completed 回 `audience_reports{aeo,ecommerce,ads}`（三份 Markdown）|
 
 `POST /api/analyse` body：
 ```json
@@ -935,6 +937,10 @@ analysis_jobs/{job_id}            非同步任務狀態
   status / progress / log / cancel_requested / result_markdown
   numeric_exports: map            {tfidf, association, entities}＝三份 CSV 字串（completed 時寫入，供下載核實）
 
+audience_jobs/{job_id}            延伸行動報告任務狀態（自管暫存）
+  status / progress / log / report_title
+  audience_reports: map           {aeo, ecommerce, ads}＝三份 Markdown（completed 時寫入）
+
 image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
   status / progress / log / report_title / n_images / n_success / n_tier3 / result_markdown
   （n_tier3：因需 Tier3 住宅代理而跳過的圖數，如 s.yimg.com 等機房IP 被封的站）
@@ -950,6 +956,8 @@ embeddings/{key}                  embedding 內容快取（key=sha256(model:dim:
 #   （無 kind 或 text）文字分析 / 'visual' 視覺分析 / 'combined' 整合報告
 #   visual: n_images, source_dataset；combined: source_text, source_visual
 #   文字分析 completed 另存 numeric_exports{tfidf,association,entities}（三份 CSV，供 /download/<kind>.csv）
+#   分析師可手動產生延伸報告 → derived_reports{aeo,ecommerce,ads}（三份 Markdown）+ derive_status/derive_job_id
+#     （唯讀主報告、綁該 aid；主報告換＝新 aid＝重產。/derived/<kind> 檢視、/derived/<kind>.md 下載）
 ```
 
 ---
