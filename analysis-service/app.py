@@ -27,6 +27,7 @@ from pipeline import run_analysis, JOBS_COLLECTION
 from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLECTION
 from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
 from audience_reports import run_audience_reports, JOBS_COLLECTION as AUDIENCE_JOBS_COLLECTION
+import kb_index
 from auth import is_authorized
 
 SERVICE_VERSION = "1.2.0"
@@ -475,6 +476,27 @@ def get_audience_job(job_id: str):
     if job.get("status") == "failed":
         safe["error"] = job.get("log", "")
     return jsonify(safe), 200
+
+
+@app.route("/api/kb/index", methods=["POST"])
+@require_api_key
+def kb_index_expert():
+    """重新索引某知識庫專家的參考文件（切塊 + 系統 SA embedding → kb_chunks）。
+
+    Request: {expert_slug}　Response: {"indexed": N}
+    """
+    data = request.get_json(silent=True) or {}
+    expert_slug = (data.get("expert_slug") or "").strip()
+    if not expert_slug:
+        return jsonify({"error": "缺少 expert_slug"}), 400
+    project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+    if not project_id:
+        return jsonify({"error": "未設定 GOOGLE_CLOUD_PROJECT，無法 embedding。"}), 500
+    try:
+        n = kb_index.reindex_expert(db, project_id, expert_slug)
+        return jsonify({"indexed": n}), 200
+    except Exception as e:
+        return jsonify({"error": f"索引失敗：{e}"}), 500
 
 
 @app.route("/api/analyse/<job_id>/cancel", methods=["POST"])

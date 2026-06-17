@@ -121,5 +121,47 @@ def delete_expert(slug: str) -> tuple:
     ref = _col().document(slug)
     if not ref.get().exists:
         return False, '找不到此專家'
+    # 一併刪除其 documents 子集合（kb_chunks 由 analysis-pipeline 端在重新索引時清理）
+    try:
+        for d in ref.collection('documents').stream():
+            d.reference.delete()
+    except Exception:
+        pass
+    ref.delete()
+    return True, '已刪除'
+
+
+# ── 參考文件（Phase 2：每專家 documents 子集合，存抽取的純文字）──
+
+def list_documents(slug: str) -> list:
+    try:
+        docs = [d.to_dict() | {'id': d.id}
+                for d in _col().document(slug).collection('documents').stream()]
+    except Exception:
+        return []
+    docs.sort(key=lambda x: x.get('filename', ''))
+    return docs
+
+
+def add_document(slug: str, filename: str, mime: str, text: str) -> tuple:
+    """新增一份參考文件（純文字）。回 (ok, msg)。"""
+    if not _col().document(slug).get().exists:
+        return False, '找不到此專家'
+    text = (text or '').strip()
+    if len(text) < 20:
+        return False, '文件內容過短或無法抽取文字'
+    _col().document(slug).collection('documents').add({
+        'filename': filename[:200], 'mime': mime or '',
+        'chars': len(text), 'text': text[:200000],  # 單檔上限 20 萬字
+        'indexed': False,
+        'uploaded_at': firestore.SERVER_TIMESTAMP,
+    })
+    return True, '已上傳'
+
+
+def delete_document(slug: str, doc_id: str) -> tuple:
+    ref = _col().document(slug).collection('documents').document(doc_id)
+    if not ref.get().exists:
+        return False, '找不到此文件'
     ref.delete()
     return True, '已刪除'

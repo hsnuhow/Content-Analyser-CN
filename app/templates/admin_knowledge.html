@@ -109,8 +109,42 @@
             <label class="form-label small mb-0">方法論手冊（playbook，Markdown）</label>
             <textarea name="playbook" class="form-control font-monospace" rows="12">{{ e.playbook }}</textarea>
           </div>
-          <button type="submit" class="btn btn-primary">儲存</button>
+          <button type="submit" class="btn btn-primary">儲存手冊與指令</button>
         </form>
+
+        <hr>
+        {# 參考文件（Phase 2：上傳 → 系統索引 → 生成時檢索注入）#}
+        <h6 class="mb-2">📎 參考文件（檢索素材）</h6>
+        <p class="text-muted small">上傳後系統自動切塊 + 向量索引；產生延伸報告時會檢索最相關片段注入。
+          生成仍用用戶 Key，索引/檢索用系統。支援 .md / .txt / .pdf。</p>
+        {% if e.documents %}
+        <ul class="list-group mb-2">
+          {% for d in e.documents %}
+          <li class="list-group-item d-flex justify-content-between align-items-center py-1">
+            <span class="small">📄 {{ d.filename }} <span class="text-muted">（{{ d.chars }} 字{% if d.indexed %}，已索引{% endif %}）</span></span>
+            <form method="POST" action="{{ url_for('admin_bp.knowledge_doc_delete', slug=e.slug, doc_id=d.id) }}"
+                  onsubmit="return confirm('刪除「{{ d.filename }}」並重建索引？');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-danger py-0" type="submit">刪除</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted small">尚無參考文件（此專家目前以純手冊生成）。</p>
+        {% endif %}
+        <div class="d-flex gap-2 align-items-center">
+          <form method="POST" action="{{ url_for('admin_bp.knowledge_doc_upload', slug=e.slug) }}"
+                enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="file" name="document" class="form-control form-control-sm" accept=".md,.txt,.pdf" required style="max-width:320px">
+            <button class="btn btn-sm btn-success" type="submit">上傳並索引</button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_bp.knowledge_reindex', slug=e.slug) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-secondary" type="submit">🔄 重新索引</button>
+          </form>
+        </div>
       </div>
     </div>
   </div>
