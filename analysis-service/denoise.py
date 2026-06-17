@@ -104,7 +104,10 @@ def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tupl
             config=types.GenerateContentConfig(
                 temperature=0.0, max_output_tokens=out_tokens,
                 response_mime_type="application/json",
-                response_schema=_RESPONSE_SCHEMA))
+                response_schema=_RESPONSE_SCHEMA,
+                # 關閉 thinking：2.5-flash 預設 thinking 會吃掉 max_output_tokens → JSON 一開頭就截斷。
+                # 降噪是機械抽取、不需推理，關掉才不浪費預算（flash-lite 本就不 thinking）。
+                thinking_config=types.ThinkingConfig(thinking_budget=0)))
         data = json.loads(_clean_json(resp.text))
         cleaned = (data.get("cleaned_text") or "").strip()
         sig = data.get("signals") or {}
