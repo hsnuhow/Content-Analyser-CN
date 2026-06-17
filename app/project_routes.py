@@ -30,10 +30,12 @@ from .services import db, get_admin_email, ensure_user
 from .auth_guards import login_required
 from .analysis_client import (submit_analysis, get_job_status, cancel_analysis,
                               submit_image_analysis, get_image_analysis_status,
-                              submit_combined, get_combined_status)
+                              submit_combined, get_combined_status,
+                              submit_audience, get_audience_status)
 from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
                              submit_research, get_research_status,
                              submit_extract_images, get_extract_images_status)
+from . import kb_store
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -628,6 +630,12 @@ def analysis_detail(pid, aid, project, role):
     if not doc.exists:
         abort(404)
     analysis = doc.to_dict() | {'id': aid}
+    # lazy 自癒：延伸報告 job 可能跑超過前端輪詢時限 → 載入時就地對帳補寫
+    if analysis.get('derive_status') == 'running' and analysis.get('derive_job_id'):
+        try:
+            _reconcile_derive(pid, aid, analysis)
+        except Exception as e:
+            print(f"[derive] 對帳略過：{e}", flush=True)
     return render_template('analysis_detail.html',
                            project=project, pid=pid,
                            analysis=analysis, role=role)
@@ -762,6 +770,157 @@ def download_analysis_csv(pid, aid, project, role, kind):
         download_name=filename,
         mimetype='text/csv; charset=utf-8',
     )
+
+
+# ── 延伸行動報告：模型 A，啟用的知識庫專家 = 可產生的延伸報告類型 ──
+# 分析師於主報告完成並認可後手動觸發。唯讀主報告、結果存母分析 analyses/{aid}.derived_reports
+# （綁定該主報告；主報告換＝新 aid＝重產）。生成用「用戶專案的 LLM Key」，系統不負擔生成成本。
+
+def _analysis_ref(pid, aid):
+    return db.collection('projects').document(pid).collection('analyses').document(aid)
+
+
+@bp.route('/<pid>/analyses/<aid>/derive', methods=['POST'])
+@project_access_required(min_role='editor')
+def derive_audience_reports(pid, aid, project, role):
+    """觸發產生延伸行動報告（非同步），依後台啟用的知識庫專家。文字分析、completed 才可。"""
+    doc = _analysis_ref(pid, aid).get()
+    if not doc.exists:
+        abort(404)
+    analysis = doc.to_dict()
+    if analysis.get('status') != 'completed' or not analysis.get('result_markdown'):
+        flash('主報告尚未完成，無法產生延伸報告。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+    if analysis.get('kind') == 'visual':
+        flash('視覺報告不支援延伸行動報告。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    experts = kb_store.list_enabled_experts()
+    if not experts:
+        flash('知識庫尚無啟用的專家，請先至 /admin/knowledge 建立並啟用。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    llm = project.get('llm_config', {}) or {}
+    api_key = llm.get('api_key', '')
+    if not api_key:
+        flash('專案尚未設定 LLM API Key，無法產生延伸報告。請至專案設定填入。', 'danger')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    payload_experts = [
+        {'slug': e['slug'], 'label': e.get('label', e['slug']),
+         'prompt': e.get('prompt', ''), 'playbook': e.get('playbook', '')}
+        for e in experts
+    ]
+    res = submit_audience(
+        report_title=analysis.get('report_title', '報告'),
+        source_markdown=analysis.get('result_markdown', ''),
+        experts=payload_experts,
+        llm_provider=llm.get('provider', 'gemini'),
+        llm_model=llm.get('model', 'gemini-2.5-flash'),
+        llm_api_key=api_key,
+    )
+    job_id = res.get('job_id')
+    if not job_id:
+        flash(f"延伸報告提交失敗：{res.get('error', '未知錯誤')}", 'danger')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    # 存當下啟用的專家（slug+label），供報告頁顯示標題（與動態 slug 對應）
+    _analysis_ref(pid, aid).update({
+        'derive_job_id': job_id,
+        'derive_status': 'running',
+        'derive_experts': [{'slug': e['slug'], 'label': e.get('label', e['slug'])}
+                           for e in experts],
+        'derive_error': firestore.DELETE_FIELD,
+    })
+    flash('延伸報告產生中，稍候頁面會自動更新。', 'info')
+    return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+
+def _reconcile_derive(pid, aid, analysis: dict) -> dict:
+    """就地對帳延伸報告：若卡 running 但 job 已完成/失敗，補寫 analyses doc。
+    回傳 {status, log?, error?}。供前端輪詢與報告頁載入（lazy 自癒）共用，
+    避免「job 跑超過前端輪詢時限 → 結果永不寫回」的卡死。"""
+    dstatus = analysis.get('derive_status')
+    job_id = analysis.get('derive_job_id')
+    if dstatus != 'running' or not job_id:
+        return {'status': dstatus or 'none'}
+    ps = get_audience_status(job_id)
+    new = ps.get('status', dstatus)
+    if new == 'completed':
+        reports = ps.get('audience_reports') or {}
+        _analysis_ref(pid, aid).update({
+            'derived_reports': reports, 'derive_status': 'completed'})
+        analysis['derived_reports'] = reports
+        analysis['derive_status'] = 'completed'
+        return {'status': 'completed'}
+    if new in ('failed', 'error'):
+        err = ps.get('error', ps.get('log', '產生失敗'))
+        _analysis_ref(pid, aid).update({
+            'derive_status': 'failed', 'derive_error': err})
+        analysis['derive_status'] = 'failed'
+        analysis['derive_error'] = err
+        return {'status': 'failed', 'error': err}
+    return {'status': 'running', 'log': ps.get('log', '')}
+
+
+@bp.route('/<pid>/analyses/<aid>/derive/status')
+@project_access_required(min_role='viewer')
+def derive_status(pid, aid, project, role):
+    """輪詢延伸報告產生進度（JSON）。完成時把各份存回 analyses doc。"""
+    doc = _analysis_ref(pid, aid).get()
+    if not doc.exists:
+        return jsonify({'status': 'error', 'error': '找不到分析'}), 404
+    return jsonify(_reconcile_derive(pid, aid, doc.to_dict()))
+
+
+def _derived_label(analysis, slug):
+    """從 derive_experts 取該 slug 的顯示名（找不到就回 slug）。"""
+    for e in (analysis.get('derive_experts') or []):
+        if e.get('slug') == slug:
+            return e.get('label', slug)
+    return slug
+
+
+@bp.route('/<pid>/analyses/<aid>/derived/<kind>')
+@project_access_required(min_role='viewer')
+def view_derived_report(pid, aid, project, role, kind):
+    """檢視單份延伸報告（Markdown 渲染）。kind＝專家 slug（動態）。"""
+    if not kb_store.slug_ok(kind):
+        abort(404)
+    doc = _analysis_ref(pid, aid).get()
+    if not doc.exists:
+        abort(404)
+    analysis = doc.to_dict()
+    md = (analysis.get('derived_reports') or {}).get(kind)
+    if not md:
+        flash('此延伸報告尚未產生。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+    return render_template('derived_report.html', pid=pid, aid=aid, project=project,
+                           kind=kind, kind_label=_derived_label(analysis, kind),
+                           report_title=analysis.get('report_title', ''),
+                           markdown=md)
+
+
+@bp.route('/<pid>/analyses/<aid>/derived/<kind>.md')
+@project_access_required(min_role='viewer')
+def download_derived_report(pid, aid, project, role, kind):
+    """下載單份延伸報告（.md）。kind＝專家 slug（動態）。"""
+    if not kb_store.slug_ok(kind):
+        abort(404)
+    doc = _analysis_ref(pid, aid).get()
+    if not doc.exists:
+        abort(404)
+    analysis = doc.to_dict()
+    md = (analysis.get('derived_reports') or {}).get(kind)
+    if not md:
+        flash('此延伸報告尚未產生。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+    raw_title = analysis.get('report_title', 'report')
+    base = re.sub(r'[^\w\-. ]', '_', raw_title).strip()[:60]
+    stream = BytesIO(md.encode('utf-8'))
+    return send_file(stream, as_attachment=True,
+                     download_name=f"{base}_{kind}.md",
+                     mimetype='text/markdown; charset=utf-8')
 
 
 @bp.route('/<pid>/analyses/<aid>/rename', methods=['POST'])

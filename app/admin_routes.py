@@ -23,8 +23,31 @@ from .services import (
 from .crawler_client import (check_crawler_health, cleanup_crawl_jobs,
                              submit_research, get_research_status)
 from .analysis_client import (check_health as check_analysis_health,
-                              cleanup_analysis_jobs)
+                              cleanup_analysis_jobs, trigger_kb_index)
+from . import kb_store
 from firebase_admin import firestore
+
+
+def _extract_text(file_storage) -> tuple:
+    """從上傳檔抽純文字。支援 .md/.txt（解碼）與 .pdf（pypdf）。回 (text, mime)。"""
+    fn = (file_storage.filename or '').lower()
+    raw = file_storage.read()
+    if fn.endswith('.pdf'):
+        try:
+            import io
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw))
+            text = "\n".join((p.extract_text() or '') for p in reader.pages)
+            return text, 'application/pdf'
+        except Exception as e:
+            return '', f'pdf-error:{e}'
+    # md / txt / 其他文字檔
+    for enc in ('utf-8', 'utf-16', 'big5', 'gb18030'):
+        try:
+            return raw.decode(enc), 'text/plain'
+        except Exception:
+            continue
+    return raw.decode('utf-8', errors='ignore'), 'text/plain'
 
 
 def _get_tier3_enabled() -> bool:
@@ -441,3 +464,117 @@ def reject_selector_candidate(domain):
     except Exception as e:
         flash(f'拒絕失敗：{e}', 'danger')
     return redirect(url_for('admin_bp.selector_candidates'))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 知識庫管理（延伸報告專家）：模型 A，啟用的專家 = 可產生的延伸報告類型
+# ──────────────────────────────────────────────────────────────────────
+
+@bp.route('/knowledge')
+@admin_required
+def knowledge_base():
+    """知識庫專家清單（首次自動種子三專家）。"""
+    kb_store.seed_default_experts()
+    experts = kb_store.list_experts()
+    for e in experts:
+        e['documents'] = kb_store.list_documents(e['slug'])
+    return render_template('admin_knowledge.html',
+                           user=session.get('user'), experts=experts)
+
+
+@bp.route('/knowledge/create', methods=['POST'])
+@admin_required
+def knowledge_create():
+    ok, msg = kb_store.create_expert(
+        slug=request.form.get('slug', ''),
+        label=request.form.get('label', ''),
+        prompt=request.form.get('prompt', ''),
+        playbook=request.form.get('playbook', ''),
+        enabled=(request.form.get('enabled') == '1'),
+        order=int(request.form.get('order') or 99),
+    )
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/update', methods=['POST'])
+@admin_required
+def knowledge_update(slug):
+    ok, msg = kb_store.update_expert(
+        slug,
+        label=request.form.get('label'),
+        prompt=request.form.get('prompt'),
+        playbook=request.form.get('playbook'),
+        order=int(request.form.get('order') or 99),
+    )
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/toggle', methods=['POST'])
+@admin_required
+def knowledge_toggle(slug):
+    enable = request.form.get('enable') == '1'
+    ok, msg = kb_store.update_expert(slug, enabled=enable)
+    flash(f'已{"啟用" if enable else "停用"}專家。' if ok else msg,
+          'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/delete', methods=['POST'])
+@admin_required
+def knowledge_delete(slug):
+    ok, msg = kb_store.delete_expert(slug)
+    flash(msg, 'success' if ok else 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+# ── 知識庫參考文件（Phase 2：上傳/刪除/索引）──
+
+@bp.route('/knowledge/<slug>/documents/upload', methods=['POST'])
+@admin_required
+def knowledge_doc_upload(slug):
+    f = request.files.get('document')
+    if not f or not f.filename:
+        flash('請選擇檔案。', 'danger')
+        return redirect(url_for('admin_bp.knowledge_base'))
+    text, mime = _extract_text(f)
+    if mime.startswith('pdf-error'):
+        flash(f'PDF 抽取失敗：{mime}', 'danger')
+        return redirect(url_for('admin_bp.knowledge_base'))
+    ok, msg = kb_store.add_document(slug, f.filename, mime, text)
+    if not ok:
+        flash(msg, 'danger')
+        return redirect(url_for('admin_bp.knowledge_base'))
+    # 上傳後即重新索引（系統 SA embedding）
+    res = trigger_kb_index(slug)
+    if 'error' in res:
+        flash(f'已上傳「{f.filename}」，但索引失敗：{res["error"]}（可稍後按重新索引）', 'warning')
+    else:
+        flash(f'已上傳「{f.filename}」並索引（{res.get("indexed", 0)} 塊）。', 'success')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/documents/<doc_id>/delete', methods=['POST'])
+@admin_required
+def knowledge_doc_delete(slug, doc_id):
+    ok, msg = kb_store.delete_document(slug, doc_id)
+    if ok:
+        res = trigger_kb_index(slug)  # 刪除後重建索引
+        flash(f'已刪除文件並重建索引（{res.get("indexed", 0)} 塊）。'
+              if 'error' not in res else f'已刪除文件，但索引失敗：{res["error"]}',
+              'success' if 'error' not in res else 'warning')
+    else:
+        flash(msg, 'danger')
+    return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/knowledge/<slug>/reindex', methods=['POST'])
+@admin_required
+def knowledge_reindex(slug):
+    res = trigger_kb_index(slug)
+    if 'error' in res:
+        flash(f'索引失敗：{res["error"]}', 'danger')
+    else:
+        flash(f'已重新索引（{res.get("indexed", 0)} 塊）。', 'success')
+    return redirect(url_for('admin_bp.knowledge_base'))

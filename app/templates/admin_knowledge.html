@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">知識庫管理</h2>
+    <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">← 返回控制台</a>
+  </div>
+
+  <p class="text-muted">
+    每個<strong>啟用</strong>的專家，就是分析報告頁可一鍵產生的一種「延伸行動報告」。
+    手冊（方法論）會在生成時常駐注入，限縮 AI 發想空間、貼合康泰打法。
+    生成本身用<strong>用戶專案的 LLM Key</strong>，系統不負擔生成成本。
+    <br><small>（Phase 2 將支援上傳參考文件 + 檢索注入；目前為手冊常駐。）</small>
+  </p>
+
+  {# 建立新專家 #}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header">
+      <button class="btn btn-sm btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#createExpert">＋ 建立新專家</button>
+    </div>
+    <div class="collapse" id="createExpert">
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_bp.knowledge_create') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="row g-2 mb-2">
+            <div class="col-md-3">
+              <label class="form-label small mb-0">slug（識別碼）</label>
+              <input name="slug" class="form-control" placeholder="如 seo / social" pattern="[a-z0-9][a-z0-9-]*" maxlength="40" required>
+              <small class="text-muted">小寫英數與連字號，建立後不可改</small>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small mb-0">顯示名稱（報告標題）</label>
+              <input name="label" class="form-control" placeholder="如 SEO 內容優化指引" maxlength="100" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">排序</label>
+              <input name="order" type="number" class="form-control" value="99">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">persona 指令（prompt）</label>
+            <textarea name="prompt" class="form-control font-monospace" rows="4"
+                      placeholder="你是…顧問。請從下方報告萃取（…），並嚴格遵循下方《方法論手冊》，產出…"></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">方法論手冊（playbook，Markdown）</label>
+            <textarea name="playbook" class="form-control font-monospace" rows="8"
+                      placeholder="# 方法論手冊&#10;## 1. …"></textarea>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" name="enabled" value="1" id="newEnabled" checked>
+            <label class="form-check-label" for="newEnabled">建立後啟用</label>
+          </div>
+          <button type="submit" class="btn btn-primary">建立專家</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# 專家清單 #}
+  {% if not experts %}
+  <div class="alert alert-light border">尚無專家。</div>
+  {% endif %}
+
+  {% for e in experts %}
+  <div class="card shadow-sm mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span>
+        <strong>{{ e.label }}</strong>
+        <code class="ms-2">{{ e.slug }}</code>
+        {% if e.enabled %}<span class="badge bg-success ms-2">啟用中</span>{% else %}<span class="badge bg-secondary ms-2">已停用</span>{% endif %}
+        <span class="text-muted small ms-2">排序 {{ e.order }}</span>
+      </span>
+      <span class="d-flex gap-2">
+        <form method="POST" action="{{ url_for('admin_bp.knowledge_toggle', slug=e.slug) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="enable" value="{{ '0' if e.enabled else '1' }}">
+          <button class="btn btn-sm {{ 'btn-outline-secondary' if e.enabled else 'btn-outline-success' }}" type="submit">
+            {{ '停用' if e.enabled else '啟用' }}
+          </button>
+        </form>
+        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ e.slug }}">✏️ 編輯</button>
+        <form method="POST" action="{{ url_for('admin_bp.knowledge_delete', slug=e.slug) }}"
+              onsubmit="return confirm('確定刪除專家「{{ e.label }}」？已產生的歷史延伸報告不受影響。');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-sm btn-outline-danger" type="submit">🗑</button>
+        </form>
+      </span>
+    </div>
+    <div class="collapse" id="edit-{{ e.slug }}">
+      <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_bp.knowledge_update', slug=e.slug) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="row g-2 mb-2">
+            <div class="col-md-9">
+              <label class="form-label small mb-0">顯示名稱</label>
+              <input name="label" class="form-control" value="{{ e.label }}" maxlength="100" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label small mb-0">排序</label>
+              <input name="order" type="number" class="form-control" value="{{ e.order }}">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">persona 指令（prompt）</label>
+            <textarea name="prompt" class="form-control font-monospace" rows="5">{{ e.prompt }}</textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">方法論手冊（playbook，Markdown）</label>
+            <textarea name="playbook" class="form-control font-monospace" rows="12">{{ e.playbook }}</textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">儲存手冊與指令</button>
+        </form>
+
+        <hr>
+        {# 參考文件（Phase 2：上傳 → 系統索引 → 生成時檢索注入）#}
+        <h6 class="mb-2">📎 參考文件（檢索素材）</h6>
+        <p class="text-muted small">上傳後系統自動切塊 + 向量索引；產生延伸報告時會檢索最相關片段注入。
+          生成仍用用戶 Key，索引/檢索用系統。支援 .md / .txt / .pdf。</p>
+        {% if e.documents %}
+        <ul class="list-group mb-2">
+          {% for d in e.documents %}
+          <li class="list-group-item d-flex justify-content-between align-items-center py-1">
+            <span class="small">📄 {{ d.filename }} <span class="text-muted">（{{ d.chars }} 字{% if d.indexed %}，已索引{% endif %}）</span></span>
+            <form method="POST" action="{{ url_for('admin_bp.knowledge_doc_delete', slug=e.slug, doc_id=d.id) }}"
+                  onsubmit="return confirm('刪除「{{ d.filename }}」並重建索引？');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-sm btn-outline-danger py-0" type="submit">刪除</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted small">尚無參考文件（此專家目前以純手冊生成）。</p>
+        {% endif %}
+        <div class="d-flex gap-2 align-items-center">
+          <form method="POST" action="{{ url_for('admin_bp.knowledge_doc_upload', slug=e.slug) }}"
+                enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="file" name="document" class="form-control form-control-sm" accept=".md,.txt,.pdf" required style="max-width:320px">
+            <button class="btn btn-sm btn-success" type="submit">上傳並索引</button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_bp.knowledge_reindex', slug=e.slug) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="btn btn-sm btn-outline-secondary" type="submit">🔄 重新索引</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}

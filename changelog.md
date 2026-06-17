@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-17 新增：Phase 2 知識庫文件 RAG（解耦式：系統檢索、用戶 Key 生成，未部署）
+每個專家可上傳參考文件，延伸報告生成時系統檢索最相關片段注入——對齊「檢索＝系統、生成＝用戶」分工。
+- **analysis-pipeline**：`kb_index.py`（`chunk_text` ~600 字/重疊 80；`reindex_expert` 讀 documents→切塊→`_get_embeddings`(系統 SA Vertex)→`kb_chunks`，重建前清舊塊；`retrieve` query embedding + 記憶體 cosine top-K=5，任何錯誤→回 [] 降級純手冊）。`POST /api/kb/index {expert_slug}`。`audience_reports._build_one` 生成前先系統檢索注入「知識庫參考資料」；無文件/檢索失敗→純手冊不擋生成。
+- **content-analyser**：`kb_store` documents 子集合 CRUD（存抽取純文字）；`admin_routes._extract_text`（md/txt/pdf via `pypdf`）+ 上傳/刪除/重新索引（上傳/刪除後自動觸發重建索引）；`admin_knowledge.html` 每專家文件管理；`requirements` 加 `pypdf==4.3.1`。
+- 相容：無文件專家＝Phase 1 純手冊；`kb_chunks` 為新 collection（回捲不影響）。in-memory cosine 適小語料，大語料再升 Firestore 向量索引。
+
+## 2026-06-17 新增：知識庫管理 + 延伸報告動態化（Phase 1，analysis 00030-d67 / analyser 00036-cnz）
+延伸報告從寫死三 persona 升級為「後台知識庫管理的動態專家」（模型 A：啟用的專家＝報告頁可產生的延伸報告類型）。生成仍用**用戶專案 LLM Key**，系統不負擔生成成本。
+- **後台 `/admin/knowledge`**：專家清單（啟用切換/排序/編輯/刪除）+ 建立（slug 不可改、顯示名、persona prompt、手冊 markdown）；首訪自動種子三專家（aeo/ecommerce/ads）+ 骨架方法論手冊（康泰打法待管理員補）；控制台加入口。
+- **kb_seed.py / kb_store.py**：`kb_experts`（doc_id=slug）CRUD + 冪等 seed + enabled/order。
+- **延伸報告動態化**：derive 觸發改撈「啟用專家」傳入 analysis-pipeline；存 `analyses/{aid}.derive_experts`(slug+label)；檢視/下載改動態 slug（`slug_ok` 驗證，非固定白名單）；報告頁依 derive_experts 動態列出。
+- **audience_reports.py**：改依 payload `experts[]`（{slug,label,prompt,playbook}）逐一並行生成，手冊常駐注入、主報告唯讀，本服務不持有專家定義。`/api/audience-reports` payload 加 `experts[]`（必填）。
+- 主報告 `result_markdown` 完全唯讀；`kb_experts` 為新 collection（回捲不影響舊功能）。回捲點 tag `snapshot-20260617-pre-knowledge-base`。
+- **Phase 2（另案）**：文件上傳 + 索引（Vertex 系統 SA embedding → kb_chunks）+ 生成時系統檢索 chunks 注入（解耦式 RAG：系統檢索、用戶 Key 生成）。
+
+## 2026-06-17 新增：三份延伸行動報告（AEO / 品類經理 / 投放師）（analysis 00029-qcj / analyser 00035-ngp）
+主報告是分析員視角；新功能把它翻譯成三種角色的行動指引。**分析師在主報告完成並認可後手動按鈕觸發**，唯讀主報告、結果綁母分析（aid）；主報告換＝新 aid＝重產。
+- **analysis-pipeline**：新增 `audience_reports.py`（mirror combined_report 模式，輕量、3 份並行 LLM）。三份各有 persona prompt，從主報告 markdown 對應段落摘取 + 轉成行動語言：
+  - `aeo`：AEO 指引（核心情境題清單 / 答案型內容 / AI 易摘取格式 / 待答缺口）— 摘自 §4 搜尋情境 + §3.2 實體 + §7 缺口 + 附錄。
+  - `ecommerce`：品類經理行銷指引（核心訴求 / 標題內文圖片 / 差異化 / 廣告切入）— 摘自 §5 質化 + §6 建議 + §3 分群 + §7 缺口。
+  - `ads`：投放師優化建議（受眾分眾 / 文案切角 / 圖片素材 / 關鍵字切入）— 摘自 §4 情境 + §3 分群 + §2/§7 關鍵字 + §5 語言。
+  - 單份失敗降級不影響其他兩份。app.py 新增 `POST/GET /api/audience-reports`（`audience_jobs/{job_id}`）。
+- **content-analyser**：analysis_client 加 submit_audience/get_audience_status；project_routes 加 derive 觸發（editor）、derive/status 輪詢（完成存回 `analyses.derived_reports`）、檢視、下載 .md；analysis_detail 加產生按鈕 + 輪詢 + 3 份檢視/下載；新 `derived_report.html` 檢視頁（marked.js + DOMPurify）。
+- **主報告 result_markdown 完全唯讀、未改動**；延伸報告生命週期綁母分析 aid。
+- **實測（保時捷 46 篇報告延伸，00029-qcj）**：三份齊全、各 4 段、深度接地（引用 992.2/Taycan vs Model3/800V/德中台市場/客製化）；UI 6 顆鈕、view/download 端點皆 200；主報告未變。
+
 ## 2026-06-17 新增：三項數值分析 CSV 獨立下載（核實用）+ TF-IDF 25→50（analysis 00028-ggw / analyser 00034-g6w）
 依使用者「報告中列出三個數值分析結果、編成獨立下載檔供核實；TF-IDF 放寬到 50」需求。
 - **三項 CSV 匯出**（TF-IDF / 關聯規則 / Cloud NL 實體情感）：

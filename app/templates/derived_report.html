@@ -1,0 +1,53 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.list_projects') }}">我的專案</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.project_detail', pid=pid) }}">{{ project.title }}</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=aid) }}">{{ report_title }}</a></li>
+      <li class="breadcrumb-item active">{{ kind_label }}</li>
+    </ol>
+  </nav>
+
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">{{ kind_label }}</h2>
+    <div class="d-flex gap-2">
+      <a href="{{ url_for('project_bp.analysis_detail', pid=pid, aid=aid) }}" class="btn btn-outline-secondary">↩ 回主報告</a>
+      <a href="{{ url_for('project_bp.download_derived_report', pid=pid, aid=aid, kind=kind) }}" class="btn btn-success">📥 下載 Markdown</a>
+    </div>
+  </div>
+
+  <div class="alert alert-light border small text-muted">
+    本報告由主分析報告「{{ report_title }}」延伸產生（行動導向）。主報告內容未被改動。
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body p-4">
+      <div id="markdown-output" style="max-height:80vh;overflow-y:auto"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@11.2.0/marked.min.js"
+          integrity="sha384-9Md4MlJk24bo2Ifubp0FbKhuES4/iAwyTGMeWpBG4RoHGTKygpEGEpOYhEQxbfa9" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"
+          integrity="sha384-eguRoJERj8ghOpzO//Rl7+ScQsQIR1cH+ajll7+fG+IpbNPlkZsQn9h8ccr+wPXx" crossorigin="anonymous"></script>
+  <script>
+    const md = {{ markdown | tojson }};
+    document.getElementById('markdown-output').innerHTML = DOMPurify.sanitize(marked.parse(md));
+  </script>
+  <style>
+    #markdown-output h1 { font-size: 1.6rem; margin-top: 1.5rem; }
+    #markdown-output h2 { font-size: 1.3rem; margin-top: 1.5rem; border-bottom: 1px solid #dee2e6; padding-bottom: .3rem; }
+    #markdown-output h3 { font-size: 1.1rem; margin-top: 1rem; }
+    #markdown-output table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    #markdown-output th, #markdown-output td { border: 1px solid #dee2e6; padding: .5rem .75rem; }
+    #markdown-output th { background: #f8f9fa; }
+    #markdown-output code { background: #f8f9fa; padding: .1rem .3rem; border-radius: .25rem; }
+    #markdown-output blockquote { border-left: 3px solid #dee2e6; padding-left: 1rem; color: #6c757d; }
+    #markdown-output hr { margin: 2rem 0; }
+  </style>
+
+</div>
+{% endblock %}
