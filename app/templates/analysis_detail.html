@@ -13,10 +13,23 @@
   <div class="d-flex justify-content-between align-items-center mb-4">
     <h2 class="mb-0">{{ analysis.report_title }}</h2>
     {% if analysis.status == 'completed' %}
-    <a href="{{ url_for('project_bp.download_analysis', pid=pid, aid=analysis.id) }}"
-       class="btn btn-success">
-      📥 下載 Markdown
-    </a>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <a href="{{ url_for('project_bp.download_analysis', pid=pid, aid=analysis.id) }}"
+         class="btn btn-success">
+        📥 下載 Markdown
+      </a>
+      {% if analysis.numeric_exports %}
+      <div class="btn-group" role="group" aria-label="數值分析 CSV 下載">
+        <span class="btn btn-outline-secondary disabled">📊 數值核實 CSV</span>
+        <a href="{{ url_for('project_bp.download_analysis_csv', pid=pid, aid=analysis.id, kind='tfidf') }}"
+           class="btn btn-outline-secondary">TF-IDF</a>
+        <a href="{{ url_for('project_bp.download_analysis_csv', pid=pid, aid=analysis.id, kind='association') }}"
+           class="btn btn-outline-secondary">關聯規則</a>
+        <a href="{{ url_for('project_bp.download_analysis_csv', pid=pid, aid=analysis.id, kind='entities') }}"
+           class="btn btn-outline-secondary">實體情感</a>
+      </div>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
 

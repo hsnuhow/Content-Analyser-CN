@@ -128,7 +128,7 @@ def _text_for_keywords(content: Dict) -> str:
         t = _strip_social_ui(t)
     return t
 
-TOP_KEYWORDS = 25
+TOP_KEYWORDS = 50
 TOP_PER_ARTICLE = 10
 EMBED_MODEL = "text-multilingual-embedding-002"  # 向量化模型（換模型時改這裡 + bump，快取 key 含此值會自動失效重算）
 EMBED_DIM = 768                                  # 該模型預設維度（納入快取 key，避免跨模型/維度污染）

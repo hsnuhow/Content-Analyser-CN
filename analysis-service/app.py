@@ -236,6 +236,7 @@ def get_job(job_id: str):
     }
     if job.get("status") == "completed":
         safe_fields["result_markdown"] = job.get("result_markdown", "")
+        safe_fields["numeric_exports"] = job.get("numeric_exports", {})
     if job.get("status") == "failed":
         safe_fields["error"] = job.get("log", "")
 
