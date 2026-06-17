@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Tuple
 
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
 
-DENOISE_MODEL = "gemini-2.5-flash-lite"   # flash-lite 級（Vertex SA 實測可跑）
+DENOISE_MODEL = "gemini-2.5-flash"   # flash（非 lite）：對病態對話型逐字稿較不會擴寫/runaway；成本仍小（系統付）
 DENOISE_LOCATION = "us-central1"
 DENOISE_TIMEOUT_MS = 90000
 DENOISE_MAX_TOKENS = 16384     # 大篇逐字稿輸出需足夠 token（避免 JSON 截斷）
