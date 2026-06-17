@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Tuple
 
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
 
-DENOISE_MODEL = "gemini-2.0-flash"   # 2.0-flash：無 thinking 概念、比 2.5-flash 便宜；測試其降噪品質
+DENOISE_MODEL = "gemini-2.5-flash"   # 定案：2.5-flash + thinking off（下方 conditional）；保時捷 YT 3 篇 3/3 降噪驗證通過
 DENOISE_LOCATION = "us-central1"
 DENOISE_TIMEOUT_MS = 90000
 DENOISE_MAX_TOKENS = 16384     # 大篇逐字稿輸出需足夠 token（避免 JSON 截斷）
