@@ -26,6 +26,34 @@ def _headers() -> dict:
     return {"X-API-Key": _api_key(), "Content-Type": "application/json"}
 
 
+# 終態詞彙（server 業務狀態機真正會回的終態）。消費端只應把這些當終態寫回。
+TERMINAL_STATUSES = ("completed", "failed", "cancelled")
+
+
+def _query_status(path: str, job_id: str, timeout: int) -> dict:
+    """查詢非同步 job 狀態，明確區分三類，避免把『傳輸層失敗』當成『job 失敗』：
+      - 傳輸層失敗（逾時/連線/401/5xx/未設定 URL）→ {"status":"unavailable"}（暫時，消費端應保持原狀）
+      - server 回 404（job 不存在）→ {"status":"not_found"}（真的遺失）
+      - 其餘 → 透傳 server JSON（含 completed/failed/cancelled/running/pending）
+    """
+    base = _base_url()
+    if not base:
+        return {"status": "unavailable", "error": "ANALYSIS_SERVICE_URL 未設定"}
+    try:
+        resp = requests.get(f"{base}{path}", headers=_headers(), timeout=timeout)
+        if resp.status_code == 404:
+            return {"status": "not_found", "error": f"找不到 job_id：{job_id}"}
+        if resp.status_code == 401:
+            return {"status": "unavailable", "error": "金鑰驗證失敗（401）"}
+        if resp.status_code >= 500:
+            return {"status": "unavailable", "error": f"服務暫時不可用（{resp.status_code}）"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"status": "unavailable", "error": "查詢逾時"}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
 def check_health(timeout: int = POLL_TIMEOUT) -> dict:
     """呼叫 analysis-pipeline /health，回傳狀態 dict。"""
     base = _base_url()
@@ -117,21 +145,7 @@ def submit_image_analysis(report_title: str, images: list,
 
 def get_image_analysis_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """查詢影像視覺分析任務進度與結果（result_markdown）。"""
-    base = _base_url()
-    if not base:
-        return {"status": "error", "error": "ANALYSIS_SERVICE_URL 未設定"}
-    try:
-        resp = requests.get(f"{base}/api/analyse-images/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/analyse-images/{job_id}", job_id, timeout)
 
 
 def submit_combined(report_title: str, text_markdown: str, visual_markdown: str,
@@ -166,21 +180,7 @@ def submit_combined(report_title: str, text_markdown: str, visual_markdown: str,
 
 def get_combined_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """查詢整合報告任務進度與結果（result_markdown）。"""
-    base = _base_url()
-    if not base:
-        return {"status": "error", "error": "ANALYSIS_SERVICE_URL 未設定"}
-    try:
-        resp = requests.get(f"{base}/api/synthesize-combined/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/synthesize-combined/{job_id}", job_id, timeout)
 
 
 def cancel_analysis(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
@@ -219,25 +219,9 @@ def get_job_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """查詢分析任務進度與結果。
 
     回傳：{"status": "...", "progress": N, "log": "...", ...}
+    （status 可能為 server 真實狀態，或 unavailable/not_found；見 _query_status）
     """
-    base = _base_url()
-    if not base:
-        return {"status": "error", "error": "ANALYSIS_SERVICE_URL 未設定"}
-    try:
-        resp = requests.get(
-            f"{base}/api/analyse/{job_id}",
-            headers=_headers(),
-            timeout=timeout,
-        )
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/analyse/{job_id}", job_id, timeout)
 
 
 def submit_audience(report_title: str, source_markdown: str, experts: list,
@@ -272,21 +256,7 @@ def submit_audience(report_title: str, source_markdown: str, experts: list,
 
 def get_audience_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """查詢延伸報告任務進度與結果（completed 時含 audience_reports）。"""
-    base = _base_url()
-    if not base:
-        return {"status": "error", "error": "ANALYSIS_SERVICE_URL 未設定"}
-    try:
-        resp = requests.get(f"{base}/api/audience-reports/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/audience-reports/{job_id}", job_id, timeout)
 
 
 def trigger_kb_index(expert_slug: str, timeout: int = 120) -> dict:

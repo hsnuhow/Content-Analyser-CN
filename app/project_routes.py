@@ -629,6 +629,63 @@ def submit_analysis_route(pid, project, role):
                             pid=pid, aid=analysis_ref.id))
 
 
+def _reconcile_analysis(pid: str, aid: str, analysis: dict) -> dict:
+    """對帳主分析 job（含 visual/combined）：只把 server 的 completed/failed/cancelled 當終態寫回；
+    not_found→failed（job 遺失）；unavailable（傳輸層暫時失敗）或進行中→不寫終態、保持原狀。
+    供輪詢端與報告頁載入（lazy 自癒）共用，避免「job 跑超過前端輪詢時限/離開頁面 → 結果永不寫回」。
+    就地更新傳入的 analysis dict。回 {status, progress, log}。"""
+    status = analysis.get('status', 'pending')
+    job_id = analysis.get('job_id')
+    if status not in ('pending', 'running') or not job_id:
+        return {'status': status,
+                'progress': analysis.get('progress', 100 if status == 'completed' else 0),
+                'log': analysis.get('log', '')}
+
+    kind = analysis.get('kind')
+    if kind == 'visual':
+        ps = get_image_analysis_status(job_id)
+    elif kind == 'combined':
+        ps = get_combined_status(job_id)
+    else:
+        ps = get_job_status(job_id)
+    new = ps.get('status', status)
+    progress = ps.get('progress', analysis.get('progress', 0))
+    plog = ps.get('log', analysis.get('log', ''))
+
+    # 傳輸層暫時失敗 → 保持原狀，不寫（這正是先前把仍在跑的 job 誤標 failed/凍結的根因）
+    if new == 'unavailable':
+        return {'status': status, 'progress': analysis.get('progress', 0),
+                'log': analysis.get('log', '')}
+
+    ref = (db.collection('projects').document(pid)
+           .collection('analyses').document(aid))
+    update = {'updated_at': firestore.SERVER_TIMESTAMP}
+
+    if new == 'completed':
+        update.update({'status': 'completed', 'progress': 100, 'log': plog,
+                       'result_markdown': ps.get('result_markdown', ''),
+                       'completed_at': firestore.SERVER_TIMESTAMP})
+        ne = ps.get('numeric_exports')
+        if isinstance(ne, dict) and ne:
+            update['numeric_exports'] = ne
+        ref.update(update); analysis.update(update)
+        return {'status': 'completed', 'progress': 100, 'log': plog}
+
+    if new in ('failed', 'cancelled', 'not_found'):
+        st = 'failed' if new == 'not_found' else new
+        err = (plog if new == 'cancelled'
+               else ps.get('error', plog) or ('任務遺失' if new == 'not_found' else plog))
+        update.update({'status': st, 'log': err, 'completed_at': firestore.SERVER_TIMESTAMP})
+        ref.update(update); analysis.update(update)
+        return {'status': st, 'progress': progress, 'log': err}
+
+    # 仍 running/pending → 更新進度（非終態）
+    update.update({'status': new if new in ('pending', 'running') else status,
+                   'progress': progress, 'log': plog})
+    ref.update(update); analysis.update(update)
+    return {'status': update['status'], 'progress': progress, 'log': plog}
+
+
 @bp.route('/<pid>/analyses/<aid>')
 @project_access_required(min_role='viewer')
 def analysis_detail(pid, aid, project, role):
@@ -638,7 +695,11 @@ def analysis_detail(pid, aid, project, role):
     if not doc.exists:
         abort(404)
     analysis = doc.to_dict() | {'id': aid}
-    # lazy 自癒：延伸報告 job 可能跑超過前端輪詢時限 → 載入時就地對帳補寫
+    # lazy 自癒（載入時對帳，不靠前端輪詢硬撐）：主分析 + 延伸報告各自補寫
+    try:
+        _reconcile_analysis(pid, aid, analysis)
+    except Exception as e:
+        print(f"[analysis] 對帳略過：{e}", flush=True)
     if analysis.get('derive_status') == 'running' and analysis.get('derive_job_id'):
         try:
             _reconcile_derive(pid, aid, analysis)
@@ -657,57 +718,7 @@ def analysis_status(pid, aid, project, role):
            .collection('analyses').document(aid).get())
     if not doc.exists:
         return jsonify({'error': '找不到此分析任務'}), 404
-
-    analysis = doc.to_dict()
-    status = analysis.get('status', 'pending')
-
-    # 若還在進行中，向 analysis-pipeline 查詢最新進度（視覺分析查影像端點）
-    if status in ('pending', 'running'):
-        job_id = analysis.get('job_id')
-        if job_id:
-            kind = analysis.get('kind')
-            if kind == 'visual':
-                pipeline_status = get_image_analysis_status(job_id)
-            elif kind == 'combined':
-                pipeline_status = get_combined_status(job_id)
-            else:
-                pipeline_status = get_job_status(job_id)
-            new_status = pipeline_status.get('status', status)
-            progress = pipeline_status.get('progress', analysis.get('progress', 0))
-            log = pipeline_status.get('log', analysis.get('log', ''))
-
-            update = {
-                'status': new_status,
-                'progress': progress,
-                'log': log,
-                'updated_at': firestore.SERVER_TIMESTAMP,
-            }
-            if new_status == 'completed':
-                update['result_markdown'] = pipeline_status.get('result_markdown', '')
-                # 三項數值分析 CSV 匯出（TF-IDF / 關聯規則 / Cloud NL），供獨立下載核實
-                ne = pipeline_status.get('numeric_exports')
-                if isinstance(ne, dict) and ne:
-                    update['numeric_exports'] = ne
-                update['completed_at'] = firestore.SERVER_TIMESTAMP
-            if new_status == 'failed':
-                update['log'] = pipeline_status.get('error', log)
-
-            # 更新 Firestore
-            (db.collection('projects').document(pid)
-             .collection('analyses').document(aid).update(update))
-
-            return jsonify({
-                'status': new_status,
-                'progress': progress,
-                'log': log,
-            })
-
-    # 已完成或失敗
-    return jsonify({
-        'status': status,
-        'progress': analysis.get('progress', 100 if status == 'completed' else 0),
-        'log': analysis.get('log', ''),
-    })
+    return jsonify(_reconcile_analysis(pid, aid, doc.to_dict()))
 
 
 @bp.route('/<pid>/analyses/<aid>/download')
@@ -854,6 +865,9 @@ def _reconcile_derive(pid, aid, analysis: dict) -> dict:
         return {'status': dstatus or 'none'}
     ps = get_audience_status(job_id)
     new = ps.get('status', dstatus)
+    # 傳輸層暫時失敗（unavailable）→ 保持 running、不寫終態（先前把一次逾時/503 誤判成永久失敗的根因）
+    if new == 'unavailable':
+        return {'status': 'running', 'log': ps.get('log', '')}
     if new == 'completed':
         reports = ps.get('audience_reports') or {}
         _analysis_ref(pid, aid).update({
@@ -861,8 +875,10 @@ def _reconcile_derive(pid, aid, analysis: dict) -> dict:
         analysis['derived_reports'] = reports
         analysis['derive_status'] = 'completed'
         return {'status': 'completed'}
-    if new in ('failed', 'error'):
-        err = ps.get('error', ps.get('log', '產生失敗'))
+    # 只有 server 真實終態（failed/cancelled）或 job 遺失（not_found）才標失敗
+    if new in ('failed', 'cancelled', 'not_found'):
+        err = (ps.get('error', ps.get('log', '產生失敗'))
+               if new != 'not_found' else '延伸報告任務遺失')
         _analysis_ref(pid, aid).update({
             'derive_status': 'failed', 'derive_error': err})
         analysis['derive_status'] = 'failed'
@@ -1268,7 +1284,11 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
     if not isinstance(job, dict):
         return dataset
     jstatus = job.get('status', 'crawling')
-    if jstatus == 'error':  # crawler 找不到此 job（已刪/遺失）→ 視為失敗，解除 crawling 卡死
+    # 傳輸層暫時失敗（逾時/連線/503）→ 保持 crawling、不動（先前一次網路抖動就把仍在跑的
+    #   資料集誤標 failed 的根因）。crawler 端 90 分逾時自癒（上方①）會處理真正卡死。
+    if jstatus == 'unavailable':
+        return dataset
+    if jstatus == 'not_found':  # crawler 明確回 404（job 已刪/遺失）→ 視為失敗，解除 crawling 卡死
         ds_ref.update({'status': 'failed',
                        'log': job.get('error', '爬取任務遺失'),
                        'updated_at': firestore.SERVER_TIMESTAMP})

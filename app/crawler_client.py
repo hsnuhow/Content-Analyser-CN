@@ -28,6 +28,31 @@ def _headers() -> dict:
     return {"X-API-Key": _api_key(), "Content-Type": "application/json"}
 
 
+# 終態詞彙（crawler 業務狀態機真正會回的終態）。消費端只應把這些當終態寫回。
+TERMINAL_STATUSES = ("completed", "failed", "cancelled")
+
+
+def _query_status(path: str, job_id: str, timeout: int) -> dict:
+    """查詢非同步 job 狀態，區分『傳輸層失敗(unavailable，暫時、勿當終態)』/『404(not_found)』/server 真實狀態。
+    避免一次網路抖動或 crawler 端短暫 503 就把仍在跑的 job 寫成永久 failed。"""
+    base = _crawler_url()
+    if not base:
+        return {"status": "unavailable", "error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.get(f"{base}{path}", headers=_headers(), timeout=timeout)
+        if resp.status_code == 404:
+            return {"status": "not_found", "error": f"找不到 job_id：{job_id}"}
+        if resp.status_code == 401:
+            return {"status": "unavailable", "error": "金鑰驗證失敗（401）。"}
+        if resp.status_code >= 500:
+            return {"status": "unavailable", "error": f"服務暫時不可用（{resp.status_code}）"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"status": "unavailable", "error": "查詢逾時。"}
+    except Exception as e:
+        return {"status": "unavailable", "error": str(e)}
+
+
 def submit_crawl_batch(urls: list, use_gemini: bool = False,
                        gemini_api_key: str = None,
                        timeout: int = SUBMIT_TIMEOUT) -> dict:
@@ -52,21 +77,7 @@ def submit_crawl_batch(urls: list, use_gemini: bool = False,
 
 def get_crawl_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """查詢非同步爬取任務進度與結果。"""
-    base = _crawler_url()
-    if not base:
-        return {"status": "error", "error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.get(f"{base}/api/crawl/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時。"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/crawl/{job_id}", job_id, timeout)
 
 
 def submit_research(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
@@ -88,21 +99,7 @@ def submit_research(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
 
 def get_research_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """查詢研究任務進度與結果（candidates / diagnoses）。"""
-    base = _crawler_url()
-    if not base:
-        return {"status": "error", "error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.get(f"{base}/api/research/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時。"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/research/{job_id}", job_id, timeout)
 
 
 def submit_extract_images(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
@@ -124,21 +121,7 @@ def submit_extract_images(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
 
 def get_extract_images_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """查詢影像擷取任務進度與結果（每 URL 的大圖清單）。"""
-    base = _crawler_url()
-    if not base:
-        return {"status": "error", "error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.get(f"{base}/api/extract-images/{job_id}",
-                            headers=_headers(), timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "error", "error": f"找不到 job_id：{job_id}"}
-        if resp.status_code == 401:
-            return {"status": "error", "error": "金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"status": "error", "error": "查詢逾時。"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    return _query_status(f"/api/extract-images/{job_id}", job_id, timeout)
 
 
 def cancel_crawl(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:

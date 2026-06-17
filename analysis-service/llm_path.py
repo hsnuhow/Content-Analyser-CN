@@ -141,15 +141,29 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
     failed = 0
     for batch_start, batch_results in zip(starts, batch_results_list):
         batch = contents[batch_start: batch_start + INTENT_BATCH_SIZE]
+        # ⚠️ 依 LLM 回傳的 1-based index 對位，**不可用陣列位置**：LLM 不保證回傳順序＝輸入順序、
+        #   也不保證筆數相符（可能重排/漏回/多回）。用位置會把 A 篇的搜尋意圖貼到 B 篇 url（張冠李戴）。
+        by_index = {}
+        for r in (batch_results or []):
+            try:
+                ix = int(r.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= ix <= len(batch) and ix not in by_index:
+                by_index[ix] = r
         for j in range(len(batch)):
-            article_result = batch_results[j] if j < len(batch_results) else {}
-            if article_result.get("_parse_failed"):
+            ar = by_index.get(j + 1)
+            # ar is None＝LLM 漏回這篇；_parse_failed＝整批解析失敗 → 都計為「未分析到」，避免靜默殘缺
+            if ar is None or ar.get("_parse_failed"):
                 failed += 1
+                intents = []
+            else:
+                intents = ar.get("search_intents", [])
             idx = batch_start + j
             results.append({
                 "url": contents[idx].get("url", ""),
                 "title": contents[idx].get("title", ""),
-                "search_intents": article_result.get("search_intents", []),
+                "search_intents": intents,
             })
 
     if failed:
