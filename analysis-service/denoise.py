@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Tuple
 
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
 
-DENOISE_MODEL = "gemini-2.5-flash-lite"   # flash-lite 級（Vertex SA 實測可跑）
+DENOISE_MODEL = "gemini-2.5-flash"   # 定案：2.5-flash + thinking off（下方 conditional）；保時捷 YT 3 篇 3/3 降噪驗證通過
 DENOISE_LOCATION = "us-central1"
 DENOISE_TIMEOUT_MS = 90000
 DENOISE_MAX_TOKENS = 16384     # 大篇逐字稿輸出需足夠 token（避免 JSON 截斷）
@@ -99,12 +99,16 @@ def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tupl
         # 破 JSON（同時仍封頂 DENOISE_MAX_TOKENS，擋真正 runaway）。內容本身的 runaway 由下方
         # 「cleaned > 原文 1.1×」防呆攔截。
         out_tokens = min(DENOISE_MAX_TOKENS, max(2048, int(len(text) * 2.0) + 1024))
+        cfg_kwargs = dict(temperature=0.0, max_output_tokens=out_tokens,
+                          response_mime_type="application/json",
+                          response_schema=_RESPONSE_SCHEMA)
+        # 只對 2.5 系列關閉 thinking（2.5-flash 預設 thinking 會吃掉 max_output_tokens → JSON 截斷）。
+        # 2.0-flash 無 thinking 概念，傳 thinking_config 反而會報錯，故不加。
+        if "2.5" in DENOISE_MODEL:
+            cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
         resp = client.models.generate_content(
             model=DENOISE_MODEL, contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.0, max_output_tokens=out_tokens,
-                response_mime_type="application/json",
-                response_schema=_RESPONSE_SCHEMA))
+            config=types.GenerateContentConfig(**cfg_kwargs))
         data = json.loads(_clean_json(resp.text))
         cleaned = (data.get("cleaned_text") or "").strip()
         sig = data.get("signals") or {}
