@@ -14,6 +14,8 @@
   § 6 綜合洞察與建議    → Synthesis LLM 生成
   § 附錄                → 程式直接生成
 """
+import csv
+import io
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 from urllib.parse import urlparse
@@ -23,6 +25,66 @@ TAIPEI_TZ = timezone(timedelta(hours=8))
 
 def _now_tw() -> str:
     return datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 數值分析 CSV 匯出（供獨立下載核實；與報告內 §2/§3.1/§3.2 表格並存）
+# ──────────────────────────────────────────────────────────────────────
+
+def _to_csv(header: List[str], rows: List[List]) -> str:
+    """以 csv 模組產生正確跳脫的 CSV 字串（含逗號/引號的詞自動加引號）。"""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(header)
+    w.writerows(rows)
+    return buf.getvalue()
+
+
+def build_numeric_exports(nlp_results: Dict) -> Dict[str, str]:
+    """把三項數值分析結果各自輸出成 CSV 字串，供前端獨立下載核實。
+    回 {tfidf, association, entities}（皆為 CSV 文字；無資料則為僅含表頭的空表）。
+    """
+    # 1) TF-IDF：rank, keyword, weight
+    tf = (nlp_results.get("tfidf") or {}).get("top_keywords", []) or []
+    tfidf_csv = _to_csv(
+        ["rank", "keyword", "weight"],
+        [[i, k.get("keyword", ""), k.get("weight", "")]
+         for i, k in enumerate(tf, 1)],
+    )
+
+    # 2) 關聯規則：itemset 與 rule 兩類同表（type 區分）
+    assoc = nlp_results.get("assoc") or {}
+    arows: List[List] = []
+    for s in (assoc.get("itemsets") or []):
+        arows.append(["itemset", " + ".join(s.get("items", [])), "",
+                      s.get("support", ""), "", "", s.get("count", "")])
+    for r in (assoc.get("rules") or []):
+        arows.append(["rule", r.get("antecedent", ""), r.get("consequent", ""),
+                      r.get("support", ""), r.get("confidence", ""),
+                      r.get("lift", ""), r.get("count", "")])
+    association_csv = _to_csv(
+        ["type", "antecedent_or_items", "consequent",
+         "support", "confidence", "lift", "count"],
+        arows,
+    )
+
+    # 3) Cloud NL 實體 + 情感：前段為整體情感 meta，後段為實體表（兩區塊堆疊）
+    ent = nlp_results.get("entities") or {}
+    meta_block = _to_csv(
+        ["metric", "value"],
+        [["enabled", ent.get("enabled", False)],
+         ["n_docs", ent.get("n_docs", "")],
+         ["avg_sentiment", ent.get("avg_sentiment", "")]],
+    )
+    ent_block = _to_csv(
+        ["entity", "type", "salience", "mentions"],
+        [[e.get("name", ""), e.get("type", ""), e.get("salience", ""),
+          e.get("mentions", "")] for e in (ent.get("entities") or [])],
+    )
+    entities_csv = meta_block + "\n" + ent_block
+
+    return {"tfidf": tfidf_csv, "association": association_csv,
+            "entities": entities_csv}
 
 
 def _source_type_label(src: str) -> str:
@@ -51,7 +113,7 @@ def _section_tfidf(tfidf: Dict) -> str:
         "| 排名 | 關鍵字 | 權重 |",
         "| :--- | :----- | :--- |",
     ]
-    for i, kw in enumerate(top[:25], 1):
+    for i, kw in enumerate(top[:50], 1):
         lines.append(f"| {i} | {kw['keyword']} | {kw['weight']:.4f} |")
     return "\n".join(lines)
 

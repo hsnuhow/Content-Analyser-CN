@@ -668,6 +668,10 @@ def analysis_status(pid, aid, project, role):
             }
             if new_status == 'completed':
                 update['result_markdown'] = pipeline_status.get('result_markdown', '')
+                # 三項數值分析 CSV 匯出（TF-IDF / 關聯規則 / Cloud NL），供獨立下載核實
+                ne = pipeline_status.get('numeric_exports')
+                if isinstance(ne, dict) and ne:
+                    update['numeric_exports'] = ne
                 update['completed_at'] = firestore.SERVER_TIMESTAMP
             if new_status == 'failed':
                 update['log'] = pipeline_status.get('error', log)
@@ -714,6 +718,49 @@ def download_analysis(pid, aid, project, role):
         as_attachment=True,
         download_name=filename,
         mimetype='text/markdown; charset=utf-8',
+    )
+
+
+# 三項數值分析的 CSV 下載（核實用）。kind 白名單對應 numeric_exports 的鍵。
+_NUMERIC_EXPORT_KINDS = {
+    'tfidf': 'TF-IDF關鍵字',
+    'association': '關聯規則',
+    'entities': '實體情感',
+}
+
+
+@bp.route('/<pid>/analyses/<aid>/download/<kind>.csv')
+@project_access_required(min_role='viewer')
+def download_analysis_csv(pid, aid, project, role, kind):
+    """下載單項數值分析結果的 CSV（tfidf / association / entities）。"""
+    if kind not in _NUMERIC_EXPORT_KINDS:
+        abort(404)
+    doc = (db.collection('projects').document(pid)
+           .collection('analyses').document(aid).get())
+    if not doc.exists:
+        abort(404)
+
+    analysis = doc.to_dict()
+    if analysis.get('status') != 'completed':
+        flash('報告尚未完成，無法下載。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    exports = analysis.get('numeric_exports') or {}
+    csv_text = exports.get(kind)
+    if not csv_text:
+        flash('此報告沒有數值匯出檔（可能是舊報告），請重新分析以產生。', 'warning')
+        return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
+
+    raw_title = analysis.get('report_title', 'report')
+    base = re.sub(r'[^\w\-. ]', '_', raw_title).strip()[:60]
+    filename = f"{base}_{kind}.csv"
+    # utf-8-sig（含 BOM）讓 Excel 正確顯示中文
+    stream = BytesIO(csv_text.encode('utf-8-sig'))
+    return send_file(
+        stream,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='text/csv; charset=utf-8',
     )
 
 

@@ -814,7 +814,7 @@ Content-Analyser-CN/
 |------|------|
 | `GET /health` | 探活（無需金鑰）|
 | `POST /api/analyse` | 提交分析（非同步），回傳 `{job_id}` |
-| `GET /api/analyse/{job_id}` | 查詢進度與結果 |
+| `GET /api/analyse/{job_id}` | 查詢進度與結果。completed 時回 `result_markdown` + `numeric_exports`（{tfidf,association,entities} 三份 CSV 字串，供獨立下載核實）|
 | `POST /api/analyse/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
 | `POST /api/analyse/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 | `POST /api/analyse-images` | 提交大圖視覺分析（非同步，階段②）。body `{report_title, images:[{src,alt,source_url}], llm_provider(gemini\|claude), llm_model, llm_api_key}`，回 `{job_id}` |
@@ -933,6 +933,7 @@ learned_selectors/{domain}        已學/已確認選擇器（主爬蟲 load_lea
 # analysis-pipeline 自管（獨立）：
 analysis_jobs/{job_id}            非同步任務狀態
   status / progress / log / cancel_requested / result_markdown
+  numeric_exports: map            {tfidf, association, entities}＝三份 CSV 字串（completed 時寫入，供下載核實）
 
 image_analysis_jobs/{job_id}      大圖視覺分析任務狀態（階段②，自管暫存）
   status / progress / log / report_title / n_images / n_success / n_tier3 / result_markdown
@@ -948,6 +949,7 @@ embeddings/{key}                  embedding 內容快取（key=sha256(model:dim:
 # content-analyser：analyses/{aid} 以 kind 區分三類報告
 #   （無 kind 或 text）文字分析 / 'visual' 視覺分析 / 'combined' 整合報告
 #   visual: n_images, source_dataset；combined: source_text, source_visual
+#   文字分析 completed 另存 numeric_exports{tfidf,association,entities}（三份 CSV，供 /download/<kind>.csv）
 ```
 
 ---

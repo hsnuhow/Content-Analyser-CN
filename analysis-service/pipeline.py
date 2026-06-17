@@ -277,12 +277,20 @@ def run_analysis(job_id: str, report_title: str,
             search_extent_results=se_frozen,
         )
 
+        # 三項數值分析 CSV 匯出（供獨立下載核實）。失敗不影響主報告。
+        try:
+            numeric_exports = report.build_numeric_exports(nlp_results)
+        except Exception as e:
+            _log(f"數值 CSV 匯出生成略過：{e}")
+            numeric_exports = {}
+
         _update_job(
             db, job_id,
             status="completed",
             progress=100,
             log="分析完成！",
             result_markdown=final_md,
+            numeric_exports=numeric_exports,
             completed_at=firestore.SERVER_TIMESTAMP,
         )
         _log("✅ 分析任務完成")
