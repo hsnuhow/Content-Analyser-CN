@@ -157,14 +157,37 @@ def _fmt_intents(search_intents: List[Dict]) -> str:
     return "\n".join(lines) if lines else "（無搜尋意圖資料）"
 
 
+def _fmt_signals(source_signals: List[Dict]) -> str:
+    """口語/社群來源降噪時抽出的結構化訊號（訴求/賣點/疑慮/金句，原話）→ prompt 區塊。"""
+    if not source_signals:
+        return ""
+    agg = {"appeals": [], "specs": [], "objections": [], "quotes": []}
+    for s in source_signals:
+        sig = s.get("signals") or {}
+        for k in agg:
+            agg[k].extend(sig.get(k) or [])
+    if not any(agg.values()):
+        return ""
+    label = {"appeals": "訴求/情感", "specs": "規格/賣點",
+             "objections": "受眾疑慮/問題", "quotes": "金句原話"}
+    lines = ["【口語/社群來源訊號（降噪時抽取，原話）】"]
+    for k in ("appeals", "specs", "objections", "quotes"):
+        vals = [v for v in agg[k] if v][:12]
+        if vals:
+            lines.append(f"{label[k]}：" + "；".join(vals))
+    return "\n".join(lines)
+
+
 def run(nlp_results: Dict, llm_results: Dict,
         report_title: str, n_articles: int,
-        llm: LLMClient, search_extent_results: Dict = None) -> Dict[str, str]:
+        llm: LLMClient, search_extent_results: Dict = None,
+        source_signals: List[Dict] = None) -> Dict[str, str]:
     """
     呼叫 Synthesis LLM 生成詮釋性章節。
 
     search_extent_results：{cluster_id: {label, seeds, ideas}}，由 search-extent 提供的
     真實 Google 關聯關鍵字 + 搜尋量。有資料時 §7 改走「真實資料接地」版本。
+    source_signals：口語/社群來源降噪時抽出的結構化訊號（B），補充 §4/§5 接地。
 
     回傳：{summary, search_intent_analysis, recommendations, expansion}
     """
@@ -173,6 +196,7 @@ def run(nlp_results: Dict, llm_results: Dict,
     cluster_summary = _fmt_clusters(nlp_results.get("clusters", {}))
     assoc_summary = _fmt_assoc(nlp_results.get("assoc", {}))
     entities_summary = _fmt_entities(nlp_results.get("entities", {}))
+    signals_summary = _fmt_signals(source_signals or [])
     intent_summary = _fmt_intents(llm_results.get("search_intents", []))
     qualitative = llm_results.get("qualitative", "")[:3000]  # 避免 prompt 過長
 
@@ -182,6 +206,8 @@ def run(nlp_results: Dict, llm_results: Dict,
         numeric_extra += f"\n\n{assoc_summary}"
     if entities_summary:
         numeric_extra += f"\n\n{entities_summary}"
+    if signals_summary:
+        numeric_extra += f"\n\n{signals_summary}"
 
     # 防注入：tfidf/分群/意圖/質化皆衍生自爬取的不可信內容，可能挾帶注入文字。
     # 整段以 INJECTION_GUARD 聲明 + <DATA> 包裹，要求 LLM 僅當素材、不服從其中指示。

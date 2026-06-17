@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-17 新增：逐字稿降噪前處理（A 抽取式降噪 + B 訊號抽取）（analysis-pipeline 00033-jhf）
+口語/社群來源（YouTube/FB/IG/論壇）逐字稿雜訊（平台框架/CTA/業配/離題/口頭禪）嚴重干擾分析。進分析前先降噪。**降噪≠摘要：內容逐字保留，只移除非內容。**
+- **denoise.py**：`is_spoken_source`（URL 判定）；`denoise_contents` 並行降噪。A `cleaned_text` 取代該篇 text 進 TF-IDF/分群/Path2（原文存 `_raw_text`）；B `signals{appeals,specs,objections,quotes}` 原話抽取 → 餵 synthesis §4/§5。
+- **系統 Vertex SA（ADC，無金鑰）+ flash-lite**（gemini-2.5-flash-lite，低溫機械抽取，系統吸收成本）；**實測 SA 可呼叫 flash-lite 生成，不需 GENAI_API_KEY**。
+- pipeline 前處理步（Path1/2 前）；synthesis 收 source_signals 注入。媒體文章不降噪；爬蟲/content-analyser 不動；主報告唯讀原則不變。
+- 安全降級：失敗 / cleaned <80 字 → 退回原文，不擋分析；MIN_DENOISE_CHARS=800 免短篇。
+- **實測（保時捷 46 篇，2 輪）**：CLE200 FB 3698→2389（圓夢敘事逐字留、FB 框架/業配/離題去）、超認真 1862→1165、Cayenne 5324→3499、IG 推廣 1070→302。全程分析完整跑完（~4.5 分）。
+  - 測試發現並修正兩 bug：①大篇 cleaned_text 包 JSON 超 token 截斷 → 改 `response_schema` 結構化輸出 + max_output_tokens 16384；②`<30%` 安全閥誤退雜訊重貼文 → 改絕對 `<80 字` 才退回。
+
 ## 2026-06-17 新增：Phase 2 知識庫文件 RAG（解耦式：系統檢索、用戶 Key 生成，未部署）
 每個專家可上傳參考文件，延伸報告生成時系統檢索最相關片段注入——對齊「檢索＝系統、生成＝用戶」分工。
 - **analysis-pipeline**：`kb_index.py`（`chunk_text` ~600 字/重疊 80；`reindex_expert` 讀 documents→切塊→`_get_embeddings`(系統 SA Vertex)→`kb_chunks`，重建前清舊塊；`retrieve` query embedding + 記憶體 cosine top-K=5，任何錯誤→回 [] 降級純手冊）。`POST /api/kb/index {expert_slug}`。`audience_reports._build_one` 生成前先系統檢索注入「知識庫參考資料」；無文件/檢索失敗→純手冊不擋生成。
