@@ -156,7 +156,9 @@ def denoise_contents(contents: List[Dict], project_id: str,
             if any(signals.get(k) for k in signals):
                 signals_list.append({"url": c.get("url", ""), "title": c.get("title", ""),
                                      "signals": signals})
-            log(f"  降噪：{(c.get('title') or c.get('url',''))[:30]} {len(raw)}→{len(cleaned)} 字")
+            preview = cleaned[:120].replace("\n", " ")
+            log(f"  降噪：{(c.get('title') or c.get('url',''))[:30]} {len(raw)}→{len(cleaned)} 字"
+                + (f" | 開頭：{preview}" if cleaned != raw else "（未變/退回）"))
         else:
             new_contents.append(c)
     return new_contents, signals_list
