@@ -760,7 +760,8 @@ Content-Analyser-CN/
 │   ├── app.py / crawler.py / Dockerfile / requirements.txt / README.md
 └── analysis-service/               analysis-pipeline（獨立）
     ├── app.py                      API 入口（非同步 job）
-    ├── pipeline.py                 主協調器（雙路平行 → Synthesis）
+    ├── pipeline.py                 主協調器（降噪前處理 → 雙路平行 → Synthesis）
+    ├── denoise.py                  逐字稿降噪前處理（口語/社群來源；系統 Vertex flash-lite，A 降噪+B 訊號）
     ├── nlp_path.py                 Path 1：TF-IDF + Vertex AI 分群
     ├── llm_path.py                 Path 2：搜尋意圖 + 質化分析
     ├── synthesis.py                Synthesis LLM
