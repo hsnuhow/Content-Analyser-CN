@@ -1,76 +1,138 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="container py-5">
-  <div class="row align-items-center g-5">
+{# 首頁中/EN 切換（純前端，預設中文）。內頁維持中文。 #}
+<div id="landing" data-lang="zh">
+  <div class="container py-5">
 
-    <!-- 產品行銷介紹（給初次接觸的人） -->
-    <div class="col-lg-7">
-      <h1 class="display-5 fw-bold mb-2">🔍 InsightOut</h1>
-      <p class="fs-4 text-muted mb-3">讓內容團隊看見「市場已驗證的有效方向」</p>
-      <p class="fs-5 mb-4">
-        不靠直覺猜內容。InsightOut 蒐集市場上<strong>已經紅起來</strong>的內容，
-        用 AI 拆解出「<strong>該做什麼、怎麼切角、用戶用什麼關鍵字找到它</strong>」，
-        給你一份能直接執行的內容策略報告。
-      </p>
+    <div class="d-flex justify-content-end mb-3">
+      <div class="btn-group btn-group-sm" role="group" aria-label="language">
+        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="zh" onclick="setLang('zh')">中文</button>
+        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="en" onclick="setLang('en')">English</button>
+      </div>
+    </div>
 
-      <div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
-        <div class="col">
-          <div class="p-3 border rounded h-100">
-            <div class="fs-3">📊</div>
-            <div class="fw-semibold">市場已驗證，不憑直覺</div>
-            <div class="small text-muted">分析 Google 前三頁、YouTube、IG、論壇上已經有效的內容，確認方向對不對。</div>
+    <div class="row align-items-center g-5">
+
+      <!-- 產品行銷介紹 -->
+      <div class="col-lg-7">
+        <h1 class="display-5 fw-bold mb-2">🔍 InsightOut</h1>
+
+        {# ── 中文 ── #}
+        <div class="only-zh">
+          <p class="fs-4 text-muted mb-3">讓團隊看見「市場已驗證的有效方向」</p>
+          <p class="fs-5 mb-4">
+            不靠直覺猜內容。InsightOut 蒐集市場上<strong>已經紅起來</strong>的內容，
+            用 AI 拆解出「<strong>該做什麼、怎麼切角、用戶用什麼關鍵字找到它</strong>」，
+            給你一份能直接執行的內容策略報告。
+          </p>
+          <div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">📊</div><div class="fw-semibold">市場已驗證，不憑直覺</div>
+              <div class="small text-muted">分析 Google 前三頁、YouTube、IG、論壇上已經有效的內容，確認方向對不對。</div>
+            </div></div>
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">🎯</div><div class="fw-semibold">找到差異化切點</div>
+              <div class="small text-muted">挖出「受眾在意、但對手沒說好」的落差，就是你最有競爭力的位置。</div>
+            </div></div>
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">🔑</div><div class="fw-semibold">看懂搜尋情境</div>
+              <div class="small text-muted">用戶用什麼關鍵字找到這類內容，讓你被搜尋到、被 AI 摘要選中。</div>
+            </div></div>
           </div>
+          <p class="mb-1"><strong>怎麼運作</strong></p>
+          <p class="mb-3 text-muted">
+            ① 貼上受歡迎內容的網址　→　② AI 爬取 + 數值／語意分析　→
+            ③ 拿到含「用戶搜尋情境」的洞察報告 + 給 AEO／品類經理／投放師的行動指引
+          </p>
+          <p class="small text-muted mb-0">本平台為授權團隊專用（白名單制），非開放註冊。</p>
         </div>
-        <div class="col">
-          <div class="p-3 border rounded h-100">
-            <div class="fs-3">🎯</div>
-            <div class="fw-semibold">找到差異化切點</div>
-            <div class="small text-muted">挖出「受眾在意、但對手沒說好」的落差，就是你最有競爭力的位置。</div>
+
+        {# ── English ── #}
+        <div class="only-en">
+          <p class="fs-4 text-muted mb-3">Show your team the content directions the market has already proven.</p>
+          <p class="fs-5 mb-4">
+            Stop guessing what content to make. InsightOut gathers content that's <strong>already winning</strong>
+            in the market and uses AI to break down <strong>what to make, how to angle it, and which keywords
+            people use to find it</strong> — delivered as a ready-to-act content strategy report.
+          </p>
+          <div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">📊</div><div class="fw-semibold">Market-proven, not guesswork</div>
+              <div class="small text-muted">Analyzes content already performing on Google's top results, YouTube, Instagram and forums — so you know the direction is right.</div>
+            </div></div>
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">🎯</div><div class="fw-semibold">Find your differentiation</div>
+              <div class="small text-muted">Surfaces the gaps your audience cares about but competitors haven't nailed — your most competitive angle.</div>
+            </div></div>
+            <div class="col"><div class="p-3 border rounded h-100">
+              <div class="fs-3">🔑</div><div class="fw-semibold">Understand search intent</div>
+              <div class="small text-muted">The keyword combinations people actually use to find this content — so you get found, and get picked up by AI summaries.</div>
+            </div></div>
           </div>
-        </div>
-        <div class="col">
-          <div class="p-3 border rounded h-100">
-            <div class="fs-3">🔑</div>
-            <div class="fw-semibold">看懂搜尋情境</div>
-            <div class="small text-muted">用戶用什麼關鍵字找到這類內容，讓你被搜尋到、被 AI 摘要選中。</div>
-          </div>
+          <p class="mb-1"><strong>How it works</strong></p>
+          <p class="mb-3 text-muted">
+            ① Paste URLs of popular content　→　② AI crawls it + numerical / semantic analysis　→
+            ③ Get an insight report with user search scenarios, plus action guides for AEO / category managers / ad buyers.
+          </p>
+          <p class="small text-muted mb-0">For authorized teams only (whitelist). Not open for public registration.</p>
         </div>
       </div>
 
-      <p class="mb-1"><strong>怎麼運作</strong></p>
-      <p class="mb-3 text-muted">
-        ① 貼上受歡迎內容的網址　→　② AI 爬取 + 數值／語意分析　→
-        ③ 拿到含「用戶搜尋情境」的洞察報告 + 給 AEO／品類經理／投放師的行動指引
-      </p>
-      <p class="small text-muted mb-0">本平台為授權團隊專用（白名單制），非開放註冊。</p>
-    </div>
-
-    <!-- 登入卡 -->
-    <div class="col-lg-5">
-      <div class="card text-center shadow mx-auto" style="max-width: 24rem;">
-        <div class="card-body">
-          <h2 class="card-title mb-1">🔍 InsightOut</h2>
-          <p class="text-muted small mb-4">內容策略分析平台</p>
-          <p class="card-text text-muted mb-4">請使用授權的 Google 帳號登入。</p>
-          <a href="{{ url_for('main_bp.login') }}" class="btn btn-outline-danger btn-lg w-100 mb-3">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-google me-2" viewBox="0 0 16 16">
-              <path d="M15.545 6.558a9.42 9.42 0 0 1 .139 1.626c0 2.434-.87 4.492-2.384 5.885h.002C11.978 15.292 10.158 16 8 16A8 8 0 1 1 8 0a7.689 7.689 0 0 1 5.352-2.082l-2.284 2.284A4.347 4.347 0 0 0 8 3.166c-2.087 0-3.86 1.408-4.492 3.304a4.792 4.792 0 0 0 0 3.063h.003c.635 1.893 2.405 3.301 4.492 3.301 1.078 0 2.004-.276 2.722-.764h-.003a3.702 3.702 0 0 0 1.599-2.431H8v-3.08h7.545z"/>
-            </svg>
-            Sign in with Google
-          </a>
-
-          {% if is_dev %}
-          <div class="d-grid gap-2">
-            <a href="{{ url_for('main_bp.dev_login') }}" class="btn btn-warning btn-sm">
-              ⚠️ 開發者模擬登入 (Dev Only)
+      <!-- 登入卡 -->
+      <div class="col-lg-5">
+        <div class="card text-center shadow mx-auto" style="max-width: 24rem;">
+          <div class="card-body">
+            <h2 class="card-title mb-1">🔍 InsightOut</h2>
+            <p class="text-muted small mb-4">
+              <span class="only-zh">內容策略分析平台</span>
+              <span class="only-en">Content Strategy Analysis Platform</span>
+            </p>
+            <p class="card-text text-muted mb-4">
+              <span class="only-zh">請使用授權的 Google 帳號登入。</span>
+              <span class="only-en">Please sign in with an authorized Google account.</span>
+            </p>
+            <a href="{{ url_for('main_bp.login') }}" class="btn btn-outline-danger btn-lg w-100 mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-google me-2" viewBox="0 0 16 16">
+                <path d="M15.545 6.558a9.42 9.42 0 0 1 .139 1.626c0 2.434-.87 4.492-2.384 5.885h.002C11.978 15.292 10.158 16 8 16A8 8 0 1 1 8 0a7.689 7.689 0 0 1 5.352-2.082l-2.284 2.284A4.347 4.347 0 0 0 8 3.166c-2.087 0-3.86 1.408-4.492 3.304a4.792 4.792 0 0 0 0 3.063h.003c.635 1.893 2.405 3.301 4.492 3.301 1.078 0 2.004-.276 2.722-.764h-.003a3.702 3.702 0 0 0 1.599-2.431H8v-3.08h7.545z"/>
+              </svg>
+              Sign in with Google
             </a>
+
+            {% if is_dev %}
+            <div class="d-grid gap-2">
+              <a href="{{ url_for('main_bp.dev_login') }}" class="btn btn-warning btn-sm">
+                ⚠️ 開發者模擬登入 (Dev Only)
+              </a>
+            </div>
+            {% endif %}
           </div>
-          {% endif %}
         </div>
       </div>
-    </div>
 
+    </div>
   </div>
 </div>
+
+<style>
+  #landing[data-lang="zh"] .only-en { display: none; }
+  #landing[data-lang="en"] .only-zh { display: none; }
+  .lang-btn.active { background-color: #6c757d; color: #fff; }
+</style>
+<script>
+  function setLang(l) {
+    var root = document.getElementById('landing');
+    root.setAttribute('data-lang', l);
+    document.querySelectorAll('.lang-btn').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-lang') === l);
+    });
+    try { localStorage.setItem('insightout_lang', l); } catch (e) {}
+  }
+  // 記住上次選擇（預設中文）
+  (function () {
+    var saved = 'zh';
+    try { saved = localStorage.getItem('insightout_lang') || 'zh'; } catch (e) {}
+    setLang(saved === 'en' ? 'en' : 'zh');
+  })();
+</script>
 {% endblock %}
