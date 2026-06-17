@@ -354,3 +354,16 @@ Phase 0（清理地基）
   → 改進：放寬 `research._classify_failure` / acceptance，對「單一穩定 class、字數足量、非列表」直接收為候選。
 本期暫以人工加 SITE_TEMPLATE（branch `feat/porsche-templates`）+ 後台核准 learned_selectors 補上；
 agent 自動化留待此 backlog。相關檔：`crawler-service/research.py`、`site_learning.py`。
+
+### 待開發功能 10：全面 Token 用量記帳（2026-06-17 提出）
+**需求**：記錄**所有** LLM token 消耗（不只降噪），可累計、可在後台檢視，掌握成本。
+**範圍**：
+- 涵蓋所有呼叫點：分析 Synthesis / 六面向質化 / 搜尋意圖（用戶 Key）、延伸報告（用戶 Key）、
+  逐字稿降噪（系統 Vertex flash）、KB 索引/檢索 embedding（系統 Vertex）、爬蟲 selector 輔助（系統 GENAI）。
+- 來源：各 LLM/embedding 回應的 `usage_metadata`（prompt/candidates/total token count）。
+- 記錄：寫入 Firestore（沿用 `users/{email}/usage_log` 或新 `token_usage` 子集合），標注
+  service / 呼叫類型 / 模型 / 是否系統或用戶 Key / project_id / token 數。
+- 後台：`/admin/usage` 擴充——依服務/模型/用戶/專案彙總 token 與估算金額（系統付 vs 用戶付分開）。
+- 注意：分析/降噪在 analysis-pipeline，需把 token 數隨 job 狀態回傳或自行寫 Firestore；
+  content-analyser 端彙整。先從「每次呼叫 log usage_metadata」起步，再做持久化與後台彙總。
+**狀態**：待開發（使用者 2026-06-17 要求列入；降噪當時已先口頭估算 ~6–8k tokens/篇）。
