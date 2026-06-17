@@ -101,7 +101,7 @@
       </div>
       <script>
       (function dpoll(n){
-        if(n>=120){return;}
+        if(n>=300){ var el=document.getElementById('derive-log'); if(el){el.textContent='仍在產生中，請稍後重新整理頁面查看結果。';} return; }
         fetch("{{ url_for('project_bp.derive_status', pid=pid, aid=analysis.id) }}")
           .then(function(r){return r.json();}).then(function(d){
             if(d.status==='completed'||d.status==='failed'){location.reload();}

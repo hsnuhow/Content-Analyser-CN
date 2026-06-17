@@ -630,6 +630,12 @@ def analysis_detail(pid, aid, project, role):
     if not doc.exists:
         abort(404)
     analysis = doc.to_dict() | {'id': aid}
+    # lazy 自癒：延伸報告 job 可能跑超過前端輪詢時限 → 載入時就地對帳補寫
+    if analysis.get('derive_status') == 'running' and analysis.get('derive_job_id'):
+        try:
+            _reconcile_derive(pid, aid, analysis)
+        except Exception as e:
+            print(f"[derive] 對帳略過：{e}", flush=True)
     return render_template('analysis_detail.html',
                            project=project, pid=pid,
                            analysis=analysis, role=role)
@@ -830,6 +836,33 @@ def derive_audience_reports(pid, aid, project, role):
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=aid))
 
 
+def _reconcile_derive(pid, aid, analysis: dict) -> dict:
+    """就地對帳延伸報告：若卡 running 但 job 已完成/失敗，補寫 analyses doc。
+    回傳 {status, log?, error?}。供前端輪詢與報告頁載入（lazy 自癒）共用，
+    避免「job 跑超過前端輪詢時限 → 結果永不寫回」的卡死。"""
+    dstatus = analysis.get('derive_status')
+    job_id = analysis.get('derive_job_id')
+    if dstatus != 'running' or not job_id:
+        return {'status': dstatus or 'none'}
+    ps = get_audience_status(job_id)
+    new = ps.get('status', dstatus)
+    if new == 'completed':
+        reports = ps.get('audience_reports') or {}
+        _analysis_ref(pid, aid).update({
+            'derived_reports': reports, 'derive_status': 'completed'})
+        analysis['derived_reports'] = reports
+        analysis['derive_status'] = 'completed'
+        return {'status': 'completed'}
+    if new in ('failed', 'error'):
+        err = ps.get('error', ps.get('log', '產生失敗'))
+        _analysis_ref(pid, aid).update({
+            'derive_status': 'failed', 'derive_error': err})
+        analysis['derive_status'] = 'failed'
+        analysis['derive_error'] = err
+        return {'status': 'failed', 'error': err}
+    return {'status': 'running', 'log': ps.get('log', '')}
+
+
 @bp.route('/<pid>/analyses/<aid>/derive/status')
 @project_access_required(min_role='viewer')
 def derive_status(pid, aid, project, role):
@@ -837,29 +870,7 @@ def derive_status(pid, aid, project, role):
     doc = _analysis_ref(pid, aid).get()
     if not doc.exists:
         return jsonify({'status': 'error', 'error': '找不到分析'}), 404
-    analysis = doc.to_dict()
-    dstatus = analysis.get('derive_status')
-    job_id = analysis.get('derive_job_id')
-
-    if dstatus == 'running' and job_id:
-        ps = get_audience_status(job_id)
-        new = ps.get('status', dstatus)
-        if new == 'completed':
-            reports = ps.get('audience_reports') or {}
-            _analysis_ref(pid, aid).update({
-                'derived_reports': reports,
-                'derive_status': 'completed',
-            })
-            return jsonify({'status': 'completed'})
-        if new in ('failed', 'error'):
-            _analysis_ref(pid, aid).update({
-                'derive_status': 'failed',
-                'derive_error': ps.get('error', ps.get('log', '產生失敗')),
-            })
-            return jsonify({'status': 'failed', 'error': ps.get('error', '')})
-        return jsonify({'status': 'running', 'log': ps.get('log', '')})
-
-    return jsonify({'status': dstatus or 'none'})
+    return jsonify(_reconcile_derive(pid, aid, doc.to_dict()))
 
 
 def _derived_label(analysis, slug):
