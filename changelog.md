@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-17 新增：三項數值分析 CSV 獨立下載（核實用）+ TF-IDF 25→50（analysis 00028-ggw / analyser 00034-g6w）
+依使用者「報告中列出三個數值分析結果、編成獨立下載檔供核實；TF-IDF 放寬到 50」需求。
+- **三項 CSV 匯出**（TF-IDF / 關聯規則 / Cloud NL 實體情感）：
+  - analysis-pipeline `report.build_numeric_exports(nlp_results)` 產 3 份 CSV 字串（csv 模組正確跳脫）：
+    `tfidf`=rank/keyword/weight；`association`=itemset+rule 同表（type 區分，support/confidence/lift/count）；
+    `entities`=情感 meta（enabled/n_docs/avg_sentiment）+ 實體表（entity/type/salience/mentions）兩區塊堆疊。
+  - `pipeline.py` 完成時存 `analysis_jobs/{job_id}.numeric_exports`（map）；`app.py` GET completed 回傳 numeric_exports（passthrough，client 自動帶過）。
+  - content-analyser 輪詢完成存 `analyses/{aid}.numeric_exports`；新增路由 `GET /<pid>/analyses/<aid>/download/<kind>.csv`（kind 白名單 tfidf/association/entities，**utf-8-sig BOM 供 Excel 正確顯示中文**）；analysis_detail 加 3 顆 CSV 下載鈕（僅 numeric_exports 存在時顯示，舊報告相容）。
+  - 報告內 §2/§3.1/§3.2 表格維持不變 → 人看報告、Excel 核實數值，並存。
+- **TF-IDF TOP_KEYWORDS 25→50**（§2 表格同步）：關鍵字更完整。ASSOC_VOCAB（30）、Cloud NL ents（25）不變。
+- **實測（保時捷 46 篇，00028-ggw）**：§2=50 列；numeric_exports 三鍵齊全（tfidf 50 列/association 35 列/entities meta+實體）；UI 3 顆鈕、三個下載端點皆 200 text/csv；快取 46/46 命中。
+
 ## 2026-06-16 補強：社群 UI 停用詞（依來源條件套用）+ Cloud NL 實體過濾媒體名（00027-jdv）
 - **社群/論壇 UI 雜訊條件移除**：回覆/留言/回文/樓主/小編/轉發/推文/引用/私訊/鄉民/網友… **只在社群/論壇來源**去除，媒體站不動（媒體文章的「回覆」可能是內容）。因 dataset items 的 source_type 多半未填，改**依 URL 網域判定**（`_SOCIAL_DOMAINS`：facebook/instagram/threads/dcard/mobile01/ptt/巴哈/eyny…）。`_text_for_keywords` 只對社群來源 `_strip_social_ui`；embedding 仍用原始文本（快取 key 不受影響）。run_tfidf/run_association 共用。
 - **§3.2 Cloud NL 實體過濾媒體名**：Cloud NL 獨立於 jieba 抽實體，「地球黃金線」等媒體名會以實體漏進 §3.2（先前 jieba 側過濾管不到）。run_entities_sentiment 丟掉名稱屬 _MEDIA_NAMES/_STOPWORDS 或被媒體名包含（碎片如「黃金」）的實體。
