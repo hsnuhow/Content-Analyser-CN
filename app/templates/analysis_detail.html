@@ -62,6 +62,74 @@
   </div>
   {% endif %}
 
+  {# 延伸行動報告（AEO / 品類經理 / 投放師）：主報告完成並認可後手動觸發 #}
+  {% if analysis.status == 'completed' and analysis.kind != 'visual' %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <span class="fw-semibold">✨ 延伸行動報告</span>
+      <small class="text-muted">把分析翻譯成三種角色的行動指引</small>
+    </div>
+    <div class="card-body">
+      {% if analysis.derived_reports %}
+      {% set labels = {'aeo':'🔍 AEO 指引（被 AI 摘要選取）','ecommerce':'🛒 品類經理行銷指引','ads':'📣 投放師優化建議'} %}
+      <div class="d-flex flex-column gap-2">
+        {% for k in ['aeo','ecommerce','ads'] %}
+        {% if analysis.derived_reports.get(k) %}
+        <div class="d-flex justify-content-between align-items-center border rounded p-2">
+          <span>{{ labels[k] }}</span>
+          <span class="d-flex gap-2">
+            <a href="{{ url_for('project_bp.view_derived_report', pid=pid, aid=analysis.id, kind=k) }}"
+               class="btn btn-sm btn-outline-primary">檢視</a>
+            <a href="{{ url_for('project_bp.download_derived_report', pid=pid, aid=analysis.id, kind=k) }}"
+               class="btn btn-sm btn-outline-secondary">📥 .md</a>
+          </span>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% if role in ('owner','editor') %}
+      <form method="POST" action="{{ url_for('project_bp.derive_audience_reports', pid=pid, aid=analysis.id) }}"
+            class="mt-3" onsubmit="return confirm('重新產生會覆蓋現有三份延伸報告，確定？');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-sm btn-outline-secondary" type="submit">🔄 重新產生</button>
+      </form>
+      {% endif %}
+
+      {% elif analysis.derive_status == 'running' %}
+      <div class="d-flex align-items-center gap-2">
+        <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+        <span id="derive-log" class="text-muted small">產生延伸報告中（三份並行，約需一分鐘）...</span>
+      </div>
+      <script>
+      (function dpoll(n){
+        if(n>=120){return;}
+        fetch("{{ url_for('project_bp.derive_status', pid=pid, aid=analysis.id) }}")
+          .then(function(r){return r.json();}).then(function(d){
+            if(d.status==='completed'||d.status==='failed'){location.reload();}
+            else{var el=document.getElementById('derive-log'); if(el&&d.log){el.textContent=d.log;} setTimeout(function(){dpoll(n+1);},3000);}
+          }).catch(function(){setTimeout(function(){dpoll(n+1);},5000);});
+      })(0);
+      </script>
+
+      {% else %}
+      <p class="text-muted small mb-3">主報告是給分析師看的數據與洞察。確認報告無誤後，可一鍵把它翻譯成三種角色的行動指引：
+        🔍 <strong>AEO 指引</strong>（增加被 AI 摘要選取的機率）· 🛒 <strong>品類經理行銷指引</strong> · 📣 <strong>投放師優化建議</strong>。</p>
+      {% if analysis.derive_status == 'failed' %}
+      <div class="alert alert-warning py-2 small">上次產生失敗：{{ analysis.derive_error }}</div>
+      {% endif %}
+      {% if role in ('owner','editor') %}
+      <form method="POST" action="{{ url_for('project_bp.derive_audience_reports', pid=pid, aid=analysis.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-primary" type="submit">✨ 產生行動指引（3 份）</button>
+      </form>
+      {% else %}
+      <p class="text-muted small mb-0">（需 Editor 以上權限才能產生）</p>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
   {# 進度區塊（未完成時顯示）#}
   {% if analysis.status in ('pending', 'running') %}
   <div id="progress-section" class="card shadow-sm mb-4">

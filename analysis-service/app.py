@@ -26,6 +26,7 @@ from flask import Flask, request, jsonify
 from pipeline import run_analysis, JOBS_COLLECTION
 from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLECTION
 from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
+from audience_reports import run_audience_reports, JOBS_COLLECTION as AUDIENCE_JOBS_COLLECTION
 from auth import is_authorized
 
 SERVICE_VERSION = "1.2.0"
@@ -397,6 +398,77 @@ def get_combined_job(job_id: str):
     }
     if job.get("status") == "completed":
         safe["result_markdown"] = job.get("result_markdown", "")
+    if job.get("status") == "failed":
+        safe["error"] = job.get("log", "")
+    return jsonify(safe), 200
+
+
+@app.route("/api/audience-reports", methods=["POST"])
+@require_api_key
+def audience_reports_submit():
+    """提交三份延伸行動報告（非同步）：AEO / 品類經理 / 投放師。
+
+    Request: {report_title, source_markdown, llm_provider, llm_model, llm_api_key, temperature?}
+    Response: {"job_id": "...", "status": "pending"}
+    """
+    _reap()  # reap-on-submit
+    data = request.get_json(silent=True) or {}
+    report_title = (data.get("report_title") or "").strip()
+    source_md = data.get("source_markdown") or ""
+    if not report_title:
+        return jsonify({"status": "failed", "error": "缺少 report_title"}), 400
+    if not source_md.strip():
+        return jsonify({"status": "failed", "error": "缺少 source_markdown（主報告內容）"}), 400
+    llm_provider = (data.get("llm_provider") or "gemini").strip().lower()
+    llm_model = (data.get("llm_model") or "gemini-2.5-flash").strip()
+    llm_api_key = (data.get("llm_api_key") or "").strip()
+    try:
+        temperature = max(0.0, min(1.0, float(data.get("temperature", 0.4))))
+    except (TypeError, ValueError):
+        temperature = 0.4
+    if not llm_api_key:
+        return jsonify({"status": "failed",
+                        "error": "缺少 llm_api_key。請在 Project 設定中配置 LLM API Key。"}), 400
+    if llm_provider not in ("gemini", "claude", "openai"):
+        return jsonify({"status": "failed",
+                        "error": f"不支援的 llm_provider：'{llm_provider}'。"}), 400
+
+    job_id = str(uuid.uuid4())
+    db.collection(AUDIENCE_JOBS_COLLECTION).document(job_id).set({
+        "job_id": job_id, "status": "pending", "progress": 0,
+        "log": "任務已建立，等待產生延伸報告...", "report_title": report_title,
+        "llm_provider": llm_provider, "llm_model": llm_model,
+        "audience_reports": None,
+        "created_at": firestore.SERVER_TIMESTAMP,
+        "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
+    })
+    llm_cfg = {"provider": llm_provider, "model": llm_model,
+               "api_key": llm_api_key, "temperature": temperature,
+               "thinking": bool(data.get("thinking", False))}
+    threading.Thread(target=run_audience_reports,
+                     args=(job_id, report_title, source_md, llm_cfg, db),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/audience-reports/<job_id>", methods=["GET"])
+@require_api_key
+def get_audience_job(job_id: str):
+    """查詢延伸報告任務進度與結果（不回傳 llm_api_key）。"""
+    try:
+        doc = db.collection(AUDIENCE_JOBS_COLLECTION).document(job_id).get()
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"Firestore 查詢失敗：{e}"}), 500
+    if not doc.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+    job = doc.to_dict()
+    safe = {
+        "job_id": job.get("job_id"), "status": job.get("status"),
+        "progress": job.get("progress", 0), "log": job.get("log", ""),
+        "report_title": job.get("report_title"),
+    }
+    if job.get("status") == "completed":
+        safe["audience_reports"] = job.get("audience_reports", {})
     if job.get("status") == "failed":
         safe["error"] = job.get("log", "")
     return jsonify(safe), 200
