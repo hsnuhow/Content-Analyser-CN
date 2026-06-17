@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-17 新增：登入頁產品行銷文案 + 專案頁方法論/使用說明（content-analyser 00040-jth）
+- 登入頁（login.html）：landing 式行銷 hero，給初次接觸者——產品定位「讓內容團隊看見市場已驗證的有效方向」、三賣點（市場驗證/差異化切點/搜尋情境）、運作三步、白名單註記；保留 Google 登入卡。
+- 專案頁（projects.html）：頂部加可收合面板——方法論（市場基準線/差異化切點）+ 四步開始 + 選材小建議。給已登入要開始用的人。
+- 中英文（產品名英文、訴求中文）；純前端文案，不動後端/路由/權限。
+
 ## 2026-06-17 新增：逐字稿降噪前處理（A 抽取式降噪 + B 訊號抽取）（analysis-pipeline 00033-jhf）
 口語/社群來源（YouTube/FB/IG/論壇）逐字稿雜訊（平台框架/CTA/業配/離題/口頭禪）嚴重干擾分析。進分析前先降噪。**降噪≠摘要：內容逐字保留，只移除非內容。**
 - **denoise.py**：`is_spoken_source`（URL 判定）；`denoise_contents` 並行降噪。A `cleaned_text` 取代該篇 text 進 TF-IDF/分群/Path2（原文存 `_raw_text`）；B `signals{appeals,specs,objections,quotes}` 原話抽取 → 餵 synthesis §4/§5。

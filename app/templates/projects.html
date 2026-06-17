@@ -1,6 +1,43 @@
 {% extends "layout.html" %}
 {% block content %}
 <div class="container py-4">
+
+  {# 方法論 + 使用說明（給已登入、要開始用的人；可收合）#}
+  <div class="card bg-light border mb-4">
+    <div class="card-body py-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <h6 class="fw-bold mb-0">🧭 怎麼用 InsightOut 找到有效內容</h6>
+        <button class="btn btn-sm btn-link text-decoration-none p-0" type="button"
+                data-bs-toggle="collapse" data-bs-target="#howtoPanel">展開／收合</button>
+      </div>
+      <div class="collapse show" id="howtoPanel">
+        <hr class="my-2">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <div class="small fw-semibold mb-1">我們的方法論</div>
+            <ul class="small mb-0">
+              <li><strong>市場基準線</strong>：會紅代表需求真實存在 → 拆解共同模式，知道「做什麼方向對」。</li>
+              <li><strong>差異化切點</strong>：找「受眾在意、卻沒被說好」的落差 → 這就是你的競爭位置。</li>
+            </ul>
+          </div>
+          <div class="col-md-6">
+            <div class="small fw-semibold mb-1">四步開始</div>
+            <ol class="small mb-0">
+              <li>建專案，填你的 LLM API Key（Gemini／Claude 自備）</li>
+              <li>爬一批受歡迎內容的網址，成為資料集</li>
+              <li>一鍵送分析</li>
+              <li>看報告 + 一鍵產生延伸行動指引（AEO／品類經理／投放師）</li>
+            </ol>
+          </div>
+        </div>
+        <div class="small text-muted mt-2">
+          💡 挑「市場已驗證表現好」的內容（Google 前三頁、高互動影片／貼文）；同一主題多來源更準；
+          報告裡<strong>「用戶搜尋情境」與「內容缺口」</strong>這兩段最值得先看。
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="d-flex justify-content-between align-items-center mb-4">
     <h2 class="mb-0">{% if is_admin %}所有分析專案 <span class="badge bg-warning text-dark align-middle">管理員：全站視角</span>{% else %}我的分析專案{% endif %}</h2>
     <a href="{{ url_for('project_bp.new_project') }}" class="btn btn-primary">

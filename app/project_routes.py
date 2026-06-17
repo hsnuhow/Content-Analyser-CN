@@ -392,8 +392,13 @@ def add_member(pid, project, role):
     if member_role not in ('editor', 'viewer'):
         member_role = 'viewer'
 
+    # ⚠️ 不可用 f'members.{email}' 欄位路徑：email 含「.」會被 Firestore 當巢狀路徑切開
+    #   （members.user@gmail.com → members→"user@gmail"→"com"），導致成員 key 錯誤、共編者看不到專案。
+    #   改 read-modify-write，email 作為 map 的字面 key。
+    members = dict(project.get('members', {}) or {})
+    members[member_email] = member_role
     db.collection('projects').document(pid).update({
-        f'members.{member_email}': member_role,
+        'members': members,
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
     flash(f'已新增成員 {member_email}（{member_role}）。', 'success')
@@ -405,8 +410,11 @@ def add_member(pid, project, role):
 def remove_member(pid, project, role):
     member_email = request.form.get('email', '').strip().lower()
     if member_email:
+        # 同 add_member：以 read-modify-write 移除字面 key（避免 email 的「.」被當欄位路徑）
+        members = dict(project.get('members', {}) or {})
+        members.pop(member_email, None)
         db.collection('projects').document(pid).update({
-            f'members.{member_email}': firestore.DELETE_FIELD,
+            'members': members,
             'updated_at': firestore.SERVER_TIMESTAMP,
         })
         flash(f'已移除成員 {member_email}。', 'success')
