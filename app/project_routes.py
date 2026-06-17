@@ -26,8 +26,8 @@ from flask import (Blueprint, render_template, request, jsonify,
 from firebase_admin import firestore
 from io import BytesIO
 
-from .services import db, get_admin_email, ensure_user
-from .auth_guards import login_required
+from .services import db, get_admin_email
+from .auth_guards import login_required, refresh_whitelist_status
 from .analysis_client import (submit_analysis, get_job_status, cancel_analysis,
                               submit_image_analysis, get_image_analysis_status,
                               submit_combined, get_combined_status,
@@ -126,13 +126,10 @@ def project_access_required(min_role: str = 'viewer'):
         def decorated(*args, **kwargs):
             if 'user' not in session:
                 return redirect(url_for('main_bp.auth'))
-            # 白名單 gate：非 approved（pending/rejected）不得訪問任何專案資源，
-            # 即使其 email 被列為某專案 member。
-            if session.get('whitelist_status') != 'approved':
-                email = session['user'].get('email', '')
-                if ensure_user(email) != 'approved':
-                    return redirect(url_for('main_bp.pending'))
-                session['whitelist_status'] = 'approved'
+            # 白名單 gate（帶 TTL 回查，撤銷及時生效）：非 approved（pending/rejected）
+            # 不得訪問任何專案資源，即使其 email 被列為某專案 member。
+            if refresh_whitelist_status() != 'approved':
+                return redirect(url_for('main_bp.pending'))
             pid = kwargs.get('pid')
             project = get_project(pid)
             if not project:
@@ -314,9 +311,11 @@ def _fetch_provider_models(provider: str, api_key: str) -> list:
         return []
     try:
         if provider == 'gemini':
+            # 金鑰以 header（x-goog-api-key）傳送，不放 URL query：
+            # 避免網路例外字串夾帶含金鑰的完整 URL 而落入 Cloud Run log。
             r = requests.get(
                 'https://generativelanguage.googleapis.com/v1beta/models',
-                params={'key': api_key}, timeout=10)
+                headers={'x-goog-api-key': api_key}, timeout=10)
             if r.status_code != 200:
                 return []
             out = []
@@ -1077,6 +1076,13 @@ def create_manual_dataset(pid, project, role):
         return redirect(url_for('project_bp.project_detail', pid=pid))
     if not raw:
         flash('請貼上 JSON 或上傳檔案。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+
+    # 早期長度防護（在 json.loads 前）：擋超大貼上內容耗記憶體；給明確訊息而非 413。
+    # 全域另有 MAX_CONTENT_LENGTH=16MB 作為 body 硬上限（見 app/__init__.py）。
+    _MAX_ITEMS_JSON = 12 * 1024 * 1024  # 12MB 文字
+    if len(raw) > _MAX_ITEMS_JSON:
+        flash('貼上內容過大（上限約 12MB），請拆分後再匯入。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
     try:

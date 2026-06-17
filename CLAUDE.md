@@ -912,6 +912,8 @@ projects/{project_id}             頂層，多人協作
 
 api_keys/{key_id}                 外部工具金鑰（Admin 管理）
   name / key_hash / permissions / is_active / call_count
+  quota_day / quota_count          每日配額計數（UTC 日界重置；超量拒絕，成本防護）
+  daily_limit                      選用：覆寫該把金鑰每日上限（未設＝預設 1000；系統金鑰不受限）
 
 # content-crawler 自管（獨立）：
 crawl_jobs/{job_id}               非同步爬取任務狀態（job 文件保持輕量）

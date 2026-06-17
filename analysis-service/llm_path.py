@@ -103,7 +103,8 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient,
 
 def run_search_intent(contents: List[Dict], llm: LLMClient,
                       log_fn: Optional[Callable] = None,
-                      intent_chars: int = MAX_TEXT_FOR_INTENT) -> List[Dict]:
+                      intent_chars: int = MAX_TEXT_FOR_INTENT,
+                      should_stop: Optional[Callable[[], bool]] = None) -> List[Dict]:
     """逐批萃取每篇文章的搜尋意圖。
 
     回傳：[{url, title, search_intents: [{scenario, keywords, label}]}]
@@ -119,6 +120,10 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
     lock = threading.Lock()
 
     def _work(batch: List[Dict]) -> List[Dict]:
+        # 合作式停止：上層逾時已放棄等待時，仍排隊中的批次直接跳過，不再燒 LLM token
+        # （結果註定被丟棄）。ex.map 會把這些篇計為「未分析到」，與既有漏回處理一致。
+        if should_stop and should_stop():
+            return []
         res = _extract_intent_batch(batch, llm, intent_chars=intent_chars)
         if log_fn:
             with lock:
@@ -184,7 +189,8 @@ def run_search_intent(contents: List[Dict], llm: LLMClient,
 
 def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
                              qual_chars: int = MAX_TEXT_FOR_QUAL,
-                             max_articles: int = MAX_ARTICLES_FOR_QUAL) -> str:
+                             max_articles: int = MAX_ARTICLES_FOR_QUAL,
+                             should_stop: Optional[Callable[[], bool]] = None) -> str:
     """跨文章六面向質化分析（最多取前 max_articles 篇）。
 
     回傳：Markdown 格式的分析文字（六個 ### 段落）
@@ -224,6 +230,9 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
 ### 受眾輪廓與平台分工
 目標讀者是誰？不同平台（雜誌、Dcard、IG、Threads 等）各自承擔什麼角色？"""
 
+    # 合作式停止：上層已逾時放棄等待時，不再發出這次昂貴呼叫（結果註定被丟棄）。
+    if should_stop and should_stop():
+        return "（質化分析逾時中止）"
     try:
         return llm.generate(prompt, temperature=0.3, max_tokens=4096)
     except Exception as e:
@@ -237,10 +246,13 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
 
 def run(contents: List[Dict], llm: LLMClient,
         log_fn: Optional[Callable] = None,
-        input_scale: str = "standard") -> Dict[str, Any]:
+        input_scale: str = "standard",
+        should_stop: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
     """Path 2 主函式：搜尋意圖萃取 + 六面向質化分析。
 
     input_scale（B 輸入內容量）：standard / large / max，放寬每篇字數與篇數上限。
+    should_stop：合作式停止回呼（上層逾時放棄等待時設為 True）→ 仍排隊的 LLM 呼叫跳過，
+                 避免「結果註定被丟棄卻仍燒 token」。預設 None＝不改變行為。
     """
     limits = _resolve_limits(input_scale)
 
@@ -259,12 +271,14 @@ def run(contents: List[Dict], llm: LLMClient,
 
     def _intent():
         return run_search_intent(contents, llm, log_fn=log_fn,
-                                 intent_chars=limits["intent_chars"])
+                                 intent_chars=limits["intent_chars"],
+                                 should_stop=should_stop)
 
     def _qual():
         return run_qualitative_analysis(contents, llm,
                                         qual_chars=limits["qual_chars"],
-                                        max_articles=limits["max_articles"])
+                                        max_articles=limits["max_articles"],
+                                        should_stop=should_stop)
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_intent = ex.submit(_intent)

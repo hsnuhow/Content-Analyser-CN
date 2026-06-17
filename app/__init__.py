@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from flask import Flask
 from authlib.integrations.flask_client import OAuth
 from flask_wtf.csrf import CSRFProtect
@@ -32,6 +33,15 @@ def create_app():
     app.config['GOOGLE_CLIENT_ID'] = os.environ.get('GOOGLE_CLIENT_ID')
     app.config['GOOGLE_CLIENT_SECRET'] = os.environ.get('GOOGLE_CLIENT_SECRET')
 
+    # 安全：限制請求 body 上限，擋「貼上超大 JSON / 上傳大檔」在解析階段吃滿 1Gi 記憶體 OOM。
+    # （手動匯入 items_json 表單欄位原本無上限，Werkzeug 3.0.x 預設亦無 body 上限。）
+    # 16MB 對合法貼上/上傳綽綽有餘（檔案另有 3MB 路由層上限、分析另有 100 篇/5M 字元上限）。
+    app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+
+    # 安全：session 設有限壽命 + 每次請求續期。配合 auth_guards 的白名單 TTL 回查，
+    # 縮短「admin 撤銷後既有 session 仍有效」的視窗（避免無到期時間的永久 cookie）。
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
     # [Fix] Session Cookie Configuration for Preview/Dev
     # In production (Cloud Run), we want Secure cookies.
     # In development (Preview), we need to relax this to allow cookies over HTTP or complex proxies.
@@ -59,6 +69,13 @@ def create_app():
         server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
         client_kwargs={'scope': 'openid email profile'}
     )
+
+    # 每次請求標記 session 為 permanent → 套用 PERMANENT_SESSION_LIFETIME 並滑動續期
+    # （閒置逾 12 小時自動失效；配合白名單 TTL 回查使撤銷及時生效）。
+    @app.before_request
+    def _make_session_permanent():
+        from flask import session
+        session.permanent = True
 
     # 全域 context processor：所有 blueprint 的模板都能取得 user / is_admin
     # （原本註冊在 main_bp，導致 project_bp / admin_bp 頁面 navbar 顯示異常）

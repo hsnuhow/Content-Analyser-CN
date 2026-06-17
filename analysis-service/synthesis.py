@@ -50,10 +50,13 @@ def label_clusters(clusters_dict: Dict, llm: LLMClient) -> None:
         kws = "、".join(g.get("keywords", [])[:8])
         blocks.append(f"群 {g['cluster_id'] + 1}：代表詞彙[{kws}]；文章[{' / '.join(titles)}]")
 
+    # 代表詞彙與文章標題皆來自爬取/匯入的不可信文字 → 與 run() 一致，套 INJECTION_GUARD
+    # 並以 wrap_untrusted 包裹，避免被植入指示污染分群標籤/描述（→ 報告 §3）。
     prompt = (
-        "以下是內容語意分群結果。請為每一群取一個精準的「主題標籤」（6–14 字，"
+        INJECTION_GUARD
+        + "以下是內容語意分群結果。請為每一群取一個精準的「主題標籤」（6–14 字，"
         "點出該群內容的共同主題/角色），並寫一句話描述該群的內容共通點與在整體中的定位。\n\n"
-        + "\n".join(blocks)
+        + wrap_untrusted("\n".join(blocks), tag="CLUSTERS")
         + "\n\n以 JSON 回傳（不要 markdown、不要說明）：\n"
           '{"labels":[{"id":1,"label":"主題標籤","desc":"一句話描述"}]}'
     )

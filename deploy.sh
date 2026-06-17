@@ -124,6 +124,7 @@ gcloud run deploy $ANALYSIS_SERVICE \
   --cpu 1 \
   --timeout 600 \
   --concurrency 2 \
+  --max-instances 10 \
   --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
   --set-secrets "ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
 
@@ -146,6 +147,7 @@ gcloud run deploy $SERVICE_NAME \
   --memory 1Gi \
   --cpu 1 \
   --timeout 300 \
+  --max-instances 10 \
   --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL,ANALYSIS_SERVICE_URL=$ANALYSIS_URL,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
   --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest,ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
 

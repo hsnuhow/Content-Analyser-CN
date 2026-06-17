@@ -31,12 +31,22 @@ def _now_tw() -> str:
 # 數值分析 CSV 匯出（供獨立下載核實；與報告內 §2/§3.1/§3.2 表格並存）
 # ──────────────────────────────────────────────────────────────────────
 
+def _csv_safe(cell):
+    """CSV 公式注入防護：cell 若以 = + - @ 或控制字元（Tab/CR）開頭，前置單引號中和。
+    內容（keyword/entity/itemset）源自不可信的爬取/匯入文字，分析師以 Excel/Sheets 開啟
+    時，= 開頭的 cell 會被當公式求值（HYPERLINK 外洩、舊版 DDE）。非字串原樣回傳。"""
+    if isinstance(cell, str) and cell and cell[0] in ('=', '+', '-', '@', '\t', '\r'):
+        return "'" + cell
+    return cell
+
+
 def _to_csv(header: List[str], rows: List[List]) -> str:
-    """以 csv 模組產生正確跳脫的 CSV 字串（含逗號/引號的詞自動加引號）。"""
+    """以 csv 模組產生正確跳脫的 CSV 字串（含逗號/引號的詞自動加引號）。
+    每個 cell 另過 _csv_safe，中和公式注入。"""
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(header)
-    w.writerows(rows)
+    w.writerow([_csv_safe(c) for c in header])
+    w.writerows([[_csv_safe(c) for c in row] for row in rows])
     return buf.getvalue()
 
 
