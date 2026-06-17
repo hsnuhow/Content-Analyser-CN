@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-16 補強：社群 UI 停用詞（依來源條件套用）+ Cloud NL 實體過濾媒體名（00027-jdv）
+- **社群/論壇 UI 雜訊條件移除**：回覆/留言/回文/樓主/小編/轉發/推文/引用/私訊/鄉民/網友… **只在社群/論壇來源**去除，媒體站不動（媒體文章的「回覆」可能是內容）。因 dataset items 的 source_type 多半未填，改**依 URL 網域判定**（`_SOCIAL_DOMAINS`：facebook/instagram/threads/dcard/mobile01/ptt/巴哈/eyny…）。`_text_for_keywords` 只對社群來源 `_strip_social_ui`；embedding 仍用原始文本（快取 key 不受影響）。run_tfidf/run_association 共用。
+- **§3.2 Cloud NL 實體過濾媒體名**：Cloud NL 獨立於 jieba 抽實體，「地球黃金線」等媒體名會以實體漏進 §3.2（先前 jieba 側過濾管不到）。run_entities_sentiment 丟掉名稱屬 _MEDIA_NAMES/_STOPWORDS 或被媒體名包含（碎片如「黃金」）的實體。
+- **實測（保時捷 46 篇）**：§3.2 不再有「地球黃金線/黃金」；§2/§3.1 keyword 表「回覆/留言」歸零；媒體文章關鍵字不受影響；快取 46/46 命中。
+
 ## 2026-06-16 修正+新增：數值閘門誤判修正(A0) + embedding 內容快取(A3)（analysis-pipeline 00024-fqj）
 線上問題：保時捷 46 篇分析「數值語意探勘失敗，已中止」。雙重根因 + 雙重修正。
 - **A0 止血**（fix/numerical-mining-timeout）：
