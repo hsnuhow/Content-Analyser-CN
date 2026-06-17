@@ -47,11 +47,11 @@ _RESPONSE_SCHEMA = {
     "required": ["cleaned_text"],
 }
 
-# 口語/社群來源（依 URL 判定；media 文章已乾淨，不降噪）
+# 只對 YouTube + Facebook 降噪（逐字稿/長影片貼文雜訊最重、影響最大）。
+# 其他社群來源（IG/Dcard/Mobile01/PTT/Threads/TikTok…）雜訊影響不大，先不降噪（2026-06-17 使用者決定）。
+# 搭配 MIN_DENOISE_CHARS=800：實質鎖定 YT 逐字稿與 FB 長影片/長文貼文。
 _SPOKEN_DOMAINS = (
     "youtube.com", "youtu.be", "facebook.com", "fb.com", "fb.watch",
-    "instagram.com", "tiktok.com", "threads.net", "threads.com",
-    "dcard.tw", "mobile01.com", "ptt.cc", "bahamut", "gamer.com.tw",
 )
 
 
