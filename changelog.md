@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-17 新增：Phase 2 知識庫文件 RAG（解耦式：系統檢索、用戶 Key 生成，未部署）
+每個專家可上傳參考文件，延伸報告生成時系統檢索最相關片段注入——對齊「檢索＝系統、生成＝用戶」分工。
+- **analysis-pipeline**：`kb_index.py`（`chunk_text` ~600 字/重疊 80；`reindex_expert` 讀 documents→切塊→`_get_embeddings`(系統 SA Vertex)→`kb_chunks`，重建前清舊塊；`retrieve` query embedding + 記憶體 cosine top-K=5，任何錯誤→回 [] 降級純手冊）。`POST /api/kb/index {expert_slug}`。`audience_reports._build_one` 生成前先系統檢索注入「知識庫參考資料」；無文件/檢索失敗→純手冊不擋生成。
+- **content-analyser**：`kb_store` documents 子集合 CRUD（存抽取純文字）；`admin_routes._extract_text`（md/txt/pdf via `pypdf`）+ 上傳/刪除/重新索引（上傳/刪除後自動觸發重建索引）；`admin_knowledge.html` 每專家文件管理；`requirements` 加 `pypdf==4.3.1`。
+- 相容：無文件專家＝Phase 1 純手冊；`kb_chunks` 為新 collection（回捲不影響）。in-memory cosine 適小語料，大語料再升 Firestore 向量索引。
+
 ## 2026-06-17 新增：知識庫管理 + 延伸報告動態化（Phase 1，analysis 00030-d67 / analyser 00036-cnz）
 延伸報告從寫死三 persona 升級為「後台知識庫管理的動態專家」（模型 A：啟用的專家＝報告頁可產生的延伸報告類型）。生成仍用**用戶專案 LLM Key**，系統不負擔生成成本。
 - **後台 `/admin/knowledge`**：專家清單（啟用切換/排序/編輯/刪除）+ 建立（slug 不可改、顯示名、persona prompt、手冊 markdown）；首訪自動種子三專家（aeo/ecommerce/ads）+ 骨架方法論手冊（康泰打法待管理員補）；控制台加入口。
