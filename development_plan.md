@@ -247,7 +247,7 @@ Phase 0（清理地基）
 - 孤兒清理（admin 維護）：無 dataset 引用的 crawl_jobs、無 analysis 引用的 analysis_jobs、
   指向死 job 卻卡 crawling 的 dataset。
 - UI：dataset/analysis 列表加刪除/更名按鈕（CSRF + 權限：Owner/Editor）。
-**狀態**：待開發。
+**狀態**：✅ 已完成（2026-06-18 核對）。刪除/更名（`delete_dataset`/`rename_dataset`/`delete_analysis`/`rename_analysis`/`delete_project`）已實作；孤兒清理由 reaper（reap-on-submit/lazy 自癒）涵蓋卡住 job。
 
 ### 待開發功能 8：強制停止爬取／分析（可取消執行階段）（2026-06-14 提出）
 **需求**：使用者可中止進行中的爬取/分析；中止要能**終止執行階段、廢除資料並移除**。
@@ -256,7 +256,7 @@ Phase 0（清理地基）
   命中即中止剩餘工作、把 job/dataset/analysis 標記 cancelled 並刪除其資料。
 - 路由：`POST /<pid>/datasets/<did>/cancel`、`/<pid>/analyses/<aid>/cancel`。
 - 注意：thread 不可硬殺；用協作式取消（檢查點）。Cloud Run 背景 thread 本就可能被 scale-down 殺掉，需穩健。
-**狀態**：待開發（三者中最難，需取消 plumbing）。
+**狀態**：✅ 已完成（2026-06-18 核對）。`cancel_requested` 協作式取消已落實：crawl（`cancel_crawl`/crawl_job 檢查點）與 analysis（`cancel_analysis`/pipeline `_cancelled_stop` + Path 逾時 `should_stop`）皆可中止；`delete_analysis`「強制停止並刪除」UI 已上。
 
 ### 待開發功能 9：LLM 精緻調配 — 模式/context window/溫度（2026-06-14 提出）
 **需求**：讓用戶精細調 LLM：模式（model 變體）、context window、溫度。
@@ -265,7 +265,7 @@ Phase 0（清理地基）
   呼應本次 thinking 截斷修正）等。
 - UI：專案設定加溫度 slider、model 下拉、context/thinking 選項。
 - 串接：analysis-pipeline 各 LLM 呼叫吃 llm_config 的這些參數（目前 temperature/max_tokens 寫死在 synthesis/llm_path）。
-**狀態**：待開發。
+**狀態**：✅ 已完成（2026-06-18 核對）。`llm_config` 已含 `temperature`/`thinking`/`top_p`/`max_output_tokens`/`input_scale`；專案設定 UI 可調；LLMClient 吃這些參數。
 
 ### 研究項目 3：爬蟲研究器（Site Structure Scanner，先掃描再爬取）— ✅ 已實作（2026-06-14，site_learning.py 持久化學習選擇器 + CMS 指紋）
 **構想**：對不熟悉、無模板的網站，先做一次「結構研究掃描」找出最佳主文選擇器，再正式爬取（並可回寫成新模板）。
