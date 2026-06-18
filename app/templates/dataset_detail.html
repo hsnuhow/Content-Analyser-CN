@@ -77,6 +77,19 @@
   </div>
   {% endif %}
 
+  {# 被 SSRF 安全過濾擋下、未爬取的 URL（逐 URL 跳過，其餘照爬）#}
+  {% if dataset.n_blocked %}
+  <div class="alert alert-warning">
+    <div class="fw-semibold mb-1">⚠️ {{ dataset.n_blocked }} 個 URL 因安全過濾未爬取（其餘已照常爬取）</div>
+    <ul class="small mb-0" style="max-height:180px;overflow:auto">
+      {% for b in dataset.blocked %}
+      <li><code>{{ b.url }}</code> — {{ b.reason }}</li>
+      {% endfor %}
+    </ul>
+    <div class="small text-muted mt-1">常見原因：網域打錯/失效、非 http(s)、解析到私有/保留 IP。修正後可重新匯入或重爬。</div>
+  </div>
+  {% endif %}
+
   {# 爬取進度（crawling 時）#}
   {% if dataset.status == 'crawling' %}
   <div class="card shadow-sm mb-4">

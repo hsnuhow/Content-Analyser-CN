@@ -280,10 +280,11 @@ def crawl_batch():
             safe_urls.append(u)
         else:
             blocked.append({"url": u, "reason": reason})
-    if blocked:
+    # 逐 URL 跳過（非全有全無）：只有「全部都被擋」才整批失敗；否則照爬安全的、把被擋的記在 job 上回報。
+    if not safe_urls:
         return jsonify({
             "status": "failed",
-            "error": f"{len(blocked)} 個 URL 被 SSRF 過濾拒絕",
+            "error": f"全部 {len(blocked)} 個 URL 被 SSRF 過濾拒絕（無可爬取）",
             "blocked": blocked,
         }), 400
 
@@ -296,14 +297,17 @@ def crawl_batch():
     import task_queue
     chunks = chunk_urls(urls)
     use_queue = task_queue.tasks_enabled()
+    _blk_note = f"（{len(blocked)} 個 URL 被安全過濾跳過）" if blocked else ""
     db.collection(JOBS_COLLECTION).document(job_id).set({
         "job_id": job_id,
         "status": "queued" if use_queue else "pending",
         "progress": 0,
-        "log": "任務已建立，等待執行...",
+        "log": f"任務已建立，等待執行...{_blk_note}",
         "total": len(urls),
         "n_chunks": len(chunks),
         "chunks_done": {},
+        "blocked": blocked,          # 被 SSRF 過濾擋下的 URL（含 reason），供前端顯示
+        "n_blocked": len(blocked),
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "completed_at": None,
@@ -333,7 +337,8 @@ def crawl_batch():
                          args=(job_id, urls, use_gemini, gemini_api_key, db),
                          daemon=True).start()
 
-    return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending"}), 202
+    return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending",
+                    "n_blocked": len(blocked), "blocked": blocked}), 202
 
 
 @app.route("/api/crawl/run", methods=["POST"])
@@ -518,9 +523,10 @@ def extract_images():
     for u in urls:
         ok, reason = _is_safe_url((u or "").strip())
         (safe_urls if ok else blocked).append(u if ok else {"url": u, "reason": reason})
-    if blocked:
+    # 逐 URL 跳過：只有「全部被擋」才整批失敗；否則照處理安全的、把被擋的記在 job 上。
+    if not safe_urls:
         return jsonify({"status": "failed",
-                        "error": f"{len(blocked)} 個 URL 被 SSRF 過濾拒絕",
+                        "error": f"全部 {len(blocked)} 個 URL 被 SSRF 過濾拒絕（無可處理）",
                         "blocked": blocked}), 400
 
     job_id = str(uuid.uuid4())
@@ -530,8 +536,10 @@ def extract_images():
     use_queue = task_queue.tasks_enabled()
     db.collection(IMAGE_JOBS).document(job_id).set({
         "job_id": job_id, "status": "queued" if use_queue else "pending", "progress": 0,
-        "log": "影像擷取任務已建立...", "total": len(safe_urls),
+        "log": f"影像擷取任務已建立...{f'（{len(blocked)} 個 URL 被安全過濾跳過）' if blocked else ''}",
+        "total": len(safe_urls),
         "n_chunks": len(chunks), "chunks_done": {},
+        "blocked": blocked, "n_blocked": len(blocked),
         "done": 0, "n_images": 0,
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,

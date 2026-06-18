@@ -1324,6 +1324,10 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
         'log': job.get('log', dataset.get('log', '')),
         'updated_at': firestore.SERVER_TIMESTAMP,
     }
+    # 被 SSRF 安全過濾擋下的 URL（含 reason）→ 存到 dataset 供前端顯示「哪幾個、為什麼沒爬」。
+    if job.get('n_blocked'):
+        update['blocked'] = job.get('blocked', [])
+        update['n_blocked'] = job.get('n_blocked', 0)
     if jstatus == 'completed':
         results = job.get('results', []) or []
         # 寫入 items 子集合：recrawl/續批只替換指定 url（保留已成功項）；否則整批寫入。

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-18 修正：SSRF 過濾改逐 URL 跳過（不再整批失敗）+ 顯示被擋原因（未部署）
+問題：crawl/extract-images batch 端點原本「任一 URL 被 SSRF 過濾 → 整批 400 失敗」，且 content-analyser 只顯示「N 個 URL 被 SSRF 過濾拒絕」不顯示是哪個/為何 → 使用者無從修。
+- **crawler `app.py`**：`/api/crawl/batch`、`/api/extract-images` 改為「只有**全部**被擋才 400；否則照爬安全的、把被擋的（url+reason）記在 job 文件 `blocked`/`n_blocked`」。`scrape/batch`（逐項）與 `research`（已 proceed-if-any-safe）原本就 OK。`get_crawl_job` 回傳整個 job 文件 → `blocked` 自動流到呼叫端。
+- **content-analyser**：`_sync_crawling_dataset` 把 job 的 `blocked`/`n_blocked` 存到 dataset；`dataset_detail.html` 顯示「N 個 URL 因安全過濾未爬取」+ 逐筆 url/reason 清單。
+- SSRF 過濾本身（`_is_safe_url`，C1）邏輯不變：擋非 http(s)/缺 host/metadata/DNS 解析不到/私有保留 IP。
+- 驗證：crawler+analyser py_compile、dataset_detail Jinja 解析通過。分支 `fix/ssrf-per-url`，未部署。
+
 ## 2026-06-18 補強：選擇器 agent B-1（P1 耐用性+儀表化、P2 結構化資料優先，未部署）
 降低人工 SITE_TEMPLATE 與重學頻率。僅 content-crawler。
 - **P1a 選擇器正規化**（`site_learning.normalize_selector`，寫入收斂點 `save_learned_selector`）：`.ComponentName-aB3dEf`（styled-components PascalCase-雜湊）→ `[class*="ComponentName"]`；`.css-xxx`/`.sc-xxx`（框架原子類）與 `#post-12345`（數字 id）→ 拒絕（不可泛化）；剝除 `:nth-child`；乾淨 class/語意標籤原樣保留。`_looks_hashy` 防誤轉（`.Grid-container` 等單字不動）。讀取端 ≥300字/非列表/非cookie 仍兜底。
