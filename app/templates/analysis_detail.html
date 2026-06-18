@@ -43,8 +43,9 @@
         <span>輸入 <b>{{ '{:,}'.format(tu.totals.prompt) }}</b></span>
         <span>輸出 <b>{{ '{:,}'.format(tu.totals.output) }}</b></span>
         <span>合計 <b>{{ '{:,}'.format(tu.totals.total) }}</b></span>
+        <span title="依模型單價估算，僅供參考">估算 <b>${{ '%.4f'|format(est_cost(tu.model, tu.totals.prompt, tu.totals.output)) }}</b></span>
         {% if analysis.derive_token_usage and analysis.derive_token_usage.totals %}
-        <span class="text-muted">＋延伸報告 {{ '{:,}'.format(analysis.derive_token_usage.totals.total) }}</span>
+        <span class="text-muted">＋延伸報告 {{ '{:,}'.format(analysis.derive_token_usage.totals.total) }}（${{ '%.4f'|format(est_cost(analysis.derive_token_usage.model, analysis.derive_token_usage.totals.prompt, analysis.derive_token_usage.totals.output)) }}）</span>
         {% endif %}
         <button class="btn btn-sm btn-link p-0" type="button" data-bs-toggle="collapse"
                 data-bs-target="#tokenBreakdown">明細</button>

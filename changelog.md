@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-19 修正：Token 價格預估 + Cache-Control 根治舊版 + 內容偏少提示（未部署）
+僅 content-analyser，單一服務一次部署。
+- **Token 價格預估**：新增 `app/pricing.py`（2026-06-19 查得最新單價：gemini-2.5-flash 0.30/2.50、flash-lite 0.10/0.40、pro 1.25/10、claude opus 5/25、sonnet 3/15、haiku 1/5；embedding $0.025/1M chars）。模型名子字串比對（flash-lite 不誤判 flash）。analysis_detail 用戶付 token 旁顯示估算 $（含延伸報告）；`/admin/usage` 系統付改用此模組（**修正 embedding 單價 0.20→0.025，差約 8 倍**）。est_cost/est_embed_cost 註冊為 Jinja global。
+- **Cache-Control 根治舊版**：`_security_headers` 對 HTML 回應加 `Cache-Control: no-cache, must-revalidate`（不動 /static）→ 部署後不再看到舊版 UI。
+- **內容偏少提示**：dataset success 但字數 <500 的項標「⚠️ 內容偏少，可能不完整」；recrawl mode=failed 把 <500 字 success 項也納入重爬目標（補反爬偵測未涵蓋的 under-extraction）。
+- 驗證：py_compile + Jinja×3 + pricing 單元測試（單價/不誤判/embedding）全過。分支 `fix/token-pricing-cache-shortflag`，未部署。
+
 ## 2026-06-19 新增：反爬偵測（cloaking 跨站漂移 + 封鎖頁）→ 標記需手動爬取（未部署）
 背景：部分站對機房 IP/爬蟲特徵反爬——cool-style 捲動時 cloaking 漂移到 Mobile01（存到 219 字垃圾、還污染學選擇器）；100.com.tw 對爬蟲味請求回 403「禁止爬取」封鎖頁（>150字漏抓被當文章）。實測：住宅 IP/瀏覽器 UA 拿到真文章，爬蟲味 UA 被擋。
 - **② 偵測（crawler `crawler.py`）**：

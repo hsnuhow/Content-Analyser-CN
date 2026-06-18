@@ -1603,8 +1603,10 @@ def recrawl_dataset(pid, did, project, role):
     force_listing = bool(request.form.get('force_listing'))  # 強制爬取被略過的列表/商品頁
     items = _load_dataset_items(pid, did)
     all_urls = dataset.get('source_urls') or [it.get('url') for it in items if it.get('url')]
+    # 視為「已成功不需重爬」需：status=success + 有內容 + 字數達標（內容偏少 <500 字者納入重爬目標）
     success_urls = {it.get('url') for it in items
-                    if it.get('status') == 'success' and it.get('content')}
+                    if it.get('status') == 'success' and it.get('content')
+                    and (it.get('length') or len(it.get('content') or '')) >= 500}
     if mode == 'all':
         target_urls = [u for u in all_urls if u]
     else:
