@@ -9,7 +9,58 @@
     </ol>
   </nav>
 
-  <h2 class="mb-4">使用量總覽（usage_log）</h2>
+  <h2 class="mb-4">使用量總覽</h2>
+
+  {# 系統付 Token 成本（system_token_usage：降噪／embedding 等系統 Key 成本） #}
+  {% if system_tokens %}
+  <div class="card shadow-sm mb-4 border-primary-subtle">
+    <div class="card-header fw-semibold d-flex justify-content-between">
+      <span>系統付 Token 成本（系統 Key：降噪 / embedding）</span>
+      <span class="text-muted small">{{ system_tokens.n_jobs }} 筆 job · 金額為估算</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">LLM 總 token</div>
+          <div class="fs-5 fw-semibold">{{ '{:,}'.format(system_tokens.totals.total) }}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">LLM 估算金額</div>
+          <div class="fs-5 fw-semibold">${{ '%.2f'|format(system_tokens.totals.cost) }}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">Embedding 字元（估算）</div>
+          <div class="fs-5 fw-semibold">{{ '{:,}'.format(system_tokens.embedding.chars) }}</div>
+        </div>
+        <div class="col-6 col-md-3">
+          <div class="text-muted small">Embedding 估算金額</div>
+          <div class="fs-5 fw-semibold">${{ '%.2f'|format(system_tokens.embedding.cost) }}</div>
+        </div>
+      </div>
+      <table class="table table-sm mb-0 align-middle">
+        <thead class="table-light"><tr><th>呼叫類型</th><th>呼叫次數</th><th>prompt</th><th>output</th><th>total</th></tr></thead>
+        <tbody>
+          {% for cat, v in system_tokens.by_category.items() %}
+          <tr>
+            <td><span class="badge bg-info-subtle text-dark">{{ cat }}</span></td>
+            <td>{{ v.calls }}</td>
+            <td>{{ '{:,}'.format(v.prompt) }}</td>
+            <td>{{ '{:,}'.format(v.output) }}</td>
+            <td class="fw-semibold">{{ '{:,}'.format(v.total) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="text-muted text-center py-3">尚無系統付 token 記錄。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="small text-muted mt-2">
+        金額為估算（單價可於 <code>admin_routes._PRICE_PER_1M</code> 調整）。用戶付（專案 LLM Key）的 token 記在各專案頁，不在此。
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <h5 class="mb-3 text-muted">用戶操作量（usage_log）</h5>
 
   {# 各用戶彙整 #}
   <div class="card shadow-sm mb-4">

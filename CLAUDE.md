@@ -815,7 +815,7 @@ Content-Analyser-CN/
 |------|------|
 | `GET /health` | 探活（無需金鑰）|
 | `POST /api/analyse` | 提交分析（非同步），回傳 `{job_id}` |
-| `GET /api/analyse/{job_id}` | 查詢進度與結果。completed 時回 `result_markdown` + `numeric_exports`（{tfidf,association,entities} 三份 CSV 字串，供獨立下載核實）|
+| `GET /api/analyse/{job_id}` | 查詢進度與結果。completed 時回 `result_markdown` + `numeric_exports`（{tfidf,association,entities} 三份 CSV 字串）+ `token_usage`（用戶付 token rollup）|
 | `POST /api/analyse/{job_id}/cancel` | 合作式取消（設 `cancel_requested`）|
 | `POST /api/analyse/cleanup` | 清除已結束且超過 `days`（預設 7）天的 job 暫存 |
 | `POST /api/analyse-images` | 提交大圖視覺分析（非同步，階段②）。body `{report_title, images:[{src,alt,source_url}], llm_provider(gemini\|claude), llm_model, llm_api_key}`，回 `{job_id}` |
@@ -897,6 +897,7 @@ projects/{project_id}             頂層，多人協作
   members: map                    {email: "editor"|"viewer"}
   llm_config: map                 {provider(gemini|claude|openai), model, api_key, temperature, thinking,
                                    search_extent, max_output_tokens, top_p, input_scale}（Owner 設定）
+  token_usage_total: int          ⭐用戶付 token 累計（各分析完成時 Increment；跟專案走，顯示於專案頁）
   archived: bool                  封存（Editor/Viewer 不可進入，僅 Owner/Admin）
   archived_at: timestamp
   datasets/{dataset_id}           蒐集的內容集（爬取/手動匯入）
@@ -909,6 +910,16 @@ projects/{project_id}             頂層，多人協作
     n_articles / llm_provider / llm_model
     submitted_by / submitted_at / completed_at
     result_markdown: string
+    numeric_exports: map           三項數值 CSV（tfidf/association/entities）
+    token_usage: map               ⭐用戶付 token rollup {by_category, totals{prompt,output,total}, provider, model, payer:"user"}
+    derive_token_usage: map        延伸報告 token（同結構，獨立不覆蓋 token_usage）
+
+system_token_usage/{auto-id}      ⭐系統付 token（系統 SA：降噪/embedding/KB 索引/爬蟲選擇器研究）→ 管理者後台
+  payer:"system" / service / job_kind / job_id / project_id   job_kind: analysis|kb_index|selector_research
+  by_category: map                 {denoise:{prompt,output,total,calls}, ...}
+  prompt_tokens / output_tokens / total_tokens: int
+  embedding: map                   {chars, n_texts, model, estimated:true}（embedding 以字元計費、估算）
+  at: timestamp
 
 api_keys/{key_id}                 外部工具金鑰（Admin 管理）
   name / key_hash / permissions / is_active / call_count

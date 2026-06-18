@@ -19,10 +19,11 @@ MAX_INTENT_SUMMARY = 15  # Synthesis 時最多傳入幾篇的 intent 摘要
 
 
 def _safe_gen(llm: LLMClient, prompt: str, temperature: float,
-              max_tokens: int, fallback: str, label: str) -> str:
+              max_tokens: int, fallback: str, label: str, category: str = None) -> str:
     """單一 Synthesis 章節生成的安全包裝：失敗時回傳 fallback，不中斷其他章節。"""
     try:
-        return llm.generate(prompt, temperature=temperature, max_tokens=max_tokens)
+        return llm.generate(prompt, temperature=temperature, max_tokens=max_tokens,
+                            category=category or "synthesis")
     except Exception as e:
         print(f"[Synthesis] {label}生成失敗：{e}", flush=True)
         return fallback
@@ -61,7 +62,7 @@ def label_clusters(clusters_dict: Dict, llm: LLMClient) -> None:
           '{"labels":[{"id":1,"label":"主題標籤","desc":"一句話描述"}]}'
     )
     try:
-        raw = llm.generate(prompt, temperature=0.3, max_tokens=1536)
+        raw = llm.generate(prompt, temperature=0.3, max_tokens=1536, category="label_clusters")
         data = json.loads(_clean_json(raw))
         lm = {int(l.get("id")): l for l in data.get("labels", []) if l.get("id") is not None}
         for g in groups:
@@ -328,7 +329,7 @@ def run(nlp_results: Dict, llm_results: Dict,
     out: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {
-            ex.submit(_safe_gen, llm, prompt, temp, mt, fb, label): key
+            ex.submit(_safe_gen, llm, prompt, temp, mt, fb, label, f"synthesis_{key}"): key
             for key, prompt, temp, mt, fb, label in tasks
         }
         for fut, key in futures.items():

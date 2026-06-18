@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-18 新增：全面 Token 用量記帳（待開發 10，未部署）
+記錄產品執行時所有 LLM/embedding token 消耗。分流：**用戶付（專案 LLM Key）跟專案走、系統付（系統 SA）進管理者後台**。
+- **共用 helper `analysis-service/token_usage.py`**：`norm_usage`（正規化 gemini/claude/openai usage）、`aggregate`（依 category 彙整）、`write_system_usage`（系統付 → `system_token_usage` collection，每 job 一筆 rollup）。
+- **用戶付（→ 專案）**：`LLMClient` 內部 `_call_*` 改回 `(text, usage)`，`generate()/generate_vision()` 攔 `usage_metadata` 記入 `self.usage_log`，各呼叫點帶 `category`（synthesis_*/qualitative/search_intent/label_clusters/derived/combined/image_*）。四種 job（analysis/derived/combined/image）跑完彙整 `token_usage` 隨 job 狀態回傳；content-analyser 落地到 `analyses/{aid}.token_usage`（延伸報告存 `derive_token_usage`）+ 累加 `projects/{pid}.token_usage_total`（完成分支僅進一次，Increment 不重複）。analysis_detail/project_detail 顯示。
+- **系統付（→ 後台）**：降噪（`denoise.py` 抓 gemini usage，accurate）+ embedding（`nlp_path._get_embeddings` 加 `usage_sink` 計實際送出字元，估算）+ KB 索引 embedding（`kb_index`）→ `write_system_usage`。`/admin/usage` 加系統付 Token 區塊（依 category/model 彙總 + embedding 字元 + 估算金額，單價表 `admin_routes._PRICE_PER_1M` 可調）。
+- **相容**：全部攔截 best-effort（try/except），失敗只是該筆不記帳、不影響分析/爬取；新增參數皆 optional 預設不改行為；status 回應新增 `token_usage`（passthrough，向後相容）。
+- **Phase 2b（爬蟲選擇器，已完成）**：`research._ask_gemini_for_selector` 加 `usage_sink` 抓 usage_metadata，`run_research` 彙整後 `_write_selector_usage` 經 `site_learning._client()` 寫 `system_token_usage`（service=content-crawler、category=selector_research，schema 與 analysis 端一致，後台統一彙整）。
+- 強化（review #1）：pipeline 彙整改 `aggregate(list(llm.usage_log))` 快照，避免逾時殘留 daemon thread 併發 append。
+- 驗證：三服務 `py_compile` + `bash -n` 通過；`norm_usage`/`aggregate`/`write_system_usage`/`_record_usage`/選擇器 doc 相容性 單元 + mock 整合測試通過。分支 `feat/token-accounting`（worktree）。
+
 ## 2026-06-17 修正：系統安全稽核 8 項修補（多 agent 稽核確認，尚未部署）
 多 agent 安全稽核（7 區塊：prompt 注入/Web 注入/溢位 DoS 成本/授權/機密/Cloud Run 韌性/Firestore，對抗式驗證）確認 8 項真實可觸發弱點（無 critical/high；2 medium + 6 low）。逐項修補：
 - **#1 CSV 公式注入（medium）** `report.py`：新增 `_csv_safe`，cell 以 `= + - @ \t \r` 開頭時前置單引號中和；`_to_csv` 對表頭與每格套用。擋不可信 keyword/entity/itemset 落入 CSV → Excel/Sheets 開啟求值（HYPERLINK/DDE）。數值權重為 float 不受影響。

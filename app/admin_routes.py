@@ -300,10 +300,56 @@ def cleanup_orphans():
     return redirect(url_for('admin_bp.admin_dashboard'))
 
 
+# 估算單價（USD / 1M tokens，input/output）。僅供成本概估、會隨各家定價變動，可在此調整。
+# 系統付模型為主（降噪 gemini-2.5-flash、embedding 以字元計費）。
+_PRICE_PER_1M = {
+    'gemini-2.5-flash': (0.30, 2.50),
+    'gemini-2.5-flash-lite': (0.10, 0.40),
+    'gemini-2.5-pro': (1.25, 10.0),
+}
+_PRICE_FALLBACK = (0.30, 2.50)               # 未知模型用 flash 價估
+_EMBED_PRICE_PER_1M_CHARS = 0.20             # text-multilingual-embedding-002 約略，每 1M 字元
+
+
+def _est_cost_usd(model: str, prompt: int, output: int) -> float:
+    pin, pout = _PRICE_PER_1M.get(model or '', _PRICE_FALLBACK)
+    return round((prompt / 1_000_000) * pin + (output / 1_000_000) * pout, 4)
+
+
+def _aggregate_system_usage():
+    """彙整 system_token_usage（系統付）：依 category/model 統計 token + embedding 字元 + 估算金額。"""
+    by_category, by_model = {}, {}
+    tot = {'prompt': 0, 'output': 0, 'total': 0, 'cost': 0.0}
+    emb = {'chars': 0, 'n_texts': 0, 'cost': 0.0}
+    n_jobs = 0
+    try:
+        for d in db.collection('system_token_usage').stream():
+            r = d.to_dict() or {}
+            n_jobs += 1
+            for cat, v in (r.get('by_category') or {}).items():
+                c = by_category.setdefault(cat, {'prompt': 0, 'output': 0, 'total': 0, 'calls': 0})
+                for k in ('prompt', 'output', 'total', 'calls'):
+                    c[k] += int(v.get(k, 0) or 0)
+            tot['prompt'] += int(r.get('prompt_tokens', 0) or 0)
+            tot['output'] += int(r.get('output_tokens', 0) or 0)
+            tot['total'] += int(r.get('total_tokens', 0) or 0)
+            e = r.get('embedding') or {}
+            if e:
+                emb['chars'] += int(e.get('chars', 0) or 0)
+                emb['n_texts'] += int(e.get('n_texts', 0) or 0)
+        # 估算金額：token 部分依各 category 模型（此處用 fallback，因 rollup 未存逐 category 模型）
+        tot['cost'] = _est_cost_usd('', tot['prompt'], tot['output'])
+        emb['cost'] = round((emb['chars'] / 1_000_000) * _EMBED_PRICE_PER_1M_CHARS, 4)
+    except Exception as e:
+        print(f"[admin_usage] system_token_usage 彙整失敗：{e}", flush=True)
+    return {'by_category': by_category, 'totals': tot, 'embedding': emb, 'n_jobs': n_jobs}
+
+
 @bp.route('/usage')
 @admin_required
 def admin_usage():
-    """使用量總覽：彙整各用戶 usage_log，依 action 統計次數與內容量。"""
+    """使用量總覽：彙整各用戶 usage_log，依 action 統計次數與內容量。
+    另含系統付 token 記帳（system_token_usage：降噪/embedding 等系統成本）。"""
     summary = []
     recent = []
     try:
@@ -345,9 +391,11 @@ def admin_usage():
 
     summary.sort(key=lambda s: s['events'], reverse=True)
     recent.sort(key=lambda r: r.get('at') or '', reverse=True)
+    system_tokens = _aggregate_system_usage()
     return render_template('admin_usage.html',
                            user=session.get('user'),
-                           summary=summary, recent=recent[:100])
+                           summary=summary, recent=recent[:100],
+                           system_tokens=system_tokens)
 
 
 @bp.route('/force_kill_crawler', methods=['POST'])

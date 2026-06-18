@@ -33,6 +33,37 @@
     {% endif %}
   </div>
 
+  {# Token 用量（用戶付：本專案 LLM Key 消耗，跟專案走）#}
+  {% if analysis.token_usage and analysis.token_usage.totals and analysis.token_usage.totals.total %}
+  {% set tu = analysis.token_usage %}
+  <div class="card border-0 bg-light mb-3">
+    <div class="card-body py-2">
+      <div class="d-flex flex-wrap align-items-center gap-3 small">
+        <span class="fw-semibold">🔢 本次分析 Token（用戶付 · {{ tu.model or tu.provider }}）</span>
+        <span>輸入 <b>{{ '{:,}'.format(tu.totals.prompt) }}</b></span>
+        <span>輸出 <b>{{ '{:,}'.format(tu.totals.output) }}</b></span>
+        <span>合計 <b>{{ '{:,}'.format(tu.totals.total) }}</b></span>
+        {% if analysis.derive_token_usage and analysis.derive_token_usage.totals %}
+        <span class="text-muted">＋延伸報告 {{ '{:,}'.format(analysis.derive_token_usage.totals.total) }}</span>
+        {% endif %}
+        <button class="btn btn-sm btn-link p-0" type="button" data-bs-toggle="collapse"
+                data-bs-target="#tokenBreakdown">明細</button>
+      </div>
+      <div class="collapse mt-2" id="tokenBreakdown">
+        <table class="table table-sm mb-0" style="max-width:520px">
+          <thead><tr><th class="small">呼叫類型</th><th class="small">次數</th><th class="small">total</th></tr></thead>
+          <tbody>
+            {% for cat, v in tu.by_category.items() %}
+            <tr><td class="small">{{ cat }}</td><td class="small">{{ v.calls }}</td><td class="small">{{ '{:,}'.format(v.total) }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="small text-muted mt-1">此消耗使用本專案自備的 LLM Key（由專案付費）。</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {# 更名 / 刪除 / 強制停止（Owner/Editor）#}
   {% if role in ('owner', 'editor') %}
   <div class="d-flex gap-2 mb-4">

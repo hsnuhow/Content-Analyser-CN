@@ -88,9 +88,11 @@ def _clean_json(raw: str) -> str:
     return m.group(0) if m else raw
 
 
-def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tuple[str, Dict]:
-    """單篇降噪。回 (cleaned_text, signals)。任何問題 → 退回原文 + 空 signals。"""
+def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tuple[str, Dict, Dict]:
+    """單篇降噪。回 (cleaned_text, signals, usage)。任何問題 → 退回原文 + 空 signals。
+    usage：{prompt,output,total}（系統付 token 記帳）；呼叫失敗則全 0。"""
     empty = {"appeals": [], "specs": [], "objections": [], "quotes": []}
+    zero_usage = {"prompt": 0, "output": 0, "total": 0}
     try:
         from google import genai
         from google.genai import types
@@ -113,6 +115,12 @@ def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tupl
         resp = client.models.generate_content(
             model=DENOISE_MODEL, contents=prompt,
             config=types.GenerateContentConfig(**cfg_kwargs))
+        # token 記帳（系統付）：抓 usage_metadata，正規化。
+        try:
+            from token_usage import norm_usage
+            usage = norm_usage("gemini", getattr(resp, "usage_metadata", None))
+        except Exception:
+            usage = dict(zero_usage)
         data = json.loads(_clean_json(resp.text))
         cleaned = (data.get("cleaned_text") or "").strip()
         sig = data.get("signals") or {}
@@ -120,26 +128,27 @@ def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tupl
         # runaway 防呆：抽取式 cleaned 不可長於原文；若明顯超過（模型重複/擴寫）→ 不採用，退回原文。
         if len(cleaned) > int(len(text) * 1.1) + 50:
             log(f"  ⚠️ 降噪後 {len(cleaned)} 字 > 原文 {len(text)} 字（疑 runaway 擴寫），退回原文")
-            return text, signals
+            return text, signals, usage
         # 砍除過量防呆：只在 cleaned 絕對過短（疑似模型壞掉）才退回；
         # 雜訊重的貼文（如 IG 推廣）合理瘦身到數百字是對的，不該退回。
         if len(cleaned) < MIN_KEEP_CHARS:
             log(f"  ⚠️ 降噪後僅 {len(cleaned)} 字（<{MIN_KEEP_CHARS}），疑異常，退回原文")
-            return text, signals
-        return cleaned, signals
+            return text, signals, usage
+        return cleaned, signals, usage
     except Exception as e:
         log(f"  ⚠️ 降噪失敗，退回原文：{e}")
-        return text, empty
+        return text, empty, dict(zero_usage)
 
 
 def denoise_contents(contents: List[Dict], project_id: str,
-                     log: Callable[[str], None]) -> Tuple[List[Dict], List[Dict]]:
-    """對口語/社群來源逐字稿降噪。回 (new_contents, signals_list)。
+                     log: Callable[[str], None]) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    """對口語/社群來源逐字稿降噪。回 (new_contents, signals_list, usage_records)。
     new_contents：噪音篇的 text 換成 cleaned_text（原文存 _raw_text）；其餘原樣。
-    signals_list：[{url,title,signals}]（僅有訊號的篇）。"""
+    signals_list：[{url,title,signals}]（僅有訊號的篇）。
+    usage_records：[{category:'denoise',provider,model,prompt,output,total}]（系統付 token 記帳）。"""
     if not project_id:
         log("[降噪] 略過（未設定 GOOGLE_CLOUD_PROJECT）")
-        return contents, []
+        return contents, [], []
 
     targets = []  # (idx, content)
     for i, c in enumerate(contents):
@@ -147,7 +156,7 @@ def denoise_contents(contents: List[Dict], project_id: str,
         if is_spoken_source(c.get("url", "")) and len(text) >= MIN_DENOISE_CHARS:
             targets.append((i, c))
     if not targets:
-        return contents, []
+        return contents, [], []
 
     # 成本封頂：超過 MAX_DENOISE_ARTICLES 的篇不降噪（用原文進分析），並明確記錄被略過數。
     if len(targets) > MAX_DENOISE_ARTICLES:
@@ -161,13 +170,18 @@ def denoise_contents(contents: List[Dict], project_id: str,
     def _work(item):
         i, c = item
         raw = c.get("text") or c.get("content") or ""
-        cleaned, signals = _denoise_one(raw, project_id, log)
-        return i, raw, cleaned, signals
+        cleaned, signals, usage = _denoise_one(raw, project_id, log)
+        return i, raw, cleaned, signals, usage
 
     results = {}
+    usage_records = []
     with ThreadPoolExecutor(max_workers=min(DENOISE_WORKERS, len(targets))) as ex:
-        for i, raw, cleaned, signals in ex.map(_work, targets):
+        for i, raw, cleaned, signals, usage in ex.map(_work, targets):
             results[i] = (raw, cleaned, signals)
+            if usage and usage.get("total"):
+                usage_records.append({"category": "denoise", "provider": "gemini",
+                                      "model": DENOISE_MODEL, "prompt": usage["prompt"],
+                                      "output": usage["output"], "total": usage["total"]})
 
     new_contents = []
     signals_list = []
@@ -186,4 +200,4 @@ def denoise_contents(contents: List[Dict], project_id: str,
                 + (f" | 開頭：{preview}" if cleaned != raw else "（未變/退回）"))
         else:
             new_contents.append(c)
-    return new_contents, signals_list
+    return new_contents, signals_list, usage_records

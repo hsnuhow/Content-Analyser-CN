@@ -56,9 +56,10 @@ def _group_by_domain(urls: List[str]) -> "OrderedDict[str, List[str]]":
 
 
 def _ask_gemini_for_selector(genai_key: str, dom_summary: List[Dict],
-                             cms: str, tried: List[Dict], title: str) -> Optional[str]:
+                             cms: str, tried: List[Dict], title: str,
+                             usage_sink: list = None) -> Optional[str]:
     """請 Gemini 依 DOM 摘要 + 既往嘗試回饋，提出「下一個」要試的主文選擇器（CSS）。
-    回 selector 字串或 None。"""
+    回 selector 字串或 None。usage_sink：給 list 則記系統付 token（選擇器研究，系統 GENAI Key）。"""
     if not genai_key:
         return None
     try:
@@ -90,14 +91,27 @@ def _ask_gemini_for_selector(genai_key: str, dom_summary: List[Dict],
     )
     try:
         client = genai.Client(api_key=genai_key)
+        used_model = "gemini-2.5-flash"
         try:
             resp = client.models.generate_content(
                 model="gemini-2.5-flash", contents=prompt,
                 config=types.GenerateContentConfig(temperature=0.3))
         except Exception:
+            used_model = "gemini-2.5-flash-lite"
             resp = client.models.generate_content(
                 model="gemini-2.5-flash-lite", contents=prompt,
                 config=types.GenerateContentConfig(temperature=0.3))
+        # 系統付 token 記帳（選擇器研究）：抓 usage_metadata
+        if usage_sink is not None:
+            try:
+                um = getattr(resp, "usage_metadata", None)
+                usage_sink.append({
+                    "category": "selector_research", "provider": "gemini", "model": used_model,
+                    "prompt": int(getattr(um, "prompt_token_count", 0) or 0),
+                    "output": int(getattr(um, "candidates_token_count", 0) or 0),
+                    "total": int(getattr(um, "total_token_count", 0) or 0)})
+            except Exception:
+                pass
         text = (getattr(resp, "text", None) or "").strip()
         text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
         text = re.sub(r"\s*```\s*$", "", text, flags=re.MULTILINE).strip()
@@ -141,8 +155,9 @@ def _classify_failure(crawler: HeadlessCrawler, html: str, best_chars: int,
 
 
 def research_domain(domain: str, sample_urls: List[str],
-                    log: Callable[[str], None]) -> Dict:
-    """對單一網域跑研究 agent 閉環。回 {domain, selector?, validated_chars?, cms, diagnosis?, samples}。"""
+                    log: Callable[[str], None], usage_sink: list = None) -> Dict:
+    """對單一網域跑研究 agent 閉環。回 {domain, selector?, validated_chars?, cms, diagnosis?, samples}。
+    usage_sink：系統付 token 記帳（選擇器研究）累加。"""
     genai_key = os.environ.get("GENAI_API_KEY")
     samples = sample_urls[:2]
     crawler = HeadlessCrawler(log_callback=log)
@@ -166,7 +181,8 @@ def research_domain(domain: str, sample_urls: List[str],
             if time.time() > deadline:
                 log(f"[Research] {domain} 達時間上限，停止")
                 break
-            sel = _ask_gemini_for_selector(genai_key, dom_summary, result["cms"], tried, title)
+            sel = _ask_gemini_for_selector(genai_key, dom_summary, result["cms"], tried, title,
+                                           usage_sink=usage_sink)
             if not sel:
                 break
             ev = _eval_selector(crawler, soup1, sel)
@@ -218,15 +234,45 @@ def research_domain(domain: str, sample_urls: List[str],
             pass
 
 
+def _write_selector_usage(records: list) -> None:
+    """選擇器研究的系統付 token → system_token_usage（與 analysis 端同 schema，供後台統一彙整）。"""
+    recs = [r for r in (records or []) if r.get("total")]
+    if not recs:
+        return
+    try:
+        from site_learning import _client
+        from firebase_admin import firestore
+        by_cat = {"selector_research": {"prompt": 0, "output": 0, "total": 0, "calls": 0}}
+        tot = {"prompt": 0, "output": 0, "total": 0}
+        model = ""
+        for r in recs:
+            for k in ("prompt", "output", "total"):
+                by_cat["selector_research"][k] += int(r.get(k, 0) or 0)
+                tot[k] += int(r.get(k, 0) or 0)
+            by_cat["selector_research"]["calls"] += 1
+            model = r.get("model", model)
+        _client().collection("system_token_usage").add({
+            "payer": "system", "service": "content-crawler",
+            "job_kind": "selector_research", "job_id": "", "project_id": "",
+            "by_category": by_cat, "model": model,
+            "prompt_tokens": tot["prompt"], "output_tokens": tot["output"],
+            "total_tokens": tot["total"], "embedding": None,
+            "at": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as e:
+        print(f"[Research] 選擇器 token 記帳略過：{e}", flush=True)
+
+
 def run_research(urls: List[str], log: Callable[[str], None]) -> Dict:
     """研究入口：對失敗 URL 依網域分組，逐網域跑 agent，產出候選/診斷並寫 Firestore。
     回 {candidates:[...], diagnoses:[...], domains_researched:n}。"""
     groups = _group_by_domain(urls)
     domains = list(groups.keys())[:MAX_DOMAINS]
     candidates, diagnoses = [], []
+    usage_recs: list = []   # 系統付 token 記帳（選擇器研究）
     for i, domain in enumerate(domains):
         log(f"[Research] ({i+1}/{len(domains)}) 研究網域 {domain} …")
-        r = research_domain(domain, groups[domain], log)
+        r = research_domain(domain, groups[domain], log, usage_sink=usage_recs)
         if r.get("selector"):
             save_selector_candidate(
                 domain, [r["selector"]], cms=r.get("cms", ""),
@@ -236,6 +282,7 @@ def run_research(urls: List[str], log: Callable[[str], None]) -> Dict:
         else:
             diagnoses.append({"domain": domain, "diagnosis": r.get("diagnosis"),
                               "samples": r.get("samples", [])})
+    _write_selector_usage(usage_recs)   # 系統付 token → 後台
     return {"candidates": candidates, "diagnoses": diagnoses,
             "domains_researched": len(domains),
             "domains_skipped": max(0, len(groups) - len(domains))}

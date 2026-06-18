@@ -363,7 +363,7 @@ def _synthesize(baseline: Dict, topic: str, llm: LLMClient,
         "光線／建議色系／品牌符碼／是否留疊字空間）。這是給設計師照做的。"
     )
     try:
-        txt = llm.generate(INJECTION_GUARD + prompt, max_tokens=2048)
+        txt = llm.generate(INJECTION_GUARD + prompt, max_tokens=2048, category="image_text")
     except LLMError as e:
         log(f"[ImageReport] 綜合產生失敗：{e}")
         return {"baseline": f"（綜合產生失敗：{e}）", "gaps": "", "brief": ""}
@@ -455,7 +455,8 @@ def build_image_report(report_title: str, images: List[Dict], llm_cfg: Dict,
             "items": items, "baseline": baseline,
             "n_total": len(items),
             "n_success": len([it for it in items if it.get("status") == "success"]),
-            "n_tier3": len([it for it in items if it.get("status") == "skipped_tier3"])}
+            "n_tier3": len([it for it in items if it.get("status") == "skipped_tier3"]),
+            "_usage": list(getattr(llm, "usage_log", []))}  # 用戶付 token 記帳
 
 
 def run_image_analysis(job_id: str, report_title: str, images: List[Dict],
@@ -476,10 +477,16 @@ def run_image_analysis(job_id: str, report_title: str, images: List[Dict],
         _update(status="running", log=f"開始分析 {len(images)} 張圖...")
         out = build_image_report(report_title, images, llm_cfg, _log)
         skip_note = f"，跳過 {out['n_tier3']} 張（需 Tier3）" if out.get("n_tier3") else ""
+        try:
+            import token_usage as _tu
+            _tu_agg = _tu.aggregate(out.get("_usage", [])); _tu_agg["payer"] = "user"
+        except Exception:
+            _tu_agg = {}
         _update(status="completed", progress=100,
                 result_markdown=out["markdown"],
                 n_images=out["n_total"], n_success=out["n_success"],
                 n_tier3=out.get("n_tier3", 0),
+                token_usage=_tu_agg,
                 log=f"完成：{out['n_success']}/{out['n_total']} 張成功分析{skip_note}",
                 completed_at=firestore.SERVER_TIMESTAMP)
     except Exception as e:
