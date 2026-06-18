@@ -249,9 +249,11 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
         def record(local_i, url, result):
             _write_result(db, job_id, local_i, result)
             prog = 2 + int((local_i + 1) / total * 95)
-            _update_job(db, job_id, progress=prog,
-                        log=f"({local_i + 1}/{total}) {result.get('status')}: "
-                            f"{result.get('title') or url}")
+            st = result.get('status', '?')
+            log = f"({local_i + 1}/{total}) {st}: {result.get('title') or url}"
+            if st in ('failed', 'skipped') and result.get('error'):
+                log += f" — {str(result['error'])[:120]}"
+            _update_job(db, job_id, progress=prog, log=log)
 
         out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
                               is_cancelled_fn=lambda: _is_cancelled(db, job_id),
@@ -336,12 +338,34 @@ def run_crawl_chunk(job_id: str, urls: list, chunk_index: int, n_chunks: int,
                         {"success": 0, "skipped": 0, "failed": 0}, cancelled=True)
         return
 
+    # 逐篇即時回饋：佇列模式補回「每篇更新 job log/progress（含錯誤訊息）」，
+    # 否則整塊跑完前畫面停在 0%、看不到錯誤（遷移時掉的回饋）。
+    try:
+        _snap = db.collection(JOBS_COLLECTION).document(job_id).get()
+        _total = (_snap.to_dict() or {}).get('total', 0) if _snap.exists else 0
+    except Exception:
+        _total = 0
+
     def record(local_i, url, result):
         _write_result(db, job_id, offset + local_i, result)
+        gi = offset + local_i + 1
+        st = result.get('status', '?')
+        title = (result.get('title') or url or '')[:60]
+        log = f"({gi}/{_total or '?'}) {st}：{title}"
+        if st in ('failed', 'skipped') and result.get('error'):
+            log += f" — {str(result['error'])[:120]}"   # 佇列也顯示錯誤訊息
+        fields = {'log': log}
+        if _total:
+            fields['progress'] = min(98, max(1, int(gi / _total * 100)))
+        _update_job(db, job_id, **fields)
 
-    out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
-                          is_cancelled_fn=lambda: _is_cancelled(db, job_id),
-                          deadline_sec=CHUNK_MAX_SECONDS, force_listing=force_listing)
+    try:
+        out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
+                              is_cancelled_fn=lambda: _is_cancelled(db, job_id),
+                              deadline_sec=CHUNK_MAX_SECONDS, force_listing=force_listing)
+    except Exception as e:
+        _update_job(db, job_id, log=f"塊 {chunk_index} 執行錯誤：{e}")  # 不再靜默；寫入後上拋讓 Cloud Tasks 重試
+        raise
     _write_telemetry(db, out.get("by_method"))
     _complete_chunk(db, job_id, chunk_index, n_chunks, out["counts"],
                     cancelled=(out["aborted"] == "cancelled"))
