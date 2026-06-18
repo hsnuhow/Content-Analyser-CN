@@ -71,6 +71,7 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
     record_fn(local_index, url, result) 由呼叫端持久化（決定全域 index 與進度）。
     回 {counts, aborted, processed}。aborted 可能為 'cancelled' / 時限說明 / None。"""
     counts = {"success": 0, "skipped": 0, "failed": 0}
+    by_method = {}   # P1b：resolved_by 分布（learned/template/structured/heuristic/llm/...）
 
     def _new_crawler() -> HeadlessCrawler:
         c = HeadlessCrawler()
@@ -86,7 +87,10 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
         if use_gemini and gemini_api_key:
             pc.configure_genai(gemini_api_key)
         try:
-            return pc.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT)
+            res = pc.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT)
+            if isinstance(res, dict):
+                res["resolved_by"] = getattr(pc, "last_resolved_by", "") or res.get("source", "")
+            return res
         except UnsupportedSiteError as e:
             return {"status": "skipped", "url": url, "error": str(e)}
         except Exception as e:
@@ -100,6 +104,8 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
     def _scrape_one(url: str) -> dict:
         try:
             result = crawler.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT, keep_driver=True)
+            if isinstance(result, dict):
+                result["resolved_by"] = getattr(crawler, "last_resolved_by", "") or result.get("source", "")
         except UnsupportedSiteError as e:
             return {"status": "skipped", "url": url, "error": str(e)}
         except Exception as e:
@@ -147,6 +153,9 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
         st = result.get("status")
         if st in counts:
             counts[st] += 1
+        # P1b：成功篇才計 resolved_by 分布（失敗/略過另計）
+        m = (result.get("resolved_by") or result.get("source") or st or "unknown") if st == "success" else st
+        by_method[m] = by_method.get(m, 0) + 1
         record_fn(li[0], url, result)
         li[0] += 1
 
@@ -205,7 +214,20 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
             crawler.close()
         except Exception:
             pass
-    return {"counts": counts, "aborted": aborted, "processed": li[0]}
+    return {"counts": counts, "aborted": aborted, "processed": li[0], "by_method": by_method}
+
+
+def _write_telemetry(db, by_method: dict) -> None:
+    """P1b：把本次爬取的 resolved_by 分布累加到 crawl_telemetry/global（Increment）。best-effort。
+    用以觀察「多少篇靠 learned/template/structured/heuristic/llm 解出」→ 指導 P3/P4 投資。"""
+    if not db or not by_method:
+        return
+    try:
+        ref = db.collection("crawl_telemetry").document("global")
+        ref.set({"by_method": {k: firestore.Increment(v) for k, v in by_method.items()},
+                 "updated_at": firestore.SERVER_TIMESTAMP}, merge=True)
+    except Exception as e:
+        print(f"[CrawlJob] telemetry 寫入略過：{e}", flush=True)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -232,6 +254,7 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
         out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
                               is_cancelled_fn=lambda: _is_cancelled(db, job_id),
                               deadline_sec=BATCH_MAX_SECONDS)
+        _write_telemetry(db, out.get("by_method"))
         if out["aborted"] == "cancelled":
             _log("收到取消請求，停止爬取")
             _update_job(db, job_id, status="cancelled",
@@ -316,6 +339,7 @@ def run_crawl_chunk(job_id: str, urls: list, chunk_index: int, n_chunks: int,
     out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
                           is_cancelled_fn=lambda: _is_cancelled(db, job_id),
                           deadline_sec=CHUNK_MAX_SECONDS)
+    _write_telemetry(db, out.get("by_method"))
     _complete_chunk(db, job_id, chunk_index, n_chunks, out["counts"],
                     cancelled=(out["aborted"] == "cancelled"))
     _log(f"塊完成：{out['counts']}（aborted={out['aborted']}）")

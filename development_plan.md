@@ -355,6 +355,12 @@ Phase 0（清理地基）
 本期暫以人工加 SITE_TEMPLATE（branch `feat/porsche-templates`）+ 後台核准 learned_selectors 補上；
 agent 自動化留待此 backlog。相關檔：`crawler-service/research.py`、`site_learning.py`。
 
+**進度（2026-06-18，branch `feat/selector-robustness`，未部署）**：
+- ✅ **P1 耐用性**：`normalize_selector` 寫入前把雜湊 class 轉 `[class*="Name"]`、拒原子類/數字 id、剝 nth → 直接解掉雜湊站「改版即失效」。
+- ✅ **P1b 儀表化**：每次爬取記 `resolved_by`（learned/template/structured/heuristic/llm）→ `crawl_telemetry/global`，先量測分布再決定後續投資。
+- ✅ **P2 結構化資料優先**：JSON-LD `articleBody`/`[itemprop]` 排到通用啟發式之前（≥500字閘門）→ 吃掉一塊長尾、少碰 LLM。
+- ⏳ **P3 研究器接受邏輯放寬**（修 `_classify_failure` 誤判乾淨 class）、**P4 學到的選擇器自癒重學** → 待 P1b 線上數據出來，看哪個桶最大再做。
+
 ### 待開發功能 10：全面 Token 用量記帳（2026-06-17 提出）
 **需求**：記錄**所有** LLM token 消耗（不只降噪），可累計、可在後台檢視，掌握成本。
 **範圍**：
