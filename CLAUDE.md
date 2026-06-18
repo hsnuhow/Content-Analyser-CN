@@ -914,8 +914,8 @@ projects/{project_id}             頂層，多人協作
     token_usage: map               ⭐用戶付 token rollup {by_category, totals{prompt,output,total}, provider, model, payer:"user"}
     derive_token_usage: map        延伸報告 token（同結構，獨立不覆蓋 token_usage）
 
-system_token_usage/{auto-id}      ⭐系統付 token（系統 SA：降噪/embedding/KB 索引）→ 管理者後台
-  payer:"system" / service / job_kind / job_id / project_id
+system_token_usage/{auto-id}      ⭐系統付 token（系統 SA：降噪/embedding/KB 索引/爬蟲選擇器研究）→ 管理者後台
+  payer:"system" / service / job_kind / job_id / project_id   job_kind: analysis|kb_index|selector_research
   by_category: map                 {denoise:{prompt,output,total,calls}, ...}
   prompt_tokens / output_tokens / total_tokens: int
   embedding: map                   {chars, n_texts, model, estimated:true}（embedding 以字元計費、估算）

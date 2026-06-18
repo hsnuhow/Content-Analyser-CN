@@ -313,7 +313,8 @@ def run_analysis(job_id: str, report_title: str,
         user_token_usage = {}
         try:
             import token_usage as _tu
-            agg = _tu.aggregate(getattr(llm, "usage_log", []))
+            # 快照：避免逾時殘留的 daemon thread 在彙整時併發 append（list changed size）。
+            agg = _tu.aggregate(list(getattr(llm, "usage_log", [])))
             agg["payer"] = "user"
             user_token_usage = agg
             # 系統付：降噪 token + embedding 字元估算
