@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-18 補強：選擇器 agent B-1（P1 耐用性+儀表化、P2 結構化資料優先，未部署）
+降低人工 SITE_TEMPLATE 與重學頻率。僅 content-crawler。
+- **P1a 選擇器正規化**（`site_learning.normalize_selector`，寫入收斂點 `save_learned_selector`）：`.ComponentName-aB3dEf`（styled-components PascalCase-雜湊）→ `[class*="ComponentName"]`；`.css-xxx`/`.sc-xxx`（框架原子類）與 `#post-12345`（數字 id）→ 拒絕（不可泛化）；剝除 `:nth-child`；乾淨 class/語意標籤原樣保留。`_looks_hashy` 防誤轉（`.Grid-container` 等單字不動）。讀取端 ≥300字/非列表/非cookie 仍兜底。
+- **P1b resolved_by 儀表化**：`_extract_main_text` 每個 return 標 `last_resolved_by`（learned/template/structured/heuristic/llm/body_fallback/failed）；爬取結果 item 帶 `resolved_by`（隨 results 持久化）；每次爬取彙總寫 `crawl_telemetry/global`（by_method Increment）→ 觀察分布、指導 P3/P4。
+- **P2 結構化資料優先**：`_extract_main_text` 在模板之後、通用啟發式之前插入 Phase 2.05——`_extract_from_json_ld`（既有，articleBody）/ `[itemprop="articleBody"]`，≥500 字才採用（避 teaser），標 structured。重用實戰抽取器，僅調順序+加閘門+標記。
+- 驗證：crawler py_compile；`normalize_selector` 11 案例單元測試全過（含 `.Grid-container` 不誤轉）。分支 `feat/selector-robustness`。**P2 動 live 抽取順序，待部署後爬已知站（JSON-LD/雜湊/一般）回歸驗證**。P3（研究器接受邏輯）/P4（自癒重學）待 P1b 數據出來再評估。
+
 ## 2026-06-18 新增：全面 Token 用量記帳（待開發 10，未部署）
 記錄產品執行時所有 LLM/embedding token 消耗。分流：**用戶付（專案 LLM Key）跟專案走、系統付（系統 SA）進管理者後台**。
 - **共用 helper `analysis-service/token_usage.py`**：`norm_usage`（正規化 gemini/claude/openai usage）、`aggregate`（依 category 彙整）、`write_system_usage`（系統付 → `system_token_usage` collection，每 job 一筆 rollup）。

@@ -1565,6 +1565,8 @@ class HeadlessCrawler:
             self._log(f"  → [CMP] Removed {removed} cookie-consent container(s) before scoring")
 
     def _extract_main_text(self, html: str, url: str) -> str:
+        # P1b 儀表化：本次抽取由哪一階解出（learned/template/structured/heuristic/llm/body_fallback/failed）。
+        self.last_resolved_by = "failed"
         self._log("=" * 80)
         self._log("[DEBUG MODE] Content Extraction Process Started")
         self._log("=" * 80)
@@ -1618,6 +1620,7 @@ class HeadlessCrawler:
                         and not self._looks_like_cookie_banner(content, node)):
                     self._log(f"  → ✅ Content extracted: {len(content)} chars")
                     self._log(f"  → Preview: {content[:200]}...")
+                    self.last_resolved_by = "learned"
                     return content
                 self._log(f"  → ⚠️ Cached selector 命中但內容不合格"
                           f"（{len(content)} 字／列表或 cookie 區塊），改走模板/啟發式")
@@ -1676,6 +1679,7 @@ class HeadlessCrawler:
                             self._log(f"    → ✅ SUCCESS! Content sufficient (>= 300 chars), caching selector")
                             if domain:
                                 self.domain_selector_cache[domain] = sel
+                            self.last_resolved_by = "template"
                             return cleaned
                         else:
                             self._log(f"    → ⚠️ Content too short (< 300 chars), trying next selector")
@@ -1688,6 +1692,27 @@ class HeadlessCrawler:
 
         if not template_matched:
             self._log(f"  → No matching template found for this URL")
+
+        # Phase 2.05: 結構化資料優先（P2）——比通用啟發式可靠，排在其前（模板未命中/不足時）。
+        #   JSON-LD articleBody（多 CMS 內嵌、雜湊站也有）/ [itemprop="articleBody"]。≥500 字才採用
+        #   （高於通用 300，避免抓到摘要/teaser）。命中即標 structured 並回傳。
+        self._log("\n[Phase 2.05] Structured data (JSON-LD articleBody / itemprop)")
+        try:
+            sd_text = self._extract_from_json_ld(html)
+            if not (sd_text and len(sd_text) >= 500):
+                sd_node = soup.select_one('[itemprop="articleBody"]')
+                if sd_node:
+                    cand = self._clean_text(sd_node.get_text("\n", strip=True))
+                    if (len(cand) >= 500 and not self._looks_like_listing_block(sd_node)
+                            and not self._looks_like_cookie_banner(cand, sd_node)):
+                        sd_text = cand
+            if sd_text and len(sd_text) >= 500:
+                self._log(f"  → ✅ Structured data hit: {len(sd_text)} chars")
+                self.last_resolved_by = "structured"
+                return sd_text
+            self._log("  → no sufficient structured data, continue")
+        except Exception as e:
+            self._log(f"  → structured data skipped: {e}")
 
         # Phase 1.2: 噪音過濾（僅在模板失敗時執行）
         self._log("\n[Phase 1.2] Noise Filtering (ads, recommendations, related articles)")
@@ -1796,6 +1821,7 @@ class HeadlessCrawler:
             self._log("\n[WARNING] No candidates found! Falling back to full body text")
             body_text = self._clean_text(soup.get_text("\n", strip=True))
             self._log(f"  → Body text length: {len(body_text)} chars")
+            self.last_resolved_by = "body_fallback"
             return body_text
 
         # Phase 3: 候選評分
@@ -1816,6 +1842,7 @@ class HeadlessCrawler:
             self._log("\n[WARNING] All candidates were filtered out! Falling back to full body text")
             body_text = self._clean_text(soup.get_text("\n", strip=True))
             self._log(f"  → Body text length: {len(body_text)} chars")
+            self.last_resolved_by = "body_fallback"
             return body_text
 
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -1869,6 +1896,7 @@ class HeadlessCrawler:
                                                   len(best_llm_text), detect_cms(html))
                         except Exception:
                             pass
+                    self.last_resolved_by = "llm"
                     return best_llm_text
                 else:
                     self._log(f"  → Gemini's suggestions did not improve the result")
@@ -1879,6 +1907,7 @@ class HeadlessCrawler:
         self._log("=" * 80)
         self._log("[EXTRACTION COMPLETE]")
         self._log("=" * 80)
+        self.last_resolved_by = "heuristic"
         return final_content
 
     def _fetch_og_meta(self, url: str) -> Dict[str, str]:
@@ -2156,6 +2185,7 @@ class HeadlessCrawler:
                           driver 若 crash 仍會被關閉，下次自動重新初始化。
         """
         self._log(f"====== Starting scrape for: {url} (timeout: {hard_timeout_sec}s) ======")
+        self.last_resolved_by = ""  # P1b：本次抽取方法（_extract_main_text 會設；early-exit 路徑保持空）
 
         url_l = url.lower()
 
