@@ -201,6 +201,8 @@ TIER_UPGRADE_MIN_LEN = 200
 def needs_upgrade(result: dict, min_len: int = TIER_UPGRADE_MIN_LEN) -> bool:
     if not result:
         return True
+    if result.get("cloaked"):
+        return True  # cloaking/反爬封鎖 → 住宅代理重抓可能破解（Tier3 開啟時生效；關閉時保留 needs_manual 標記）
     if result.get("status") == "skipped":
         return False  # skip（需登入等）升級也沒用
     if result.get("status") != "success":

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-19 新增：反爬偵測（cloaking 跨站漂移 + 封鎖頁）→ 標記需手動爬取（未部署）
+背景：部分站對機房 IP/爬蟲特徵反爬——cool-style 捲動時 cloaking 漂移到 Mobile01（存到 219 字垃圾、還污染學選擇器）；100.com.tw 對爬蟲味請求回 403「禁止爬取」封鎖頁（>150字漏抓被當文章）。實測：住宅 IP/瀏覽器 UA 拿到真文章，爬蟲味 UA 被擋。
+- **② 偵測（crawler `crawler.py`）**：
+  - 跨站漂移：捲動後 `final_url` 可註冊網域 ≠ 目標 → 疑 cloaking（`_reg_host` 比對；同站 http/https 不誤判）。
+  - 封鎖頁：`_looks_like_block_page`（強特徵「禁止爬取/驗證您是人類/Just a moment…」+ 內容<1200字才判，長文偶提不誤殺）。
+  - 命中 → 回 `status='skipped'` + `cloaked/needs_manual` + error「…需手動爬取」，**不把誤導/封鎖內容當文章**。
+  - **不學污染選擇器**：頁面跨站漂移時不把該選擇器存回原網域（修 coolsis 學到 mobile01 `#first-article` 的污染）。
+- **① 住宅代理破解（dormant）**：`tiered_fallback.needs_upgrade` 對 `cloaked` 回 True → Tier3 開啟（`system/config.tier3_enabled`）時自動改住宅代理重抓；**目前 tier3 關閉**，故偵測後直接標記需手動（住宅那段先 dormant，使用者決定先不開）。
+- **C 標記（analyser）**：dataset 該項顯示「🚫 需手動」+「⚠️ 反爬封鎖/飄移誤導 — 需手動爬取（請用手動匯入貼真人版）」。
+- 驗證：crawler py_compile + Jinja + `_looks_like_block_page`/`_reg_host` 單元測試（封鎖頁/長文不誤殺/跨站/同站不誤判）全過。分支 `feat/anti-bot-detect`，未部署。
+
 ## 2026-06-18 修正：佇列模式逐篇進度/錯誤即時顯示（補回遷移時掉的回饋，未部署）
 問題：佇列 worker `run_crawl_chunk` 只寫結果、不逐篇更新 job log/progress → 資料集頁整塊跑完前停在 0%、看不到錯誤（背景模式 `run_crawl_batch` 本有逐篇更新）。
 - `run_crawl_chunk.record`：逐篇更新 job `log = "(全域序號/總數) 狀態：標題"`，失敗/略過**附 error**；依全域序號估算 `progress`（讀一次 job.total）。
