@@ -32,7 +32,7 @@
       {# 步驟一：爬取資料集（Owner/Editor） #}
       {% if role in ('owner', 'editor') %}
       <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">① 爬取資料集（輸入網址）</div>
+        <div class="card-header fw-semibold">① 建立網址清單（草稿）</div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('project_bp.create_dataset', pid=pid) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -52,7 +52,8 @@
                 啟用 Gemini 輔助抽取（用 Project 的 Gemini Key，低置信度時協助找正文）
               </label>
             </div>
-            <button type="submit" class="btn btn-primary">開始爬取</button>
+            <button type="submit" class="btn btn-primary">建立清單（草稿）</button>
+            <div class="form-text">先存成草稿清單，可檢視/刪除網址；之後在資料集頁按「▶ 開始爬取」才送入爬蟲。</div>
           </form>
         </div>
       </div>
@@ -87,8 +88,8 @@
                 </div>
               </div>
               <div class="d-flex align-items-center gap-2">
-                <span class="badge bg-{% if ds.status == 'completed' %}success{% elif ds.status == 'failed' %}danger{% elif ds.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
-                  {{ ds.status }}
+                <span class="badge bg-{% if ds.status == 'completed' %}success{% elif ds.status == 'failed' %}danger{% elif ds.status == 'crawling' %}warning text-dark{% elif ds.status == 'draft' %}info text-dark{% else %}secondary{% endif %}">
+                  {% if ds.status == 'draft' %}草稿{% else %}{{ ds.status }}{% endif %}
                 </span>
                 {% if ds.status == 'completed' %}
                 <a href="{{ url_for('project_bp.download_dataset_md', pid=pid, did=ds.id) }}"

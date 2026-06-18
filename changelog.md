@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-18 新增：草稿資料集（貼上=只建清單，按「開始爬取」才送爬蟲，未部署）
+解：貼上網址只是保存使用者輸入的記憶，清單不因刪除/重載消失；爬取是獨立動作，與後續爬蟲流程完全解耦。僅 content-analyser。
+- **`create_dataset`** 改為建立 `status='draft'` 資料集：存 URL（正規化去重）+ 寫 items（`status='pending'`），**不送爬蟲**。清單持久化、可逐筆刪除（A 的 🗑）、重載不消失。
+- **新路由 `start_crawl`**（`POST /<pid>/datasets/<did>/crawl`）：按「▶ 開始爬取」才以「目前 items 清單」（使用者可能已刪部分）送 `submit_crawl_batch` → `draft → crawling`，之後完全照既有流程（爬完覆寫 pending → 結果；recrawl/auto-continue/research 全不受影響）。失敗保留草稿可重試。
+- **UI**：dataset_detail 草稿狀態顯示「▶ 開始爬取」+「🗑 刪除草稿」、草稿提示橫幅、待爬清單（pending 顯「待爬」徽章、可逐筆刪）；專案頁「① 建立網址清單（草稿）」按鈕＝建立清單；列表 draft 顯「草稿」徽章。
+- 解耦保證：草稿階段與 recrawl/auto-continue/research 零關聯（它們都在爬取之後才作用）。
+- 驗證：py_compile + 兩模板 Jinja 解析通過。分支 `feat/draft-dataset`，未部署。
+
 ## 2026-06-18 補強：資料集 A — URL 正規化去重 + 單篇刪除（未部署）
 僅 content-analyser。解「重複網址造成資料權重傾斜」+「無法刪單一網址」。
 - **`_url_key()` 正規化去重鍵**：小寫 scheme+host、去預設 port/`#fragment`/尾斜線、剝已知追蹤參數（utm_*/fbclid/gclid…，保留其他 query 如 `?id=1`）。原始 URL 仍保留供爬取/顯示。
