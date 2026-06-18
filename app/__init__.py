@@ -1,6 +1,6 @@
 import os
 from datetime import timedelta
-from flask import Flask
+from flask import Flask, request
 from authlib.integrations.flask_client import OAuth
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -53,6 +53,11 @@ def create_app():
         app.config['SESSION_COOKIE_SECURE'] = True
         app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
     
+    # Token 成本估算：開放給模板用（est_cost(model, prompt, output) / est_embed_cost(chars)）
+    from . import pricing
+    app.jinja_env.globals['est_cost'] = pricing.est_cost_usd
+    app.jinja_env.globals['est_embed_cost'] = pricing.est_embed_cost_usd
+
     # Initialize OAuth
     oauth.init_app(app)
 
@@ -99,6 +104,11 @@ def create_app():
         resp.headers.setdefault('X-Frame-Options', 'DENY')
         resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
         resp.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        # HTML 頁面禁快取（每次重新驗證）→ 部署後不再看到舊版 UI。
+        # 只針對 HTML；靜態檔（/static）由 Flask 自有快取標頭處理，不覆蓋。
+        ctype = (resp.headers.get('Content-Type') or '')
+        if ctype.startswith('text/html') and not request.path.startswith('/static'):
+            resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
         # 半內部服務：禁止搜尋引擎索引（比 robots.txt 更強，連被連結也不進搜尋結果）。
         resp.headers.setdefault('X-Robots-Tag', 'noindex, nofollow, noarchive')
         resp.headers.setdefault('Content-Security-Policy', (

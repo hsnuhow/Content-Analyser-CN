@@ -300,20 +300,8 @@ def cleanup_orphans():
     return redirect(url_for('admin_bp.admin_dashboard'))
 
 
-# 估算單價（USD / 1M tokens，input/output）。僅供成本概估、會隨各家定價變動，可在此調整。
-# 系統付模型為主（降噪 gemini-2.5-flash、embedding 以字元計費）。
-_PRICE_PER_1M = {
-    'gemini-2.5-flash': (0.30, 2.50),
-    'gemini-2.5-flash-lite': (0.10, 0.40),
-    'gemini-2.5-pro': (1.25, 10.0),
-}
-_PRICE_FALLBACK = (0.30, 2.50)               # 未知模型用 flash 價估
-_EMBED_PRICE_PER_1M_CHARS = 0.20             # text-multilingual-embedding-002 約略，每 1M 字元
-
-
-def _est_cost_usd(model: str, prompt: int, output: int) -> float:
-    pin, pout = _PRICE_PER_1M.get(model or '', _PRICE_FALLBACK)
-    return round((prompt / 1_000_000) * pin + (output / 1_000_000) * pout, 4)
+# 估算單價統一由 app/pricing.py 提供（含正確 embedding 字元單價），admin 與專案頁共用。
+from .pricing import est_cost_usd as _est_cost_usd, est_embed_cost_usd as _est_embed_cost_usd
 
 
 def _aggregate_system_usage():
@@ -337,9 +325,9 @@ def _aggregate_system_usage():
             if e:
                 emb['chars'] += int(e.get('chars', 0) or 0)
                 emb['n_texts'] += int(e.get('n_texts', 0) or 0)
-        # 估算金額：token 部分依各 category 模型（此處用 fallback，因 rollup 未存逐 category 模型）
-        tot['cost'] = _est_cost_usd('', tot['prompt'], tot['output'])
-        emb['cost'] = round((emb['chars'] / 1_000_000) * _EMBED_PRICE_PER_1M_CHARS, 4)
+        # 估算金額：系統付以降噪模型（gemini-2.5-flash）估；embedding 以字元單價估（正確 ~$0.025/1M chars）
+        tot['cost'] = _est_cost_usd('gemini-2.5-flash', tot['prompt'], tot['output'])
+        emb['cost'] = _est_embed_cost_usd(emb['chars'])
     except Exception as e:
         print(f"[admin_usage] system_token_usage 彙整失敗：{e}", flush=True)
     return {'by_category': by_category, 'totals': tot, 'embedding': emb, 'n_jobs': n_jobs}
