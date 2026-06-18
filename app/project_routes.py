@@ -50,11 +50,49 @@ def current_user_email() -> str:
     return session.get('user', {}).get('email', '')
 
 
+# 已知追蹤參數（保守清單）：去重時剝除，避免同頁因 utm/fbclid 等被當不同 URL 重複爬取。
+_TRACKING_PARAMS = {
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+    'utm_name', 'utm_reader', 'fbclid', 'gclid', 'gclsrc', 'dclid', 'msclkid',
+    'mc_cid', 'mc_eid', 'igshid', 'ref_src', 'yclid', 'spm', '_ga',
+}
+
+
+def _url_key(url: str) -> str:
+    """去重鍵：正規化 URL 以判同（保守，避免誤併不同頁）。
+    小寫 scheme+host、去預設 port、去 fragment、去尾斜線、剝已知追蹤參數（保留其他 query）。
+    原始 URL 仍另存供爬取/顯示，本函式只產生比對用的 key。"""
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    u = (url or '').strip()
+    if not u:
+        return ''
+    try:
+        sp = urlsplit(u)
+        scheme = (sp.scheme or '').lower()
+        host = (sp.hostname or '').lower()
+        if not host:
+            return u.lower()
+        netloc = host
+        port = sp.port
+        if port and not ((scheme == 'http' and port == 80) or (scheme == 'https' and port == 443)):
+            netloc = f"{host}:{port}"
+        path = sp.path or '/'
+        if len(path) > 1 and path.endswith('/'):
+            path = path.rstrip('/')
+        q = [(k, v) for k, v in parse_qsl(sp.query, keep_blank_values=True)
+             if k.lower() not in _TRACKING_PARAMS]
+        q.sort()
+        return urlunsplit((scheme, netloc, path, urlencode(q), ''))  # 去 fragment
+    except Exception:
+        return u.lower()
+
+
 def parse_url_list(raw: str) -> list:
     """容錯解析網址清單，回傳去重保序的 http(s) 網址。
 
     處理：真換行、被 URL 編碼的換行/空白（%0A/%0D/%20）、空白分隔、
     以及多個網址黏成一坨（用 lookahead 在每個 http(s):// 前切開）。
+    去重以 _url_key 正規化判同（同頁不同追蹤參數/尾斜線/fragment 視為同一）。
     """
     if not raw:
         return []
@@ -65,9 +103,11 @@ def parse_url_list(raw: str) -> list:
     for tok in re.split(r'\s+', raw.strip()):
         for part in re.split(r'(?=https?://)', tok):
             p = part.strip().strip('<>"\'，。、')
-            if p.startswith(('http://', 'https://')) and p not in seen:
-                seen.add(p)
-                out.append(p)
+            if p.startswith(('http://', 'https://')):
+                k = _url_key(p)
+                if k and k not in seen:
+                    seen.add(k)
+                    out.append(p)
     return out
 
 
@@ -1116,6 +1156,8 @@ def create_manual_dataset(pid, project, role):
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
     items = []
+    seen_keys = set()   # 資料集內去重：同一 URL 只保留一筆（正規化判同）
+    skipped_dup = 0
     for i, it in enumerate(data):
         if not isinstance(it, dict):
             flash(f'第 {i+1} 筆不是物件。', 'danger')
@@ -1125,6 +1167,13 @@ def create_manual_dataset(pid, project, role):
         url = str(it.get('url') or '').strip()
         if not text:
             continue  # 跳過無內文的項目
+        # 去重：有 url 才比對（無 url 的純文字項保留全部）
+        key = _url_key(url)
+        if key:
+            if key in seen_keys:
+                skipped_dup += 1
+                continue
+            seen_keys.add(key)
         text = text[:50000]
         items.append({
             'url': url,
@@ -1159,7 +1208,8 @@ def create_manual_dataset(pid, project, role):
     })
     _save_dataset_items(pid, ds_ref.id, items)
     log_usage('manual_import', detail=name, count=succeeded, project_id=pid)
-    flash(f'資料集「{name}」已匯入 {succeeded} 筆，可直接分析。', 'success')
+    _dup_note = f'（已去重跳過 {skipped_dup} 筆重複網址）' if skipped_dup else ''
+    flash(f'資料集「{name}」已匯入 {succeeded} 筆，可直接分析。{_dup_note}', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
 
@@ -1176,7 +1226,11 @@ def _items_ref(pid: str, did: str):
 
 def _load_dataset_items(pid: str, did: str) -> list:
     try:
-        items = [d.to_dict() for d in _items_ref(pid, did).order_by('_seq').stream()]
+        items = []
+        for d in _items_ref(pid, did).order_by('_seq').stream():
+            it = d.to_dict()
+            it['_id'] = d.id   # 供單篇刪除引用
+            items.append(it)
         if items:
             return items
     except Exception as e:
@@ -1213,7 +1267,7 @@ def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -
     batch = db.batch()
     n = 0
     for it in items:
-        batch.set(ref.document(), {**it, '_seq': seq})
+        batch.set(ref.document(), {**it, 'url_key': _url_key(it.get('url', '')), '_seq': seq})
         seq += 1
         n += 1
         if n % 400 == 0:
@@ -2004,6 +2058,26 @@ def rename_dataset(pid, did, project, role):
         abort(404)
     ref.update({'name': new_name, 'updated_at': firestore.SERVER_TIMESTAMP})
     flash('資料集名稱已更新。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+
+@bp.route('/<pid>/datasets/<did>/items/<item_id>/delete', methods=['POST'])
+@project_access_required(min_role='editor')
+def delete_dataset_item(pid, did, item_id, project, role):
+    """從資料集刪除單一網址項目（待爬 URL 或已爬內容皆適用），並重算計數。"""
+    item_ref = _items_ref(pid, did).document(item_id)
+    if not item_ref.get().exists:
+        flash('找不到該項目（可能已被刪除）。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    item_ref.delete()
+    # 重算 item_count / succeeded（以剩餘 items 為準）
+    remaining = [d.to_dict() for d in _items_ref(pid, did).stream()]
+    db.collection('projects').document(pid).collection('datasets').document(did).update({
+        'item_count': len(remaining),
+        'succeeded': sum(1 for it in remaining if it.get('status') == 'success'),
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    })
+    flash('已刪除該網址項目。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 

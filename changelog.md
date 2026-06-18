@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-18 補強：資料集 A — URL 正規化去重 + 單篇刪除（未部署）
+僅 content-analyser。解「重複網址造成資料權重傾斜」+「無法刪單一網址」。
+- **`_url_key()` 正規化去重鍵**：小寫 scheme+host、去預設 port/`#fragment`/尾斜線、剝已知追蹤參數（utm_*/fbclid/gclid…，保留其他 query 如 `?id=1`）。原始 URL 仍保留供爬取/顯示。
+- **`parse_url_list`** 改以 `_url_key` 去重（爬取建集）；**`create_manual_dataset`** 加資料集內去重（同 URL 只留一筆，flash 顯示去重數）；items 寫入時存 `url_key`。→ **一個資料集內一個 URL 只出現一次**。
+- **單篇刪除**：新路由 `POST /<pid>/datasets/<did>/items/<item_id>/delete`（Owner/Editor，重算 item_count/succeeded）；`_load_dataset_items` 補 `_id`；`dataset_detail.html` 每篇加 🗑 刪除鈕。
+- 驗證：py_compile、Jinja 解析、`_url_key` 7 案例單元測試（含「不誤併不同 path/有意義 query」）全過。分支 `feat/dataset-dedup-delete`，未部署。
+- 待做 B（清單先持久化 + 結果合併不覆寫）另案。
+
 ## 2026-06-18 修正：SSRF 過濾改逐 URL 跳過（不再整批失敗）+ 顯示被擋原因（未部署）
 問題：crawl/extract-images batch 端點原本「任一 URL 被 SSRF 過濾 → 整批 400 失敗」，且 content-analyser 只顯示「N 個 URL 被 SSRF 過濾拒絕」不顯示是哪個/為何 → 使用者無從修。
 - **crawler `app.py`**：`/api/crawl/batch`、`/api/extract-images` 改為「只有**全部**被擋才 400；否則照爬安全的、把被擋的（url+reason）記在 job 文件 `blocked`/`n_blocked`」。`scrape/batch`（逐項）與 `research`（已 proceed-if-any-safe）原本就 OK。`get_crawl_job` 回傳整個 job 文件 → `blocked` 自動流到呼叫端。
