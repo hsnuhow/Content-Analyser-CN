@@ -15,8 +15,8 @@
       <h2 class="mb-0">{{ dataset.name }}</h2>
       <span class="text-muted small">{{ dataset.item_count }} 個網址</span>
     </div>
-    <span class="badge fs-6 bg-{% if dataset.status == 'completed' %}success{% elif dataset.status == 'failed' %}danger{% elif dataset.status == 'crawling' %}warning text-dark{% else %}secondary{% endif %}">
-      {{ dataset.status }}
+    <span class="badge fs-6 bg-{% if dataset.status == 'completed' %}success{% elif dataset.status == 'failed' %}danger{% elif dataset.status == 'crawling' %}warning text-dark{% elif dataset.status == 'draft' %}info text-dark{% else %}secondary{% endif %}">
+      {% if dataset.status == 'draft' %}草稿（尚未爬取）{% else %}{{ dataset.status }}{% endif %}
     </span>
   </div>
 
@@ -30,6 +30,17 @@
           onsubmit="return confirm('強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-danger">⏹ 強制停止並刪除</button>
+    </form>
+    {% elif dataset.status == 'draft' %}
+    <form method="POST" action="{{ url_for('project_bp.start_crawl', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('將目前清單的網址送入爬蟲開始爬取？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-primary">▶ 開始爬取</button>
+    </form>
+    <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
+          onsubmit="return confirm('刪除整份草稿清單？此操作不可還原。');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-sm btn-outline-danger">🗑 刪除草稿</button>
     </form>
     {% else %}
     <form method="POST" action="{{ url_for('project_bp.recrawl_dataset', pid=pid, did=dataset.id) }}"
@@ -87,6 +98,14 @@
       {% endfor %}
     </ul>
     <div class="small text-muted mt-1">常見原因：網域打錯/失效、非 http(s)、解析到私有/保留 IP。修正後可重新匯入或重爬。</div>
+  </div>
+  {% endif %}
+
+  {# 草稿提示 #}
+  {% if dataset.status == 'draft' %}
+  <div class="alert alert-info">
+    📝 這是<strong>草稿清單</strong>——只保存了你輸入的網址，尚未爬取。可逐筆刪除（下方 🗑）、離開後再回來都在。
+    確認清單後按上方 <strong>▶ 開始爬取</strong> 才會正式送入爬蟲。
   </div>
   {% endif %}
 
@@ -229,7 +248,7 @@
   {% if dataset.get('items') %}
   <div class="card shadow-sm">
     <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-      <span>爬取結果</span>
+      <span>{% if dataset.status == 'draft' %}待爬網址清單{% else %}爬取結果{% endif %}</span>
       {% if dataset.status == 'completed' %}
       <div class="d-flex gap-2">
         <a href="{{ url_for('project_bp.download_dataset_md', pid=pid, did=dataset.id) }}"
@@ -248,8 +267,8 @@
           {% for it in dataset['items'] %}
           <tr>
             <td>
-              <span class="badge bg-{% if it.status == 'success' %}success{% elif it.status == 'skipped' %}secondary{% else %}danger{% endif %}">
-                {{ it.status }}
+              <span class="badge bg-{% if it.status == 'success' %}success{% elif it.status == 'skipped' %}secondary{% elif it.status == 'pending' %}info text-dark{% else %}danger{% endif %}">
+                {% if it.status == 'pending' %}待爬{% else %}{{ it.status }}{% endif %}
               </span>
             </td>
             <td>

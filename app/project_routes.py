@@ -1062,11 +1062,13 @@ def delete_analysis(pid, aid, project, role):
 @bp.route('/<pid>/datasets', methods=['POST'])
 @project_access_required(min_role='editor')
 def create_dataset(pid, project, role):
-    """提交 URL 清單，建立資料集並啟動 content-crawler 非同步爬取。"""
+    """貼上 URL → 建立『草稿』資料集（只保存清單，不送爬蟲）。
+    清單持久化、可逐筆刪除、重載不消失；按「開始爬取」才正式送入爬蟲（start_crawl）。
+    此階段只是保存使用者輸入的記憶，與後續所有爬取流程解耦。"""
     name = request.form.get('name', '').strip()
     use_gemini = bool(request.form.get('use_gemini'))
 
-    urls = parse_url_list(request.form.get('urls', ''))
+    urls = parse_url_list(request.form.get('urls', ''))   # 已正規化去重（A）
     if not name:
         flash('請填寫資料集名稱。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
@@ -1077,33 +1079,67 @@ def create_dataset(pid, project, role):
         flash('單次最多 1000 個網址（如需更多請分次或用重爬續加）。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
-    # 爬蟲 selector 輔助用 Project 的 LLM Key（若為 gemini）
-    llm_config = project.get('llm_config', {})
-    gemini_key = llm_config.get('api_key') if llm_config.get('provider') == 'gemini' else None
-
-    result = submit_crawl_batch(urls, use_gemini=use_gemini, gemini_api_key=gemini_key)
-    if 'error' in result:
-        flash(f'啟動爬取失敗：{result["error"]}', 'danger')
-        return redirect(url_for('project_bp.project_detail', pid=pid))
-
-    crawl_job_id = result.get('job_id')
     ds_ref = db.collection('projects').document(pid).collection('datasets').document()
     ds_ref.set({
         'id': ds_ref.id,
         'name': name,
         'source_urls': urls,
-        'crawl_job_id': crawl_job_id,
-        'status': 'crawling',
+        'crawl_job_id': None,
+        'status': 'draft',           # 草稿：只存清單，尚未爬取
+        'use_gemini': use_gemini,    # 開始爬取時沿用此偏好
         'progress': 0,
-        'log': '已提交爬取任務...',
+        'log': '草稿清單已建立，確認後按「開始爬取」。',
         'item_count': len(urls),
         'created_by': current_user_email(),
         'created_at': firestore.SERVER_TIMESTAMP,
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
-    log_usage('crawl', detail=name, count=len(urls), project_id=pid)
-    flash(f'資料集「{name}」已建立，正在爬取 {len(urls)} 個網址...', 'success')
+    # 待爬 items（status='pending'）：可逐筆刪除、重載不消失。
+    _save_dataset_items(pid, ds_ref.id, [{'url': u, 'status': 'pending'} for u in urls])
+    flash(f'草稿清單「{name}」已建立（{len(urls)} 個網址）。確認清單後按「開始爬取」。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
+
+
+@bp.route('/<pid>/datasets/<did>/crawl', methods=['POST'])
+@project_access_required(min_role='editor')
+def start_crawl(pid, did, project, role):
+    """把草稿清單目前的網址送入爬蟲開始爬取（draft → crawling）。
+    以「目前 items 清單」為準（使用者可能已刪除部分）；失敗保留草稿可重試。"""
+    ref = (db.collection('projects').document(pid)
+           .collection('datasets').document(did))
+    doc = ref.get()
+    if not doc.exists:
+        abort(404)
+    dataset = doc.to_dict()
+    if dataset.get('status') != 'draft':
+        flash('此資料集不是草稿狀態，無法開始爬取（已爬過的請用「重新爬取」）。', 'warning')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+    items = _load_dataset_items(pid, did)
+    urls = list(dict.fromkeys(it.get('url') for it in items if it.get('url')))
+    if not urls:
+        flash('清單沒有可爬取的網址。', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    llm_config = project.get('llm_config', {})
+    gemini_key = llm_config.get('api_key') if llm_config.get('provider') == 'gemini' else None
+    result = submit_crawl_batch(urls, use_gemini=bool(dataset.get('use_gemini')),
+                                gemini_api_key=gemini_key)
+    if 'error' in result:
+        flash(f'啟動爬取失敗：{result["error"]}（草稿清單已保留，可稍後重試）', 'danger')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
+
+    ref.update({
+        'crawl_job_id': result.get('job_id'),
+        'status': 'crawling',
+        'progress': 0,
+        'log': '已提交爬取任務...',
+        'source_urls': urls,
+        'item_count': len(urls),
+        'updated_at': firestore.SERVER_TIMESTAMP,
+    })
+    log_usage('crawl', detail=dataset.get('name', ''), count=len(urls), project_id=pid)
+    flash(f'已開始爬取 {len(urls)} 個網址...', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
 @bp.route('/<pid>/datasets/manual', methods=['POST'])
