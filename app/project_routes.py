@@ -1600,6 +1600,7 @@ def recrawl_dataset(pid, did, project, role):
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
     mode = request.form.get('mode', 'failed')
+    force_listing = bool(request.form.get('force_listing'))  # 強制爬取被略過的列表/商品頁
     items = _load_dataset_items(pid, did)
     all_urls = dataset.get('source_urls') or [it.get('url') for it in items if it.get('url')]
     success_urls = {it.get('url') for it in items
@@ -1616,7 +1617,7 @@ def recrawl_dataset(pid, did, project, role):
     llm_config = project.get('llm_config', {})
     gemini_key = llm_config.get('api_key') if llm_config.get('provider') == 'gemini' else None
     result = submit_crawl_batch(target_urls, use_gemini=bool(gemini_key),
-                                gemini_api_key=gemini_key)
+                                gemini_api_key=gemini_key, force_listing=force_listing)
     if 'error' in result:
         flash(f'啟動重爬失敗：{result["error"]}', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))

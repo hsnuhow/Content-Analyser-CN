@@ -55,12 +55,16 @@ def _query_status(path: str, job_id: str, timeout: int) -> dict:
 
 def submit_crawl_batch(urls: list, use_gemini: bool = False,
                        gemini_api_key: str = None,
-                       timeout: int = SUBMIT_TIMEOUT) -> dict:
-    """提交非同步批次爬取。回傳 {"job_id": ...} 或 {"error": ...}。"""
+                       timeout: int = SUBMIT_TIMEOUT,
+                       force_listing: bool = False) -> dict:
+    """提交非同步批次爬取。回傳 {"job_id": ...} 或 {"error": ...}。
+    force_listing=True：強制爬取被判為列表/商品頁的 URL（不略過）。"""
     base = _crawler_url()
     if not base:
         return {"error": "CRAWLER_SERVICE_URL 未設定。"}
     payload = {"urls": urls, "use_gemini": bool(use_gemini)}
+    if force_listing:
+        payload["force_listing"] = True
     if gemini_api_key:
         payload["gemini_api_key"] = gemini_api_key
     try:

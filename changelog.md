@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-06-18 修正：佇列模式逐篇進度/錯誤即時顯示（補回遷移時掉的回饋，未部署）
+問題：佇列 worker `run_crawl_chunk` 只寫結果、不逐篇更新 job log/progress → 資料集頁整塊跑完前停在 0%、看不到錯誤（背景模式 `run_crawl_batch` 本有逐篇更新）。
+- `run_crawl_chunk.record`：逐篇更新 job `log = "(全域序號/總數) 狀態：標題"`，失敗/略過**附 error**；依全域序號估算 `progress`（讀一次 job.total）。
+- chunk worker 例外 → 先寫 job log 再上拋（Cloud Tasks 重試），不再靜默。
+- `run_crawl_batch.record` 也補上 error 顯示（與佇列一致）。
+- 驗證：py_compile。分支 `feat/force-listing`（與 force_listing 一起部署）。
+
+## 2026-06-18 新增：強制爬取列表/商品頁（force_listing，使用者勾選後重爬，未部署）
+背景：分類/商品列表頁被 `_is_listing_page` 自動略過（status=skipped）；但商品導向頁對電商/品類研究有用。讓使用者判斷後**勾選開關強制重爬**抓回。
+- **crawler**：`scrape(..., force_listing=False)`——列表頁 skip 點（crawler.py:2285）`force_listing=True` 時改強制抽取、不略過。沿既有 `use_gemini` 管線一路串接：`/api/crawl/batch` 讀 `force_listing` → 佇列 task payload / fallback thread → `run_crawl_chunk`/`run_crawl_batch` → `_crawl_sequence` → `_scrape_one`/`_proxied_scrape` → `scrape`。
+- **content-analyser**：`submit_crawl_batch(..., force_listing=False)` 入 payload；`recrawl_dataset` 讀 `force_listing` 表單參數傳入（mode='failed' 本就把 skipped 當重爬目標 → 配 force_listing 把被略過的列表頁抓回）；dataset_detail「🔄 重爬未完成/失敗項」旁加勾選框「強制爬列表/商品頁」。
+- 預設行為不變（不勾＝列表頁照舊略過、保乾淨）；不影響其餘爬取/分析邏輯。提醒：列表頁抽出內容較薄（商品名/短描述），適合品類/市場研究。
+- 驗證：crawler+analyser py_compile、dataset_detail Jinja 解析；force_listing 全鏈路 22 處串接一致。分支 `feat/force-listing`，未部署。
+
 ## 2026-06-18 新增：草稿資料集（貼上=只建清單，按「開始爬取」才送爬蟲，未部署）
 解：貼上網址只是保存使用者輸入的記憶，清單不因刪除/重載消失；爬取是獨立動作，與後續爬蟲流程完全解耦。僅 content-analyser。
 - **`create_dataset`** 改為建立 `status='draft'` 資料集：存 URL（正規化去重）+ 寫 items（`status='pending'`），**不送爬蟲**。清單持久化、可逐筆刪除（A 的 🗑）、重載不消失。
