@@ -66,7 +66,8 @@ def _write_result(db, job_id: str, idx: int, result: dict) -> None:
 # 共用爬取序列（背景批次與佇列分塊都呼叫，確保看門狗/回收/Tier2-3 邏輯單一來源）
 # ──────────────────────────────────────────────────────────────────────
 def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
-                    is_cancelled_fn=None, deadline_sec=BATCH_MAX_SECONDS) -> dict:
+                    is_cancelled_fn=None, deadline_sec=BATCH_MAX_SECONDS,
+                    force_listing=False) -> dict:
     """逐一爬取 urls（含看門狗 / driver 回收 / Tier2-3 / force_close），每篇呼叫
     record_fn(local_index, url, result) 由呼叫端持久化（決定全域 index 與進度）。
     回 {counts, aborted, processed}。aborted 可能為 'cancelled' / 時限說明 / None。"""
@@ -87,7 +88,7 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
         if use_gemini and gemini_api_key:
             pc.configure_genai(gemini_api_key)
         try:
-            res = pc.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT)
+            res = pc.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT, force_listing=force_listing)
             if isinstance(res, dict):
                 res["resolved_by"] = getattr(pc, "last_resolved_by", "") or res.get("source", "")
             return res
@@ -103,7 +104,8 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
 
     def _scrape_one(url: str) -> dict:
         try:
-            result = crawler.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT, keep_driver=True)
+            result = crawler.scrape(url, hard_timeout_sec=PAGE_HARD_TIMEOUT, keep_driver=True,
+                                    force_listing=force_listing)
             if isinstance(result, dict):
                 result["resolved_by"] = getattr(crawler, "last_resolved_by", "") or result.get("source", "")
         except UnsupportedSiteError as e:
@@ -234,7 +236,7 @@ def _write_telemetry(db, by_method: dict) -> None:
 # 背景執行緒模式（fallback，佇列未啟用時用）
 # ──────────────────────────────────────────────────────────────────────
 def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
-                    gemini_api_key: str, db) -> None:
+                    gemini_api_key: str, db, force_listing: bool = False) -> None:
     """整批在單一背景執行緒內爬完（舊行為）。僅 fallback；多用戶並行有 OOM 風險。"""
     def _log(msg):
         print(f"[CrawlJob {job_id[:8]}] {msg}", flush=True)
@@ -253,7 +255,7 @@ def run_crawl_batch(job_id: str, urls: list, use_gemini: bool,
 
         out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
                               is_cancelled_fn=lambda: _is_cancelled(db, job_id),
-                              deadline_sec=BATCH_MAX_SECONDS)
+                              deadline_sec=BATCH_MAX_SECONDS, force_listing=force_listing)
         _write_telemetry(db, out.get("by_method"))
         if out["aborted"] == "cancelled":
             _log("收到取消請求，停止爬取")
@@ -322,7 +324,8 @@ def _complete_chunk(db, job_id: str, chunk_index: int, n_chunks: int,
 
 
 def run_crawl_chunk(job_id: str, urls: list, chunk_index: int, n_chunks: int,
-                    offset: int, use_gemini: bool, gemini_api_key: str, db) -> None:
+                    offset: int, use_gemini: bool, gemini_api_key: str, db,
+                    force_listing: bool = False) -> None:
     """同步處理單一塊（Cloud Tasks worker 呼叫）。在請求生命週期內跑完 → 每台 instance 1 Chrome。"""
     def _log(msg):
         print(f"[CrawlChunk {job_id[:8]}#{chunk_index}] {msg}", flush=True)
@@ -338,7 +341,7 @@ def run_crawl_chunk(job_id: str, urls: list, chunk_index: int, n_chunks: int,
 
     out = _crawl_sequence(urls, use_gemini, gemini_api_key, _log, record,
                           is_cancelled_fn=lambda: _is_cancelled(db, job_id),
-                          deadline_sec=CHUNK_MAX_SECONDS)
+                          deadline_sec=CHUNK_MAX_SECONDS, force_listing=force_listing)
     _write_telemetry(db, out.get("by_method"))
     _complete_chunk(db, job_id, chunk_index, n_chunks, out["counts"],
                     cancelled=(out["aborted"] == "cancelled"))

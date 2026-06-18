@@ -290,6 +290,7 @@ def crawl_batch():
 
     use_gemini = bool(data.get("use_gemini", False))
     gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
+    force_listing = bool(data.get("force_listing", False))   # 強制爬取列表/商品頁（不略過）
     urls = safe_urls
 
     job_id = str(uuid.uuid4())
@@ -321,6 +322,7 @@ def crawl_batch():
                 "job_id": job_id, "urls": chunk, "chunk_index": ci,
                 "n_chunks": len(chunks), "offset": offset,
                 "use_gemini": use_gemini, "gemini_api_key": gemini_api_key,
+                "force_listing": force_listing,
             }):
                 enq_ok += 1
         if enq_ok < len(chunks):
@@ -334,7 +336,7 @@ def crawl_batch():
     else:
         # Fallback（佇列未設定）：單一背景執行緒爬完。多用戶並行有 OOM 風險。
         threading.Thread(target=run_crawl_batch,
-                         args=(job_id, urls, use_gemini, gemini_api_key, db),
+                         args=(job_id, urls, use_gemini, gemini_api_key, db, force_listing),
                          daemon=True).start()
 
     return jsonify({"job_id": job_id, "status": "queued" if use_queue else "pending",
@@ -362,6 +364,7 @@ def crawl_run():
             bool(data.get("use_gemini", False)),
             data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY"),
             db,
+            bool(data.get("force_listing", False)),
         )
     except Exception as e:
         print(f"[CrawlRun] 塊處理失敗（將由 Cloud Tasks 重試）: {e}", flush=True)

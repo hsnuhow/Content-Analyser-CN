@@ -2173,7 +2173,7 @@ class HeadlessCrawler:
         return False
 
     def scrape(self, url: str, hard_timeout_sec: int = 300,
-               keep_driver: bool = False) -> Dict[str, Any]:
+               keep_driver: bool = False, force_listing: bool = False) -> Dict[str, Any]:
         """爬取單一網址，含硬性時限與載入逾時容忍（對齊 Colab v3.8）。
 
         Args:
@@ -2282,6 +2282,8 @@ class HeadlessCrawler:
                 if len(jld_check) >= 200 or is_article_og:
                     reason = f"JSON-LD {len(jld_check)} 字" if len(jld_check) >= 200 else "og:type=article"
                     self._log(f"[Execution Strategy] 列表頁判斷被「{reason}」否決，視為單篇文章。")
+                elif force_listing:
+                    self._log("[Execution Strategy] 列表頁——但 force_listing=True，強制抽取（不略過）。")
                 else:
                     self._log("[Execution Strategy] Detected a listing page. Skipping.")
                     return {"status": "skipped", "url": url, "error": "Skipped: URL is an article list/category page."}
