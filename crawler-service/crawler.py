@@ -2043,6 +2043,54 @@ class HeadlessCrawler:
         return {"status": "success", "url": url, "title": title,
                 "content": content, "length": len(content), "source": "static_template"}
 
+    def _neterror_salvage(self, url: str):
+        """Chrome 連線錯誤頁（neterror）後的靜態 HTTP 救援＋封鎖判別。
+
+        背景：部分站台（如 WordPress.com/Automattic）在連線層級封鎖資料中心 IP，
+        headless Chrome 一載入就回 net error 錯誤頁。此時用「同容器、不同 TCP/UA」的
+        靜態 HTTP 再試一次，能把兩種情況分開，避免一律當可重試 failure 而無限重爬。
+
+        回傳 (verdict, result)：
+          ('ok', dict)        靜態 HTTP 抽得到內文 → 直接採用（Chrome 被擋但站台可達）。
+          ('blocked', None)   連靜態 HTTP 都連不上（連線層級失敗）→ 資料中心 IP 疑似被封 → 需手動。
+          ('reachable', None) 站台可連（含 HTTP 4xx/5xx）但抽不到內文 → 一般失敗（可重試）。
+        """
+        import urllib.request
+        import urllib.error
+        import socket
+        import html as _html
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                ctype = (resp.headers.get("Content-Type", "") or "").lower()
+                html_raw = resp.read(3_000_000).decode("utf-8", "ignore") if "html" in ctype else ""
+        except urllib.error.HTTPError as e:
+            # 有 HTTP 狀態碼（403/404/5xx）＝站台可連、只是擋此請求或無此頁 → 一般失敗（非 IP 封鎖）
+            self._log(f"[Neterror救援] 靜態抓取 HTTP {e.code} → 站台可連，判一般失敗")
+            return ("reachable", None)
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            # 連線層級失敗（連不上/逾時/被 reset）＝資料中心 IP 疑似被站台封鎖 → 需手動，重爬無益
+            self._log(f"[Neterror救援] 靜態抓取連線層級失敗（{e}）→ 疑似封鎖資料中心 IP")
+            return ("blocked", None)
+        if not html_raw:
+            return ("reachable", None)
+        try:
+            content = self._trim_trailing_boilerplate(self._extract_main_text(html_raw, url) or "")
+        except Exception as e:
+            self._log(f"[Neterror救援] 靜態抽取失敗：{e}")
+            content = ""
+        if (content and len(content) >= 200
+                and not self._looks_like_block_page(content)
+                and not self._looks_like_browser_error_page(content)):
+            m = (re.search(r'<meta property="og:title" content="([^"]*)"', html_raw)
+                 or re.search(r'<title[^>]*>(.*?)</title>', html_raw, re.S | re.I))
+            title = _html.unescape(m.group(1).strip()) if m else url
+            self._log(f"[Neterror救援] ✅ 靜態 HTTP 抽回 {len(content)} 字（Chrome 被擋但站台可連）")
+            return ("ok", {"status": "success", "url": url, "title": title,
+                           "content": content, "length": len(content), "source": "neterror_salvage"})
+        return ("reachable", None)
+
     # ──────────────────────────────────────────────────────────────────
     # YouTube：Tier 1（oEmbed/og 取標題+說明）+ Tier 2（Gemini 影片理解取口白）
     # ──────────────────────────────────────────────────────────────────
@@ -2279,7 +2327,16 @@ class HeadlessCrawler:
             # ⭐ 早期偵測 Chrome 連線錯誤頁（<body class="neterror">）：站台連不上時
             #   快速判失敗，避免在錯誤頁上白跑滾動/Gemini 直到逾時，並讓 Tier 3 提早接手。
             if 'class="neterror"' in dom_snapshot_source or 'id="main-frame-error"' in dom_snapshot_source:
-                self._log("[Crawler] 偵測到 Chrome 連線錯誤頁（neterror），快速判失敗")
+                self._log("[Crawler] 偵測到 Chrome 連線錯誤頁（neterror）→ 靜態 HTTP 救援/封鎖判別")
+                verdict, salvaged = self._neterror_salvage(url)
+                if salvaged:
+                    return salvaged
+                if verdict == "blocked":
+                    # 瀏覽器與靜態抓取皆連不上 → 資料中心 IP 疑似被站台封鎖（重爬無益）→ 標需手動
+                    return {"status": "skipped", "url": url,
+                            "error": "站台疑似封鎖資料中心 IP（瀏覽器與靜態抓取皆無法連線），"
+                                     "需手動爬取（建議用 Claude Cowork / 住宅網路手動匯入貼上）",
+                            "cloaked": True, "needs_manual": True}
                 return {"status": "failed", "url": url,
                         "error": "瀏覽器錯誤頁（站台無法連線，可能 HTTP-only 或被封鎖）",
                         "browser_error": True}
