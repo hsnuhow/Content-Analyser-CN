@@ -667,6 +667,16 @@ def _reconcile_analysis(pid: str, aid: str, analysis: dict) -> dict:
         ne = ps.get('numeric_exports')
         if isinstance(ne, dict) and ne:
             update['numeric_exports'] = ne
+        # Token 記帳（用戶付，跟專案走）：存該分析的 token_usage + 累加專案總額。
+        # 完成分支（line 638 守衛）每個分析僅進一次，故 Increment 不會重複累加。
+        tu = ps.get('token_usage')
+        if isinstance(tu, dict) and (tu.get('totals') or {}).get('total'):
+            update['token_usage'] = tu
+            try:
+                db.collection('projects').document(pid).update(
+                    {'token_usage_total': firestore.Increment(int(tu['totals']['total']))})
+            except Exception as e:
+                print(f"[token] 專案總額累加略過：{e}", flush=True)
         ref.update(update); analysis.update(update)
         return {'status': 'completed', 'progress': 100, 'log': plog}
 
@@ -869,8 +879,18 @@ def _reconcile_derive(pid, aid, analysis: dict) -> dict:
         return {'status': 'running', 'log': ps.get('log', '')}
     if new == 'completed':
         reports = ps.get('audience_reports') or {}
-        _analysis_ref(pid, aid).update({
-            'derived_reports': reports, 'derive_status': 'completed'})
+        dupd = {'derived_reports': reports, 'derive_status': 'completed'}
+        # 延伸報告 token（用戶付）→ 存母分析 derive_token_usage（不覆蓋主 token_usage）+ 累加專案總額。
+        # 完成分支（line 873 守衛）每分析僅進一次，Increment 不重複。
+        tu = ps.get('token_usage')
+        if isinstance(tu, dict) and (tu.get('totals') or {}).get('total'):
+            dupd['derive_token_usage'] = tu
+            try:
+                db.collection('projects').document(pid).update(
+                    {'token_usage_total': firestore.Increment(int(tu['totals']['total']))})
+            except Exception as e:
+                print(f"[token] 延伸報告專案總額累加略過：{e}", flush=True)
+        _analysis_ref(pid, aid).update(dupd)
         analysis['derived_reports'] = reports
         analysis['derive_status'] = 'completed'
         return {'status': 'completed'}

@@ -13,6 +13,11 @@
       </nav>
       <h2 class="mb-0">{{ project.title }}</h2>
       {% if project.description %}<p class="text-muted">{{ project.description }}</p>{% endif %}
+      {% if project.token_usage_total %}
+      <span class="badge bg-light text-dark border" title="本專案歷次分析累計消耗的 LLM token（用戶付，本專案自備 Key）">
+        🔢 專案累計 Token：{{ '{:,}'.format(project.token_usage_total) }}
+      </span>
+      {% endif %}
     </div>
     <span class="badge bg-{% if role == 'owner' %}primary{% elif role == 'editor' %}success{% else %}secondary{% endif %} fs-6">
       {{ role }}

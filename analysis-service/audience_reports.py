@@ -56,7 +56,7 @@ def _build_one(expert: Dict, llm: LLMClient, report_title: str, source_md: str,
         + wrap_untrusted(source_md, tag="REPORT")
     )
     try:
-        body = llm.generate(prompt, max_tokens=4096)
+        body = llm.generate(prompt, max_tokens=4096, category="derived")
     except Exception as e:
         log(f"[Audience:{expert.get('slug')}] 生成失敗：{e}")
         return f"# {label}\n\n> ⚠️ 此份生成失敗：{e}\n> 可重新產生延伸報告再試。"
@@ -70,7 +70,8 @@ def _build_one(expert: Dict, llm: LLMClient, report_title: str, source_md: str,
 def build_audience_reports(report_title: str, source_md: str,
                            experts: List[Dict], llm_cfg: Dict,
                            log: Callable[[str], None],
-                           db=None, project_id: str = "") -> Dict[str, str]:
+                           db=None, project_id: str = "",
+                           usage_out: list = None) -> Dict[str, str]:
     """各專家延伸報告並行生成。回 {slug: markdown}。主報告唯讀。
     db + project_id 供解耦式 RAG 檢索（系統 SA）；缺則純手冊。"""
     llm = LLMClient(provider=llm_cfg["provider"], model=llm_cfg["model"],
@@ -94,6 +95,8 @@ def build_audience_reports(report_title: str, source_md: str,
                    for e in experts}
         for fut, slug in futures.items():
             out[slug] = fut.result()
+    if usage_out is not None:
+        usage_out.extend(getattr(llm, "usage_log", []))
     return out
 
 
@@ -116,9 +119,16 @@ def run_audience_reports(job_id: str, report_title: str, source_md: str,
         _update(status="running", progress=10,
                 log=f"產生 {len(experts or [])} 份延伸行動報告中...")
         project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+        _usage = []
         reports = build_audience_reports(report_title, source_md, experts, llm_cfg, _log,
-                                         db=db, project_id=project_id)
+                                         db=db, project_id=project_id, usage_out=_usage)
+        try:
+            import token_usage as _tu
+            _tu_agg = _tu.aggregate(_usage); _tu_agg["payer"] = "user"
+        except Exception:
+            _tu_agg = {}
         _update(status="completed", progress=100, audience_reports=reports,
+                token_usage=_tu_agg,
                 log="延伸報告完成", completed_at=firestore.SERVER_TIMESTAMP)
     except Exception as e:
         print(f"[Audience] 任務失敗: {e}", flush=True)

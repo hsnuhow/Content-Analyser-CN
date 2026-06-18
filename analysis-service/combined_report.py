@@ -34,7 +34,7 @@ def _visual_key_points(visual_md: str) -> str:
 
 def build_combined_report(report_title: str, text_md: str, visual_md: str,
                           topic: str, llm_cfg: Dict,
-                          log: Callable[[str], None]) -> str:
+                          log: Callable[[str], None], usage_out: list = None) -> str:
     """整合報告 = 文字報告（原文保留，主體）＋ 視覺分析重點（原文保留）＋ 整合洞察（LLM 生成）。
 
     **不改寫兩份原報告**：原內容逐字嵌入，僅由 LLM 額外生成「整合洞察」一段，
@@ -60,11 +60,13 @@ def build_combined_report(report_title: str, text_md: str, visual_md: str,
         + "\n\n【視覺分析重點】\n" + wrap_untrusted(visual_key, tag="VISUAL")
     )
     try:
-        insight = llm.generate(prompt, max_tokens=3500)
+        insight = llm.generate(prompt, max_tokens=3500, category="combined")
     except LLMError as e:
         log(f"[Combined] 整合洞察產生失敗：{e}")
         raise
 
+    if usage_out is not None:
+        usage_out.extend(getattr(llm, "usage_log", []))
     return (
         f"# 整合策略報告：{report_title}\n\n"
         "> 以「文字內容分析」為主體，附加「視覺分析」重點，並加上整合洞察。"
@@ -94,9 +96,16 @@ def run_combined_report(job_id: str, report_title: str, text_md: str,
 
     try:
         _update(status="running", log="整合中（文字 × 視覺）...")
+        _usage = []
         md = build_combined_report(report_title, text_md, visual_md, topic,
-                                   llm_cfg, _log)
+                                   llm_cfg, _log, usage_out=_usage)
+        try:
+            import token_usage as _tu
+            _tu_agg = _tu.aggregate(_usage); _tu_agg["payer"] = "user"
+        except Exception:
+            _tu_agg = {}
         _update(status="completed", progress=100, result_markdown=md,
+                token_usage=_tu_agg,
                 log="整合報告完成", completed_at=firestore.SERVER_TIMESTAMP)
     except Exception as e:
         print(f"[Combined] 整合任務失敗: {e}", flush=True)

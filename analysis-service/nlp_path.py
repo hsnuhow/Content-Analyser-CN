@@ -218,16 +218,25 @@ def run_tfidf(contents: List[Dict]) -> Dict[str, Any]:
 # Path 1b：Vertex AI Embedding + 語意分群
 # ──────────────────────────────────────────────────────────────────────
 
-def _get_embeddings(texts: List[str], project_id: str) -> List[List[float]]:
+def _get_embeddings(texts: List[str], project_id: str, usage_sink: Dict = None) -> List[List[float]]:
     """呼叫 Vertex AI text-multilingual-embedding-002，取得語意向量。
     使用 Application Default Credentials（Cloud Run Service Account）。
 
     批次彼此獨立 → 並行送（EMBEDDING_WORKERS）並依批起始索引重組，確保 embeddings[i] ↔ texts[i] 對位。
     每次呼叫帶 HTTP 逾時（EMBED_CALL_TIMEOUT_MS），避免單一掛住的呼叫拖到數分鐘。
+    usage_sink：token 記帳用（系統付）。給 dict 則累加實際送出的字元數與筆數（embedding 以字元計費，估算）。
     """
     from google import genai
     from google.genai import types
     import time as _time
+
+    # 記帳（系統付，字元估算）：只算實際送進 Vertex 的 texts（cache miss 由上層已篩過）。
+    if usage_sink is not None:
+        try:
+            usage_sink["chars"] = usage_sink.get("chars", 0) + sum(len(t or "") for t in texts)
+            usage_sink["n_texts"] = usage_sink.get("n_texts", 0) + len(texts)
+        except Exception:
+            pass
 
     client = genai.Client(
         vertexai=True,
@@ -276,11 +285,12 @@ def _emb_key(text: str) -> str:
         f"{EMBED_MODEL}:{EMBED_DIM}:{text}".encode("utf-8")).hexdigest()
 
 
-def _embed_texts(texts: List[str], project_id: str, db=None) -> List[List[float]]:
+def _embed_texts(texts: List[str], project_id: str, db=None, usage_sink: Dict = None) -> List[List[float]]:
     """帶 Firestore 快取的向量化：先查 embeddings/{key}，只對 miss 呼叫 Vertex，再寫回。
-    db=None 或任何快取層錯誤 → 退回純 _get_embeddings（快取絕不擋分析）。對位以 texts 順序重組。"""
+    db=None 或任何快取層錯誤 → 退回純 _get_embeddings（快取絕不擋分析）。對位以 texts 順序重組。
+    usage_sink：傳遞給 _get_embeddings 記帳（只計 cache miss 的實際 API 字元）。"""
     if db is None:
-        return _get_embeddings(texts, project_id)
+        return _get_embeddings(texts, project_id, usage_sink)
     try:
         keys = [_emb_key(t) for t in texts]
         uniq = list(dict.fromkeys(keys))  # 去重（同文多篇只查/算一次）
@@ -298,7 +308,7 @@ def _embed_texts(texts: List[str], project_id: str, db=None) -> List[List[float]
         for t, k in zip(texts, keys):
             key_to_text.setdefault(k, t)
         if miss_keys:
-            miss_vecs = _get_embeddings([key_to_text[k] for k in miss_keys], project_id)
+            miss_vecs = _get_embeddings([key_to_text[k] for k in miss_keys], project_id, usage_sink)
             if len(miss_vecs) == len(miss_keys):
                 from firebase_admin import firestore as _fs
                 batch = db.batch()
@@ -314,22 +324,24 @@ def _embed_texts(texts: List[str], project_id: str, db=None) -> List[List[float]
                     print(f"[nlp] embedding 快取寫回失敗（不影響分析）：{e}", flush=True)
             else:
                 # 數量不符 → 不信快取，整批重算（安全）
-                return _get_embeddings(texts, project_id)
+                return _get_embeddings(texts, project_id, usage_sink)
         hits = len(uniq) - len(miss_keys)
         print(f"[nlp] embedding 快取：{hits}/{len(uniq)} 命中，{len(miss_keys)} 新算", flush=True)
         # 依原 texts 順序組回（重複文字共用同一向量）
         return [cached[k] for k in keys]
     except Exception as e:
         print(f"[nlp] embedding 快取層錯誤，退回純向量化：{e}", flush=True)
-        return _get_embeddings(texts, project_id)
+        return _get_embeddings(texts, project_id, usage_sink)
 
 
-def run_semantic_clustering(contents: List[Dict], project_id: str, db=None) -> Dict[str, Any]:
+def run_semantic_clustering(contents: List[Dict], project_id: str, db=None,
+                            usage_sink: Dict = None) -> Dict[str, Any]:
     """語意分群：Vertex AI Embedding → KMeans。
 
     回傳：
       clusters:   [{cluster_id, articles: [{url, title}]}]
       n_clusters: int
+    usage_sink：embedding 記帳（系統付，字元估算）傳遞給 _embed_texts。
     """
     n = len(contents)
     if n < 3:
@@ -350,7 +362,7 @@ def run_semantic_clustering(contents: List[Dict], project_id: str, db=None) -> D
         for c in contents
     ]
 
-    embeddings = _embed_texts(texts, project_id, db)
+    embeddings = _embed_texts(texts, project_id, db, usage_sink)
     # 對位防呆：分群用 labels[i] ↔ contents[i] 對應。若 embeddings 數量與 texts 不符
     # （某批少回 → 錯位），後續會把文章分到錯群 → 寧可降級單群，不冒錯位風險。
     if len(embeddings) < 2 or len(embeddings) != len(texts):
@@ -536,6 +548,7 @@ def run(contents: List[Dict], project_id: str,
         ]}], "n_clusters": 1 if contents else 0}
 
     cluster_result: Dict[str, Any] = {"clusters": [], "n_clusters": 0}
+    emb_usage: Dict[str, int] = {"chars": 0, "n_texts": 0}  # embedding 記帳（系統付，字元估算）
     if project_id:
         _log("[Path 1b] Vertex AI 語意分群...")
         # best-effort + 硬時限：embedding 偶有數分鐘級延遲/SSL 重試，超過 CLUSTER_DEADLINE_SEC
@@ -543,7 +556,7 @@ def run(contents: List[Dict], project_id: str,
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
                 cluster_result = _ex.submit(
-                    run_semantic_clustering, contents, project_id, db
+                    run_semantic_clustering, contents, project_id, db, emb_usage
                 ).result(timeout=CLUSTER_DEADLINE_SEC)
             _log(f"[Path 1b] 完成，共 {cluster_result['n_clusters']} 個主題群")
         except concurrent.futures.TimeoutError:
@@ -587,7 +600,8 @@ def run(contents: List[Dict], project_id: str,
         entities = {"entities": [], "enabled": False, "reason": str(e)}
 
     return {"tfidf": tfidf, "clusters": cluster_result,
-            "assoc": assoc, "entities": entities}
+            "assoc": assoc, "entities": entities,
+            "embedding_usage": emb_usage}
 
 
 def _attach_cluster_keywords(cluster_result: Dict, per_article: List[Dict],

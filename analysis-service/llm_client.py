@@ -59,12 +59,30 @@ class LLMClient:
         self.thinking = bool(thinking)
         self.max_tokens = max_tokens or DEFAULT_MAX_TOKENS
         self.top_p = top_p
+        # Token 記帳（待開發 10）：每次成功呼叫附 usage 記錄，呼叫端（pipeline 等）跑完讀此累計。
+        # [{category, provider, model, prompt, output, total}]。用戶付（per-project Key）。
+        self.usage_log = []
+
+    def _record_usage(self, category: str, raw_usage) -> None:
+        """把單次呼叫的 usage 正規化後存入 usage_log。best-effort，不影響生成。"""
+        try:
+            from token_usage import norm_usage
+            u = norm_usage(self.provider, raw_usage)
+            self.usage_log.append({
+                "category": category or "llm", "provider": self.provider,
+                "model": self.model, "prompt": u["prompt"],
+                "output": u["output"], "total": u["total"],
+            })
+        except Exception:
+            pass
 
     def generate(self, prompt: str,
                  temperature: float = None,
                  max_tokens: int = None,
-                 top_p: float = None) -> str:
-        """呼叫 LLM，回傳生成的文字。失敗或逾時時拋出 LLMError。"""
+                 top_p: float = None,
+                 category: str = None) -> str:
+        """呼叫 LLM，回傳生成的文字。失敗或逾時時拋出 LLMError。
+        category：token 記帳的呼叫類型標籤（如 synthesis_summary / qualitative）。"""
         if temperature is None:
             temperature = self.temperature      # 用戶設定的預設溫度
         if max_tokens is None:
@@ -86,7 +104,9 @@ class LLMClient:
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(_call)
-                    return future.result(timeout=LLM_TIMEOUT_SEC)
+                    text, usage = future.result(timeout=LLM_TIMEOUT_SEC)
+                    self._record_usage(category, usage)
+                    return text
             except concurrent.futures.TimeoutError as e:
                 last_exc = LLMError(f"LLM 呼叫逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
             except Exception as e:
@@ -103,7 +123,8 @@ class LLMClient:
         raise LLMError(f"LLM 呼叫失敗（{self.provider}）：{last_exc}") from last_exc
 
     def generate_vision(self, prompt: str, image_bytes: bytes, mime_type: str,
-                        temperature: float = None, max_tokens: int = None) -> str:
+                        temperature: float = None, max_tokens: int = None,
+                        category: str = None) -> str:
         """影像理解：傳入圖片 bytes + 提示，回傳模型對圖片的文字分析。
         目前支援 gemini / claude（皆原生 vision）；失敗或逾時拋 LLMError。
         與 generate() 同樣對暫時性錯誤做指數退避重試。"""
@@ -125,7 +146,9 @@ class LLMClient:
         for attempt in range(MAX_RETRIES):
             try:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    return executor.submit(_call).result(timeout=LLM_TIMEOUT_SEC)
+                    text, usage = executor.submit(_call).result(timeout=LLM_TIMEOUT_SEC)
+                    self._record_usage(category or "image_vision", usage)
+                    return text
             except concurrent.futures.TimeoutError:
                 last_exc = LLMError(f"影像分析逾時（>{LLM_TIMEOUT_SEC}s，{self.provider}）")
             except Exception as e:
@@ -156,7 +179,7 @@ class LLMClient:
         resp = client.models.generate_content(
             model=self.model, contents=parts,
             config=types.GenerateContentConfig(**cfg_kwargs))
-        return (resp.text or "").strip()
+        return (resp.text or "").strip(), getattr(resp, "usage_metadata", None)
 
     def _call_claude_vision(self, prompt: str, image_bytes: bytes, mime_type: str,
                             temperature: float, max_tokens: int) -> str:
@@ -172,7 +195,7 @@ class LLMClient:
                 {"type": "text", "text": prompt}]}])
         txt = "".join(getattr(b, "text", "") for b in (msg.content or [])
                       if getattr(b, "type", "") == "text")
-        return txt.strip()
+        return txt.strip(), getattr(msg, "usage", None)
 
     def _call_gemini(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:
@@ -200,7 +223,7 @@ class LLMClient:
                 contents=prompt,
                 config=types.GenerateContentConfig(**cfg_kwargs),
             )
-            return (resp.text or "").strip()
+            return (resp.text or "").strip(), getattr(resp, "usage_metadata", None)
 
         try:
             return _generate(self.model)
@@ -234,7 +257,7 @@ class LLMClient:
         # 防呆：content 可能為空或含非 text block（如 max_tokens 截斷、tool block）。
         txt = "".join(getattr(b, "text", "") for b in (msg.content or [])
                       if getattr(b, "type", "") == "text")
-        return txt.strip()
+        return txt.strip(), getattr(msg, "usage", None)
 
     def _call_openai(self, prompt: str, temperature: float, max_tokens: int,
                      top_p: float = None) -> str:
@@ -261,4 +284,4 @@ class LLMClient:
                 resp = client.chat.completions.create(**alt)
             else:
                 raise
-        return (resp.choices[0].message.content or "").strip()
+        return (resp.choices[0].message.content or "").strip(), getattr(resp, "usage", None)

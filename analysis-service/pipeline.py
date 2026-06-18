@@ -110,10 +110,11 @@ def run_analysis(job_id: str, report_title: str,
         # ── 前處理：口語/社群逐字稿降噪（A 抽取式降噪 + B 訊號抽取）──
         # 系統 Vertex SA + flash-lite，進分析前先去雜訊（不摘要、逐字保留）。失敗退回原文。
         source_signals: list = []
+        denoise_usage: list = []   # 系統付 token 記帳（降噪）
         try:
             import denoise
             _progress(8, "前處理：口語/社群逐字稿降噪...")
-            contents, source_signals = denoise.denoise_contents(contents, project_id, _log)
+            contents, source_signals, denoise_usage = denoise.denoise_contents(contents, project_id, _log)
         except Exception as e:
             _log(f"降噪前處理略過（用原文）：{e}")
 
@@ -306,6 +307,26 @@ def run_analysis(job_id: str, report_title: str,
             _log(f"數值 CSV 匯出生成略過：{e}")
             numeric_exports = {}
 
+        # ── Token 記帳（待開發 10）──
+        # 用戶付（per-project LLM Key，走 llm.usage_log）→ 隨 job 回傳、跟專案走（content-analyser 落地）。
+        # 系統付（降噪 token + embedding 字元）→ 寫 system_token_usage 進管理者後台，不算進專案。
+        user_token_usage = {}
+        try:
+            import token_usage as _tu
+            agg = _tu.aggregate(getattr(llm, "usage_log", []))
+            agg["payer"] = "user"
+            user_token_usage = agg
+            # 系統付：降噪 token + embedding 字元估算
+            emb = (nlp_results.get("embedding_usage") or {})
+            _tu.write_system_usage(
+                db, denoise_usage,
+                {"service": "analysis-pipeline", "job_kind": "analysis",
+                 "job_id": job_id, "project_id": project_id},
+                embedding=emb if emb.get("chars") else None,
+            )
+        except Exception as e:
+            _log(f"Token 記帳略過：{e}")
+
         _update_job(
             db, job_id,
             status="completed",
@@ -313,6 +334,7 @@ def run_analysis(job_id: str, report_title: str,
             log="分析完成！",
             result_markdown=final_md,
             numeric_exports=numeric_exports,
+            token_usage=user_token_usage,
             completed_at=firestore.SERVER_TIMESTAMP,
         )
         _log("✅ 分析任務完成")

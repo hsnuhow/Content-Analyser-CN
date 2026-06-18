@@ -240,6 +240,7 @@ def get_job(job_id: str):
     if job.get("status") == "completed":
         safe_fields["result_markdown"] = job.get("result_markdown", "")
         safe_fields["numeric_exports"] = job.get("numeric_exports", {})
+        safe_fields["token_usage"] = job.get("token_usage", {})
     if job.get("status") == "failed":
         safe_fields["error"] = job.get("log", "")
 
@@ -324,6 +325,7 @@ def get_image_job(job_id: str):
     }
     if job.get("status") == "completed":
         safe["result_markdown"] = job.get("result_markdown", "")
+        safe["token_usage"] = job.get("token_usage", {})
     if job.get("status") == "failed":
         safe["error"] = job.get("log", "")
     return jsonify(safe), 200
@@ -400,6 +402,7 @@ def get_combined_job(job_id: str):
     }
     if job.get("status") == "completed":
         safe["result_markdown"] = job.get("result_markdown", "")
+        safe["token_usage"] = job.get("token_usage", {})
     if job.get("status") == "failed":
         safe["error"] = job.get("log", "")
     return jsonify(safe), 200
@@ -474,6 +477,7 @@ def get_audience_job(job_id: str):
     }
     if job.get("status") == "completed":
         safe["audience_reports"] = job.get("audience_reports", {})
+        safe["token_usage"] = job.get("token_usage", {})
     if job.get("status") == "failed":
         safe["error"] = job.get("log", "")
     return jsonify(safe), 200

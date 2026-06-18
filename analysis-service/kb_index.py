@@ -74,7 +74,8 @@ def reindex_expert(db, project_id: str, expert_slug: str) -> int:
             items.append((d.id, seq, ch))
     if not items:
         return 0
-    vectors = _get_embeddings([t for _, _, t in items], project_id)
+    emb_sink = {"chars": 0, "n_texts": 0}  # 系統付 embedding 記帳（字元估算）
+    vectors = _get_embeddings([t for _, _, t in items], project_id, emb_sink)
     if len(vectors) != len(items):
         raise RuntimeError(f"embedding 數({len(vectors)})≠chunk 數({len(items)})")
     batch = db.batch()
@@ -91,6 +92,15 @@ def reindex_expert(db, project_id: str, expert_slug: str) -> int:
             batch.commit()
             batch = db.batch()
     batch.commit()
+    # 系統付 embedding 記帳 → 後台（KB 索引屬系統成本）
+    try:
+        import token_usage as _tu
+        _tu.write_system_usage(
+            db, [], {"service": "analysis-pipeline", "job_kind": "kb_index",
+                     "job_id": expert_slug, "project_id": project_id},
+            embedding=emb_sink if emb_sink.get("chars") else None)
+    except Exception as e:
+        print(f"[KB] embedding 記帳略過：{e}", flush=True)
     # 標記文件已索引
     for d in docs:
         try:

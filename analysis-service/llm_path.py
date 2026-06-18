@@ -90,7 +90,7 @@ def _extract_intent_batch(batch: List[Dict], llm: LLMClient,
 }}"""
 
     try:
-        raw = llm.generate(prompt, temperature=0.3, max_tokens=2048)
+        raw = llm.generate(prompt, temperature=0.3, max_tokens=2048, category="search_intent")
         raw = _parse_llm_json(raw)
         data = json.loads(raw)
         return data.get("articles", [])
@@ -234,7 +234,7 @@ def run_qualitative_analysis(contents: List[Dict], llm: LLMClient,
     if should_stop and should_stop():
         return "（質化分析逾時中止）"
     try:
-        return llm.generate(prompt, temperature=0.3, max_tokens=4096)
+        return llm.generate(prompt, temperature=0.3, max_tokens=4096, category="qualitative")
     except Exception as e:
         print(f"[Path 2b] 質化分析生成失敗：{e}", flush=True)
         return "（質化分析生成失敗，請重新分析）"
