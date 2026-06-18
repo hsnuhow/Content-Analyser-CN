@@ -84,7 +84,8 @@ gcloud builds submit crawler-service --tag gcr.io/$PROJECT_ID/$CRAWLER_SERVICE
 #   非機密 → --set-env-vars；機密（API 金鑰 + 住宅代理憑證）→ --set-secrets。
 #   前置：PROXY_* 六個 secret 需已建立（見檔頭與 §6.2），否則此步會失敗。
 # ⚠️ concurrency=1：佇列模式下每台 instance 一次只跑 1 個 Chrome（杜絕多任務疊加 OOM）。
-#   CRAWLER_USE_QUEUE 預設不設（=0 走背景執行緒 fallback）；佇列建好後手動 update-env-vars 設 1 啟用。
+#   CRAWLER_USE_QUEUE=1 啟用 Cloud Tasks 佇列（前置：佇列 crawler-tasks 已建、SA 有 cloudtasks.enqueuer，
+#   2026-06-18 確認皆就緒）。設 0 或不設則回退背景執行緒 fallback（多用戶並行有 OOM 風險）。
 gcloud run deploy $CRAWLER_SERVICE \
   --image gcr.io/$PROJECT_ID/$CRAWLER_SERVICE \
   --platform managed \
@@ -95,7 +96,7 @@ gcloud run deploy $CRAWLER_SERVICE \
   --timeout 300 \
   --concurrency 1 \
   --max-instances 10 \
-  --set-env-vars "ENABLE_YOUTUBE_TRANSCRIPT=1,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,TASKS_QUEUE=$TASKS_QUEUE,TASKS_LOCATION=$TASKS_LOCATION" \
+  --set-env-vars "ENABLE_YOUTUBE_TRANSCRIPT=1,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,TASKS_QUEUE=$TASKS_QUEUE,TASKS_LOCATION=$TASKS_LOCATION,CRAWLER_USE_QUEUE=1" \
   --set-secrets "CRAWLER_API_KEY=CRAWLER_API_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,PROXY_HOST=PROXY_HOST:latest,PROXY_PORT=PROXY_PORT:latest,PROXY_USER=PROXY_USER:latest,PROXY_PASS=PROXY_PASS:latest,PROXY_PROVIDER=PROXY_PROVIDER:latest"
 
 CRAWLER_URL=$(gcloud run services describe $CRAWLER_SERVICE \
