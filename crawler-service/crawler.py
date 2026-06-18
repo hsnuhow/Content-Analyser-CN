@@ -1248,6 +1248,38 @@ class HeadlessCrawler:
         blob = f"{title}\n{content}".lower().strip()
         return any(m in blob for m in self._HTTP_ERROR_MARKERS)
 
+    # 反爬封鎖/驗證頁特徵（這些字串幾乎只出現在封鎖頁，不會是正常文章短正文）
+    _BLOCK_PAGE_MARKERS = (
+        "禁止爬取", "禁止爬蟲", "禁止抓取", "您的請求被拒絕", "請求被拒絕",
+        "access denied", "請完成驗證", "驗證您是人類", "輸入驗證碼", "我們偵測到",
+        "異常流量", "just a moment", "checking your browser",
+        "enable javascript and cookies", "attention required",
+    )
+
+    def _looks_like_block_page(self, content: str, title: str = "") -> bool:
+        """偵測反爬封鎖/驗證頁（站台對爬蟲回的「禁止爬取」/Cloudflare 挑戰/captcha）。
+        保守：命中強特徵 **且** 內容偏短（< 1200 字）才判定，避免長文偶提關鍵字被誤殺。
+        命中 → 上層標記『需手動爬取』，不把封鎖頁當文章污染分析。"""
+        blob = f"{title}\n{content}".lower().strip()
+        if not any(m in blob for m in self._BLOCK_PAGE_MARKERS):
+            return False
+        return len((content or "").strip()) < 1200
+
+    def _reg_host(self, h: str) -> str:
+        """取可註冊網域（末兩段），用於跨站漂移比對。"""
+        h = (h or "").lower().split(':')[0]
+        parts = h.split('.')
+        return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+
+    def _page_cross_domain_drift(self, url: str) -> bool:
+        """渲染後當前頁是否跨站漂移到與目標 url 不同的可註冊網域（cloaking 信號）。"""
+        try:
+            from urllib.parse import urlparse
+            cur = self.driver.current_url if self.driver else url
+            return self._reg_host(urlparse(cur).hostname or "") != self._reg_host(urlparse(url).hostname or "")
+        except Exception:
+            return False
+
     def _css_path(self, el) -> str:
         try:
             parts = []
@@ -1886,7 +1918,7 @@ class HeadlessCrawler:
 
                 if best_llm_text and best_llm_score > best_score:
                     self._log(f"\n  → ✅ Using Gemini's choice (score {best_llm_score:.1f} > {best_score:.1f}): '{best_llm_selector}'")
-                    if domain:
+                    if domain and not self._page_cross_domain_drift(url):
                         self.domain_selector_cache[domain] = best_llm_selector
                         # ⭐ 爬蟲研究器：把 Gemini 學到的有效選擇器持久化到 Firestore，
                         #   下次（含重啟/其他實例）直接命中，不必再請 Gemini（自我修復）。
@@ -1896,6 +1928,9 @@ class HeadlessCrawler:
                                                   len(best_llm_text), detect_cms(html))
                         except Exception:
                             pass
+                    elif domain:
+                        # 防 cloaking 污染：頁面已跨站漂移到不同網域，不把該選擇器學回原網域。
+                        self._log("  → ⚠️ 頁面已跨站漂移（疑 cloaking），不學此網域選擇器（防污染）")
                     self.last_resolved_by = "llm"
                     return best_llm_text
                 else:
@@ -2377,6 +2412,19 @@ class HeadlessCrawler:
 
             # 裁掉尾部樣板（贊助／APP／版權），所有萃取路徑統一套用
             content = self._trim_trailing_boilerplate(content)
+
+            # 反爬偵測：cloaking 跨站漂移 / 封鎖頁 → 標記『需手動爬取』，不把誤導/封鎖內容當文章污染分析。
+            #（① 住宅代理破解見 tiered_fallback；開關 tier3_enabled 開啟後才於升級階段自動重抓。）
+            drift = ((url_changed_during_scroll or final_url != url)
+                     and self._reg_host(urlparse(final_url).hostname or "")
+                         != self._reg_host(urlparse(url).hostname or ""))
+            if drift or self._looks_like_block_page(content, title):
+                reason = (f"內容飄移到不同網域（{urlparse(final_url).hostname}），疑似 cloaking 反爬"
+                          if drift else "疑似反爬封鎖／驗證頁")
+                self._log(f"[反爬] {reason} → 標記需手動爬取")
+                return {"status": "skipped", "url": url, "title": title,
+                        "error": f"{reason}，需手動爬取（建議用手動匯入貼上真人版內容）",
+                        "cloaked": True, "needs_manual": True}
 
             return {"status": "success", "url": url, "title": title, "content": content, "length": len(content)}
 

@@ -272,13 +272,18 @@
           {% for it in dataset['items'] %}
           <tr>
             <td>
+              {% if it.cloaked %}
+              <span class="badge bg-warning text-dark" title="網站對爬蟲反爬（封鎖或內容飄移誤導），需手動爬取">🚫 需手動</span>
+              {% else %}
               <span class="badge bg-{% if it.status == 'success' %}success{% elif it.status == 'skipped' %}secondary{% elif it.status == 'pending' %}info text-dark{% else %}danger{% endif %}">
                 {% if it.status == 'pending' %}待爬{% else %}{{ it.status }}{% endif %}
               </span>
+              {% endif %}
             </td>
             <td>
               {% if it.title %}<strong>{{ it.title }}</strong><br>{% endif %}
               <a href="{{ it.url }}" target="_blank" class="small text-muted">{{ it.url }}</a>
+              {% if it.cloaked %}<div class="small text-warning-emphasis">⚠️ 反爬封鎖/飄移誤導 — 需手動爬取（請用「手動匯入」貼上真人版內容）</div>{% endif %}
               {% if it.error %}<div class="small text-danger">{{ it.error }}</div>{% endif %}
             </td>
             <td>{{ it.length or '-' }}</td>
