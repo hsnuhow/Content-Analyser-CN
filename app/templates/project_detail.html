@@ -68,10 +68,17 @@
         </div>
         <div class="collapse" id="kwRecommend">
         <div class="card-body">
-          <p class="small text-muted mb-2">
+          <p class="small text-muted mb-1">
             輸入主題關鍵字，系統用 Google 搜尋情報找出該主題台灣現正排名的代表性內容
             （媒體 / 論壇 / 影音 / 電商），結果存成<strong>推薦清單</strong>，勾選後建立草稿資料集。列表頁/首頁預設不勾。
           </p>
+          <a class="small text-decoration-none" data-bs-toggle="collapse" href="#kwHelp">❓ 什麼時候用（點開）</a>
+          <div class="collapse mb-2" id="kwHelp">
+            <div class="border rounded bg-light p-2 small mt-1">
+              <strong>不知道要分析哪些內容時用它。</strong>你只給一個主題詞（消費者會搜的詞，如「循環扇」），
+              系統幫你把「現在誰排在前面、大家在看什麼」的代表頁面找出來，你勾一勾就能去爬，省得自己 google 貼網址。
+            </div>
+          </div>
           <div class="row g-2 align-items-end">
             <div class="col-md-8">
               <input id="discQ" class="form-control" placeholder="例如：循環扇　或　循環扇 美型">
@@ -178,10 +185,21 @@
       <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold">📥 上傳資料（已蒐集的檔案或文字）</div>
         <div class="card-body">
-          <p class="text-muted small mb-3">
+          <p class="text-muted small mb-1">
             把你已經蒐集好的內容直接匯入（不經爬蟲，建立後即<strong>完成</strong>可分析）。
             適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。<strong>三種方式擇一</strong>，下方填一個即可。
           </p>
+          <a class="small text-decoration-none" data-bs-toggle="collapse" href="#uploadHelp">❓ 什麼時候用（點開）</a>
+          <div class="collapse mb-2" id="uploadHelp">
+            <div class="border rounded bg-light p-2 small mt-1">
+              <strong>當你已經自己把內容存下來時用。</strong>例如爬不到、要登入、或你直接複製了文章。三選一：
+              <ul class="mb-0 ps-3">
+                <li><strong>上傳檔案</strong>：把 .txt / .docx 檔丟進來，<strong>一個檔＝一篇</strong>（標題用檔名）。</li>
+                <li><strong>貼上文字</strong>：直接把一篇文章內容貼進框裡。</li>
+                <li>進階 JSON：給工程流程用，一般人不用碰。</li>
+              </ul>
+            </div>
+          </div>
           <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
                 enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -223,7 +241,18 @@
 
       {# ───── 區 ② 資料集　③ 送出分析 ───── #}
       <h5 class="fw-bold mb-1 mt-4">② 資料集 → ③ 分析</h5>
-      <div class="text-muted small mb-3">勾選一或多個<strong>完成</strong>的資料集 → 送出分析（多選＝合併分析）→ 產生<strong>報告</strong>。</div>
+      <div class="text-muted small mb-1">勾選一或多個<strong>完成</strong>的資料集 → 送出分析（多選＝合併分析）→ 產生<strong>報告</strong>。</div>
+      <a class="small text-decoration-none" data-bs-toggle="collapse" href="#analyseHelp">❓ 分析會產出什麼 / 什麼是「情感」（點開）</a>
+      <div class="collapse mb-3" id="analyseHelp">
+        <div class="border rounded bg-light p-2 small mt-1">
+          勾選<strong>完成</strong>的資料集，按「送出分析」。勾多個＝<strong>合併分析</strong>（把它們當一份一起看）。<br>
+          報告會包含：熱門<strong>關鍵字</strong>、<strong>語意分群</strong>（內容自動歸類）、<strong>搜尋情境</strong>（用戶用什麼字找）、
+          六面向質化、<strong>延伸關鍵字/內容缺口</strong>，以及——<br>
+          <strong>🎭 情感</strong>：AI 判斷這批內容整體語氣偏<strong>正面還是負面</strong>，給一個分數
+          （約 <code>-1</code> 到 <code>+1</code>，越接近 +1 越好評、0 中性、負數偏負評）。
+          用途：快速看這主題/品牌的<strong>市場口碑風向</strong>是好是壞。
+        </div>
+      </div>
 
       {# 資料集列表（可勾選 → 合併分析）#}
       <form method="POST" action="{{ url_for('project_bp.analyse_combined', pid=pid) }}">
@@ -526,6 +555,19 @@
                      value="{{ project.llm_config.temperature|default(0.3) }}"
                      oninput="document.getElementById('tempVal').textContent=this.value">
               <div class="form-text">低=精準保守、高=發散有創意（建議分析用 0.2–0.5）</div>
+              <a class="small text-decoration-none" data-bs-toggle="collapse" href="#llmHelp">❓ 溫度、top_p 是什麼（點開）</a>
+              <div class="collapse mt-1" id="llmHelp">
+                <div class="border rounded bg-light p-2 small">
+                  這兩個都在控制 AI「<strong>多保守 vs 多發散</strong>」：
+                  <ul class="mb-1 ps-3">
+                    <li><strong>溫度（創意度）</strong>：0＝每次都穩、照數據講、可重複；越高＝越敢發揮但也越可能跑題或每次不一樣。
+                      <strong>做分析報告建議 0.2–0.4</strong>（要穩、要能對照）。寫行銷文案才調高。</li>
+                    <li><strong>top_p</strong>（進階區，留空＝用預設）：另一個控發散的旋鈕，越低 AI 用詞越聚焦、越高越多樣。
+                      <strong>一般留空就好</strong>，別跟溫度同時調高，否則報告每次差很多。</li>
+                  </ul>
+                  <span class="text-muted">註：這裡是 <code>top_p</code>，不是 top_k；兩者概念類似（都在限制 AI 選字的範圍），本系統用的是 top_p。</span>
+                </div>
+              </div>
             </div>
 
             {# 進階模式 #}
