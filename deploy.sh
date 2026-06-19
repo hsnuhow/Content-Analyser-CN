@@ -133,6 +133,12 @@ ANALYSIS_URL=$(gcloud run services describe $ANALYSIS_SERVICE \
   --region $REGION --platform managed --format 'value(status.url)')
 echo ">>> analysis-pipeline URL: $ANALYSIS_URL"
 
+# search-extent（搜尋情報層）獨立部署；此處只取 URL 注入 content-analyser（內容發現用）。
+# 若 search-extent 尚未部署則為空，content-analyser 端會回「服務未接上」而非崩潰。
+SEARCH_EXTENT_URL=$(gcloud run services describe search-extent \
+  --region $REGION --platform managed --format 'value(status.url)' 2>/dev/null || echo "")
+echo ">>> search-extent URL: ${SEARCH_EXTENT_URL:-（未部署，內容發現停用）}"
+
 # ========================================================
 # 3) 部署 content-analyser（Web UI + 控制平面）
 # ========================================================
@@ -149,8 +155,8 @@ gcloud run deploy $SERVICE_NAME \
   --cpu 1 \
   --timeout 300 \
   --max-instances 10 \
-  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL,ANALYSIS_SERVICE_URL=$ANALYSIS_URL,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
-  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest,ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest"
+  --set-env-vars "CRAWLER_SERVICE_URL=$CRAWLER_URL,ANALYSIS_SERVICE_URL=$ANALYSIS_URL,SEARCH_EXTENT_SERVICE_URL=$SEARCH_EXTENT_URL,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+  --set-secrets "GOOGLE_CLIENT_ID=GOOGLE_CLIENT_ID:latest,GOOGLE_CLIENT_SECRET=GOOGLE_CLIENT_SECRET:latest,SECRET_KEY=FLASK_SECRET_KEY:latest,GENAI_API_KEY=GENAI_API_KEY:latest,CRAWLER_API_KEY=CRAWLER_API_KEY:latest,ANALYSIS_API_KEY=ANALYSIS_API_KEY:latest,SEARCH_EXTENT_API_KEY=SEARCH_EXTENT_API_KEY:latest"
 
 WEB_URL=$(gcloud run services describe $SERVICE_NAME \
   --region $REGION --platform managed --format 'value(status.url)')

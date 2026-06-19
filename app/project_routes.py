@@ -1059,6 +1059,20 @@ def delete_analysis(pid, aid, project, role):
 # Firestore: projects/{pid}/datasets/{did}
 # ──────────────────────────────────────────────────────────────────────
 
+@bp.route('/<pid>/discover')
+@project_access_required(min_role='editor')
+def discover_urls(pid, project, role):
+    """搜尋情報·內容發現（爬蟲前置）：關鍵字 → 推薦爬取 URL 清單（呼叫 search-extent）。
+    回 JSON 候選清單供前端勾選；勾選後沿用 create_dataset 建草稿。"""
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return jsonify({'error': '缺少關鍵字'}), 400
+    from .search_extent_client import discover as _discover, is_configured
+    if not is_configured():
+        return jsonify({'error': '搜尋情報服務尚未接上（SEARCH_EXTENT 未設定）。'}), 503
+    return jsonify(_discover(q, max_results=50))
+
+
 @bp.route('/<pid>/datasets', methods=['POST'])
 @project_access_required(min_role='editor')
 def create_dataset(pid, project, role):

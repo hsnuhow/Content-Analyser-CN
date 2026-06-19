@@ -29,8 +29,37 @@
     {# 左欄：提交分析 + 歷史列表 #}
     <div class="col-lg-8">
 
-      {# 步驟一：爬取資料集（Owner/Editor） #}
+      {# 步驟〇：關鍵字自動推薦（搜尋情報·內容發現，爬蟲前置；Owner/Editor） #}
       {% if role in ('owner', 'editor') %}
+      <div class="card shadow-sm mb-4 border-info">
+        <div class="card-header fw-semibold bg-info-subtle">
+          🔍 ⓪ 關鍵字自動推薦爬取清單（選用）
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2">
+            輸入主題關鍵字，系統用 Google 搜尋情報找出該主題台灣現正排名的代表性內容
+            （媒體 / 論壇 / 影音 / 電商），勾選後直接帶入下方清單。列表頁/首頁預設不勾。
+          </p>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-8">
+              <input id="discQ" class="form-control" placeholder="例如：循環扇　或　循環扇 美型">
+            </div>
+            <div class="col-md-4">
+              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦清單</button>
+            </div>
+          </div>
+          <div id="discLog" class="small text-muted mt-2"></div>
+          <div id="discResult" class="mt-2 d-none">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <span class="small fw-semibold">勾選要爬的內容：</span>
+              <button class="btn btn-sm btn-success" type="button" onclick="discToDraft()">↓ 帶入下方清單（勾選的）</button>
+            </div>
+            <div id="discRows" class="border rounded p-2" style="max-height:300px;overflow:auto"></div>
+          </div>
+        </div>
+      </div>
+
+      {# 步驟一：爬取資料集（Owner/Editor） #}
       <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold">① 建立網址清單（草稿）</div>
         <div class="card-body">
@@ -482,4 +511,45 @@
     </div>
   </div>
 </div>
+
+<script>
+function escH(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function runDiscover(){
+  var q=document.getElementById('discQ').value.trim();
+  if(!q){ document.getElementById('discLog').textContent='請先輸入關鍵字。'; return; }
+  var btn=document.getElementById('discBtn'); btn.disabled=true;
+  document.getElementById('discResult').classList.add('d-none');
+  document.getElementById('discLog').textContent='搜尋情報分析中…（grounding + 解析，可能需數十秒）';
+  fetch("{{ url_for('project_bp.discover_urls', pid=pid) }}?q="+encodeURIComponent(q))
+    .then(r=>r.json()).then(d=>{
+      btn.disabled=false;
+      if(d.error){ document.getElementById('discLog').textContent='錯誤：'+d.error; return; }
+      var cs=d.candidates||[];
+      if(!cs.length){ document.getElementById('discLog').textContent='沒有找到結果。'; return; }
+      document.getElementById('discLog').textContent='找到 '+cs.length+' 條（來源：'+JSON.stringify(d.by_source||{})+'）。已預設勾選文章頁。';
+      var badge={'媒體':'primary','社群':'info','論壇':'secondary','影音':'danger','電商':'warning'};
+      document.getElementById('discRows').innerHTML=cs.map(c=>{
+        var checked = c.flag ? '' : 'checked';   // 列表頁/首頁預設不勾
+        var fl = c.flag ? ' <span class="badge bg-light text-muted">'+escH(c.flag)+'</span>' : '';
+        return '<div class="form-check small">'
+          +'<input class="form-check-input disc-pick" type="checkbox" value="'+escH(c.url)+'" '+checked+'>'
+          +'<label class="form-check-label">'
+          +'<span class="badge bg-'+(badge[c.source_type]||'secondary')+'">'+escH(c.source_type)+'</span> '
+          +'<span class="text-muted">'+escH(c.domain)+'</span>'+fl+'<br>'
+          +'<span class="text-muted" style="font-size:.8em">'+escH((c.title||c.url).slice(0,80))+'</span>'
+          +'</label></div>';
+      }).join('');
+      document.getElementById('discResult').classList.remove('d-none');
+    }).catch(e=>{ btn.disabled=false; document.getElementById('discLog').textContent='請求失敗：'+e; });
+}
+function discToDraft(){
+  var urls=Array.from(document.querySelectorAll('.disc-pick:checked')).map(c=>c.value);
+  if(!urls.length){ alert('請至少勾選一條。'); return; }
+  var ta=document.querySelector('form[action$="/datasets"] textarea[name="urls"]');
+  var nm=document.querySelector('form[action$="/datasets"] input[name="name"]');
+  if(ta){ ta.value=urls.join('\n'); }
+  if(nm && !nm.value){ nm.value=document.getElementById('discQ').value.trim()+' 自動推薦'; }
+  if(ta){ ta.scrollIntoView({behavior:'smooth',block:'center'}); ta.focus(); }
+}
+</script>
 {% endblock %}

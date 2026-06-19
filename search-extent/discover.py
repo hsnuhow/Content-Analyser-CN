@@ -1,0 +1,177 @@
+# -*- coding: utf-8 -*-
+"""
+search-extent 子功能 B：供給側·內容發現
+
+關鍵字 → Vertex Gemini + Google Search grounding → 推薦爬取 URL 清單。
+grounding 在 Google 伺服器端執行（非本服務直爬 Google），故無資料中心 IP / CAPTCHA 問題；
+用 Cloud Run Service Account 的 ADC，不需 API key、不需建 CSE。
+
+輸出純情報（URL + metadata），不爬正文、不分析、不持久化。
+"""
+import os
+import json
+import urllib.request
+import urllib.error
+from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
+
+# ── 來源類型分類（與 analysis-pipeline _source_type 對齊；此處獨立一份，服務不共用程式碼）──
+_VIDEO = ('youtube.com', 'youtu.be', '/videos/', '/reel', 'tiktok.com', 'bilibili')
+_SOCIAL = ('facebook.com', 'fb.com', 'fb.watch', 'instagram.com', 'threads.net', 'threads.com')
+_FORUM = ('ptt.cc', 'pttweb.cc', 'dcard.tw', 'mobile01.com', 'gamer.com.tw', 'bahamut', 'eyny.com', 'komica')
+_ECOM = ('shopee.', 'momoshop', 'momo.com.tw', 'pchome', 'books.com.tw', 'rakuten', 'amazon.',
+         'ruten', 'coupang', 'buy.yahoo', 'trplus')
+_HK = ('.hk', 'hongkong', 'hk01', 'stheadline')
+_TW = ('.tw', 'my-best.com', 'pixnet', 'vocus')
+
+
+def _source_type(u: str) -> str:
+    s = (u or '').lower()
+    if any(d in s for d in _VIDEO):
+        return '影音'
+    if any(d in s for d in _SOCIAL):
+        return '社群'
+    if any(d in s for d in _FORUM):
+        return '論壇'
+    if any(d in s for d in _ECOM):
+        return '電商'
+    return '媒體'
+
+
+def _region(u: str) -> str:
+    d = (urlparse(u).hostname or '').lower()
+    if any(h in d for h in _HK):
+        return 'HK'
+    if any(h in d for h in _TW) or any(x in (u or '').lower() for x in ('/tw/', 'tw.')):
+        return 'TW'
+    return '?'
+
+
+_LISTING_HINTS = ('/search', '/list', '/category', '/categories', '/tag/', '/tags/',
+                  '/promotion', 's=', 'q=', 'query=')
+
+
+def _flag(u: str) -> str:
+    """非文章頁旗標：首頁 / 列表/搜尋/分類頁（爬蟲多半會 skip，預設不勾）。"""
+    p = urlparse(u)
+    path = (p.path or '/').rstrip('/')
+    if not path:
+        return '首頁'
+    low = u.lower()
+    if any(h in low for h in _LISTING_HINTS):
+        return '列表頁'
+    return ''
+
+
+def _access_token():
+    """Cloud Run SA 的 ADC access token（cloud-platform scope）。"""
+    import google.auth
+    import google.auth.transport.requests
+    creds, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    creds.refresh(google.auth.transport.requests.Request())
+    return creds.token
+
+
+def is_configured() -> bool:
+    return bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
+
+
+_DEFAULT_ANGLES = [
+    "台灣 {q} 選購指南 評測 比較（繁體中文、台灣網站）",
+    "台灣 {q} 推薦 開箱 心得 ptt dcard mobile01",
+    "台灣 {q} youtube 開箱 影音",
+]
+_MODEL = "gemini-2.5-flash"
+
+
+def _ground(token, project, prompt, tries=2):
+    """單次 grounding 呼叫，回 (chunks:[(title,uri)], usage:{prompt,output,total})。"""
+    url = (f"https://aiplatform.googleapis.com/v1/projects/{project}"
+           f"/locations/global/publishers/google/models/{_MODEL}:generateContent")
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "tools": [{"googleSearch": {}}],
+        "generationConfig": {"temperature": 0.3},
+    }
+    last = None
+    for _ in range(tries):
+        try:
+            req = urllib.request.Request(
+                url, data=json.dumps(body).encode(),
+                headers={"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                d = json.load(r)
+            cand = (d.get("candidates") or [{}])[0]
+            gm = cand.get("groundingMetadata", {})
+            chunks = [(c.get("web", {}).get("title", ""), c.get("web", {}).get("uri", ""))
+                      for c in gm.get("groundingChunks", [])]
+            um = d.get("usageMetadata", {}) or {}
+            usage = {"prompt": int(um.get("promptTokenCount", 0) or 0),
+                     "output": int(um.get("candidatesTokenCount", 0) or 0),
+                     "total": int(um.get("totalTokenCount", 0) or 0)}
+            return chunks, usage
+        except Exception as e:
+            last = e
+            continue
+    print(f"[discover] grounding 失敗：{last}", flush=True)
+    return [], {"prompt": 0, "output": 0, "total": 0}
+
+
+def _resolve(uri):
+    """解析 vertexaisearch 轉址成真實 URL。失敗回 None。"""
+    try:
+        r = requests.head(uri, allow_redirects=True, timeout=10,
+                          headers={"User-Agent": "Mozilla/5.0"})
+        return r.url
+    except Exception:
+        return None
+
+
+def discover(query: str, max_results: int = 50, angles=None) -> dict:
+    """關鍵字 → 推薦爬取 URL 清單（多角度 grounding + 解析轉址 + 分類）。
+
+    回 {status, query, count, by_source, usage:{prompt,output,total}, candidates:[...]}。
+    candidates 項：{url, title, domain, source_type, region, flag}。TW 優先排序。
+    """
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        return {"status": "failed", "error": "GOOGLE_CLOUD_PROJECT 未設定", "candidates": []}
+    token = _access_token()
+    angles = angles or _DEFAULT_ANGLES
+
+    raw = {}  # uri -> title
+    usage_total = {"prompt": 0, "output": 0, "total": 0}
+    for a in angles:
+        chunks, usage = _ground(token, project, a.format(q=query))
+        for t, u in chunks:
+            if u and u not in raw:
+                raw[u] = t
+        for k in usage_total:
+            usage_total[k] += usage[k]
+
+    # 平行解析轉址
+    items = list(raw.items())
+    rows, seen = [], set()
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for (uri, title), real in zip(items, ex.map(lambda kv: _resolve(kv[0]), items)):
+            if real and real not in seen:
+                seen.add(real)
+                dom = urlparse(real).hostname or real
+                rows.append({
+                    "url": real, "title": title, "domain": dom,
+                    "source_type": _source_type(real),
+                    "region": _region(real), "flag": _flag(real),
+                })
+
+    rows.sort(key=lambda r: ({'TW': 0, '?': 1, 'HK': 2}.get(r["region"], 1),
+                             1 if r["flag"] else 0))
+    rows = rows[:max_results]
+
+    from collections import Counter
+    by_source = dict(Counter(r["source_type"] for r in rows))
+    return {"status": "ok", "query": query, "count": len(rows),
+            "by_source": by_source, "usage": usage_total, "candidates": rows}
