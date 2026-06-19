@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-19 新增：品牌聲量探勘（search-extent 子功能 D）（未部署）
+回答「某品牌在某主題有沒有 earned 聲量」的缺席洞察（源於 GQ Shop 賣循環扇卻搜不到、報告零影響力）。
+- **search-extent `brand_presence.py` + `POST /api/brand-presence`**：主題 × 品牌清單，對每品牌一次品牌錨定 grounding（系統 SA），請 Gemini 判定第三方聲量等級（有聲量/僅自有/缺席）+ 列依據來源；來源解析真實 URL、分自有 vs 第三方；依 earned_count 排 share-of-voice。品牌平行（max_workers 8）、grounding timeout 70s。token 記帳 system_token_usage(job_kind=brand-presence)。health 加 brand_presence_configured。
+- **content-analyser**：`search_extent_client.brand_presence` + 專案頁「📊 品牌聲量探勘」摺疊面板（主題+品牌清單→等級表，每行一品牌）+ 持久化 `brand_scans` + 刪除路由。
+- **驗證**：GQ Shop=缺席、Vornado=有聲量(earned 14)、小米=有聲量(earned 9)，21.8s/3 品牌——對齊真實觀察。py_compile + Jinja + 標籤平衡通過。
+- 文件：README 子功能 D、附錄 B 端點、附錄 C brand_scans。分支 feat/brand-presence，未部署。
+
 ## 2026-06-19 修正：URL 碎片污染關鍵字（https/ptt/cc…）+ 建議引擎英文白名單過寬（未部署）
 循環扇分析報告 TF-IDF 出現 https/ptt/cc/bbs 等無法濾掉的雜訊。根因二：
 - **URL 沒清就斷詞**：一條 `https://www.ptt.cc/bbs/...html` 被 jieba 切成 https/www/ptt/cc/bbs/html… 一堆垃圾 token。修：`_text_for_keywords` 斷詞前 `re.sub(https?://\S+|www\.\S+)` 清 URL（全來源）。

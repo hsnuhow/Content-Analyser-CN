@@ -386,6 +386,67 @@
         </div>
         {% endif %}
       </div>
+
+      {# 品牌聲量探勘（搜尋情報：誰在這主題有 earned 聲量；找「有賣卻沒聲量」缺口）#}
+      {% if role in ('owner', 'editor') %}
+      <div class="card shadow-sm mt-4">
+        <div class="card-header fw-semibold">
+          <a class="text-decoration-none text-dark d-block" data-bs-toggle="collapse" href="#brandScan">
+            ▸ 📊 品牌聲量探勘（誰在這主題有聲量）
+          </a>
+        </div>
+        <div class="collapse" id="brandScan">
+          <div class="card-body">
+            <p class="small text-muted mb-2">
+              主題 + 品牌清單 → 看每個品牌在台灣這主題有沒有「第三方」聲量（評測/開箱/討論），
+              找出「有賣卻沒人談」的缺口。每行一個品牌（建議 ≤8 個，較快）。
+            </p>
+            <div class="row g-2 align-items-start">
+              <div class="col-md-4">
+                <input id="bsTopic" class="form-control form-control-sm" placeholder="主題，如：循環扇">
+              </div>
+              <div class="col-md-5">
+                <textarea id="bsBrands" class="form-control form-control-sm" rows="3"
+                          placeholder="GQ Shop&#10;Vornado&#10;小米"></textarea>
+              </div>
+              <div class="col-md-3">
+                <button id="bsBtn" class="btn btn-outline-dark w-100" type="button" onclick="runBrandScan()">分析品牌聲量</button>
+              </div>
+            </div>
+            <div id="bsLog" class="small text-muted mt-2"></div>
+
+            {% for sc in brand_scans %}
+            <div class="border rounded p-2 mt-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="fw-semibold small">📊 {{ sc.topic }}（{{ sc.count }} 個品牌）</span>
+                <form method="POST" action="{{ url_for('project_bp.delete_brand_scan', pid=pid, sid=sc.id) }}"
+                      onsubmit="return confirm('刪除此品牌聲量紀錄？')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn-sm btn-outline-danger py-0 px-1">🗑</button>
+                </form>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-sm small mb-0 align-middle">
+                  <thead class="table-light"><tr><th>品牌</th><th>聲量</th><th>第三方</th><th>摘要 / 來源</th></tr></thead>
+                  <tbody>
+                  {% for b in sc.results %}
+                  <tr>
+                    <td class="fw-semibold">{{ b.brand }}</td>
+                    <td><span class="badge bg-{% if b.presence_level=='有聲量' %}success{% elif b.presence_level=='僅自有' %}warning text-dark{% else %}danger{% endif %}">{{ b.presence_level }}</span></td>
+                    <td>{{ b.earned_count }}{% if b.official_present %} <span class="text-muted">+官</span>{% endif %}</td>
+                    <td class="text-muted">{{ (b.summary or '')[:36] }}{% if b.sources %}　<span style="font-size:.85em">{{ b.sources[:3] | map(attribute='domain') | join('、') }}</span>{% endif %}</td>
+                  </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
     </div>
 
     {# 右欄：設定 + 成員 #}
@@ -618,6 +679,20 @@
 </div>
 
 <script>
+function runBrandScan(){
+  var topic=document.getElementById('bsTopic').value.trim();
+  var brands=document.getElementById('bsBrands').value.trim();
+  if(!topic||!brands){ document.getElementById('bsLog').textContent='請填主題與至少一個品牌。'; return; }
+  var btn=document.getElementById('bsBtn'); btn.disabled=true;
+  document.getElementById('bsLog').textContent='品牌聲量分析中…（每品牌一次搜尋情報，數十秒）';
+  var fd=new FormData(); fd.append('topic',topic); fd.append('brands',brands); fd.append('csrf_token','{{ csrf_token() }}');
+  fetch("{{ url_for('project_bp.brand_presence_run', pid=pid) }}", {method:'POST', body:fd})
+    .then(r=>r.json()).then(d=>{
+      if(d.error){ btn.disabled=false; document.getElementById('bsLog').textContent='錯誤：'+d.error; return; }
+      document.getElementById('bsLog').textContent='完成（'+(d.count||0)+' 個品牌），重新整理中…';
+      location.reload();
+    }).catch(e=>{ btn.disabled=false; document.getElementById('bsLog').textContent='請求失敗：'+e; });
+}
 function runDiscover(){
   var q=document.getElementById('discQ').value.trim();
   if(!q){ document.getElementById('discLog').textContent='請先輸入關鍵字。'; return; }

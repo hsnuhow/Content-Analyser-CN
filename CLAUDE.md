@@ -849,6 +849,7 @@ Content-Analyser-CN/
 | `GET /health` | — | 探活（含 `expand_configured` / `discover_configured`）|
 | `POST /api/expand` | A 需求側 | `{seeds:[...], language_id?, geo_ids?, limit?}` → 關聯關鍵字 + 量級 + 競爭度（Ads）。**⚠️ 卡 ADS_DEVELOPER_TOKEN、未完成、不啟動** |
 | `POST /api/discover` | B 供給側 | `{query, max?:50}` → `{status, query, count, by_source, candidates:[{url,title,domain,source_type,region,flag}]}`。Vertex Gemini Search grounding（系統 SA），grounding 在 Google 端執行不直爬。**✅ 可用** |
+| `POST /api/brand-presence` | D 品牌聲量 | `{topic, brands:[...]}` → 各品牌 earned 聲量等級（有聲量/僅自有/缺席）+ share-of-voice 排序。品牌×主題錨定 grounding，找「賣但沒聲量」缺口。**✅ 可用** |
 
 - A 回傳：`{status, seeds, count, ideas:[{text, avg_monthly_searches, competition, competition_index}]}`（預設語言 1018＝繁中、地區 2158＝台灣）。
 - B：`source_type`（媒體/社群/論壇/影音/電商）、`region`（TW/HK/?，TW 優先）、`flag`（列表頁/首頁＝非文章頁）。grounding 系統付 token → `system_token_usage`（service=search-extent）。content-analyser 經 `app/search_extent_client.py` 呼叫，UI 在專案頁「⓪ 關鍵字自動推薦」→ 勾選 → 沿用 create_dataset 建草稿。
@@ -919,6 +920,9 @@ projects/{project_id}             頂層，多人協作
     query / count / by_source / created_by / created_at
     candidates: [{url,title,domain,source_type,region,flag}]
                                   使用者勾選 → 建新草稿 or 併入現有草稿（discovery_to_draft）
+  brand_scans/{auto-id}           ⭐品牌聲量探勘紀錄（search-extent /api/brand-presence）
+    topic / count / created_by / created_at
+    results: [{brand, presence_level, earned_count, official_present, sources, summary}]
   analyses/{analysis_id}
     report_title / status / progress / log
     job_id                        對應 analysis-pipeline 的 job

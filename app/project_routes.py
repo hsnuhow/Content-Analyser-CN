@@ -298,10 +298,21 @@ def project_detail(pid, project, role):
     draft_datasets = [{'id': ds['id'], 'name': ds.get('name', '')}
                       for ds in datasets if ds.get('status') == 'draft']
 
+    # 品牌聲量探勘紀錄
+    try:
+        bs_docs = (db.collection('projects').document(pid)
+                   .collection('brand_scans')
+                   .order_by('created_at', direction=firestore.Query.DESCENDING)
+                   .limit(10).stream())
+        brand_scans = [d.to_dict() | {'id': d.id} for d in bs_docs]
+    except Exception:
+        brand_scans = []
+
     return render_template('project_detail.html',
                            project=project, pid=pid,
                            analyses=analyses, datasets=datasets, role=role,
                            discoveries=discoveries, draft_datasets=draft_datasets,
+                           brand_scans=brand_scans,
                            is_admin=is_admin())
 
 
@@ -1100,6 +1111,41 @@ def discover_urls(pid, project, role):
         'created_at': firestore.SERVER_TIMESTAMP,
     })
     return jsonify({'ok': True, 'discovery_id': ref.id, 'count': len(cands)})
+
+
+@bp.route('/<pid>/brand-presence', methods=['POST'])
+@project_access_required(min_role='editor')
+def brand_presence_run(pid, project, role):
+    """品牌聲量探勘：主題 + 品牌清單 → 各品牌 earned 聲量；結果存 brand_scans。"""
+    topic = (request.form.get('topic') or '').strip()
+    brands = [b.strip() for b in (request.form.get('brands') or '').splitlines() if b.strip()]
+    if not topic or not brands:
+        return jsonify({'error': '請填主題與至少一個品牌'}), 400
+    from .search_extent_client import brand_presence as _bp, is_configured
+    if not is_configured():
+        return jsonify({'error': '搜尋情報服務尚未接上（SEARCH_EXTENT 未設定）。'}), 503
+    res = _bp(topic, brands[:30])
+    if res.get('error'):
+        return jsonify(res), 502
+    results = res.get('results') or []
+    ref = (db.collection('projects').document(pid)
+           .collection('brand_scans').document())
+    ref.set({'id': ref.id, 'topic': topic, 'count': len(results), 'results': results,
+             'created_by': current_user_email(),
+             'created_at': firestore.SERVER_TIMESTAMP})
+    return jsonify({'ok': True, 'scan_id': ref.id, 'count': len(results)})
+
+
+@bp.route('/<pid>/brand-scans/<sid>/delete', methods=['POST'])
+@project_access_required(min_role='editor')
+def delete_brand_scan(pid, sid, project, role):
+    try:
+        (db.collection('projects').document(pid)
+         .collection('brand_scans').document(sid).delete())
+        flash('已刪除品牌聲量探勘紀錄。', 'success')
+    except Exception as e:
+        flash(f'刪除失敗：{e}', 'danger')
+    return redirect(url_for('project_bp.project_detail', pid=pid))
 
 
 @bp.route('/<pid>/discoveries/<did>/delete', methods=['POST'])
