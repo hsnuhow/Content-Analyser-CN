@@ -234,6 +234,39 @@ def term_filters_suggest():
     return jsonify(_sf(contents))
 
 
+@bp.route('/terms/suggest-all')
+@admin_required
+def term_filters_suggest_all():
+    """全庫學習：聚合『所有專案』的爬蟲文本，一次找候選垃圾詞（優化引擎用）。
+    比單一專案更準（跨來源歧異有更多論壇/影音樣本）。文本量大時取樣上限 MAX_DOCS。"""
+    MAX_DOCS = 400
+    from .project_routes import _load_dataset_items
+    contents = []
+    try:
+        for proj in db.collection('projects').stream():
+            pid = proj.id
+            for ds in (db.collection('projects').document(pid)
+                       .collection('datasets').stream()):
+                for it in _load_dataset_items(pid, ds.id):
+                    txt = it.get('content') or it.get('text')
+                    if txt and it.get('status', 'success') != 'failed':
+                        contents.append({'url': it.get('url', ''),
+                                         'title': it.get('title', ''), 'text': txt})
+                        if len(contents) >= MAX_DOCS:
+                            raise StopIteration
+    except StopIteration:
+        pass
+    except Exception as e:
+        return jsonify({'error': f'讀取全庫資料失敗：{e}'}), 500
+    if not contents:
+        return jsonify({'error': '全庫沒有可分析的爬蟲文本'}), 400
+    from .analysis_client import suggest_filters as _sf
+    res = _sf(contents, max_candidates=80, timeout=180)
+    if isinstance(res, dict):
+        res['scope_label'] = f'全庫（{len(contents)} 篇）'
+    return jsonify(res)
+
+
 @bp.route('/terms/suggest/apply', methods=['POST'])
 @admin_required
 def term_filters_suggest_apply():

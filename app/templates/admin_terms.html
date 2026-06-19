@@ -42,17 +42,23 @@
     <div class="card-header fw-semibold bg-info-subtle">🔎 過濾建議分析（依現有資料找候選垃圾詞）</div>
     <div class="card-body">
       <p class="small text-muted mb-2">
-        選一個專案，系統會用「<strong>跨來源歧異度 × 同頁重複次數 × 詞性</strong>」三信號，
-        從該專案爬蟲文本找出「該過濾但目前沒過濾」的候選詞，並自動建議來源範圍。
-        品牌/領域實體會被白名單保護。候選需你<strong>勾選</strong>才會加入上方清單。
+        系統用「<strong>跨來源歧異度 × 同頁重複次數 × 詞性</strong>」三信號，從爬蟲文本找出
+        「該過濾但目前沒過濾」的候選詞，並自動建議來源範圍。品牌/領域實體（Cloud NL）會被白名單保護。
+        候選需你<strong>勾選</strong>才會加入上方清單。
       </p>
+      <div class="mb-2">
+        <button id="suggestAllBtn" class="btn btn-info" type="button" onclick="runSuggestAll()">
+          🧠 全庫學習（分析所有專案文本，建議過濾詞）
+        </button>
+        <span class="small text-muted ms-2">建議優先用這個——跨來源樣本更多、判斷更準。</span>
+      </div>
       <div class="row g-2 align-items-end">
         <div class="col-md-8">
-          <label class="form-label small mb-0">專案 ID</label>
+          <label class="form-label small mb-0">或只分析單一專案（選填）</label>
           <input id="suggestProj" class="form-control form-control-sm" placeholder="貼上專案 ID（網址 /projects/<id>）">
         </div>
         <div class="col-md-4">
-          <button id="suggestBtn" class="btn btn-outline-info w-100" type="button" onclick="runSuggest()">分析候選詞</button>
+          <button id="suggestBtn" class="btn btn-outline-info w-100" type="button" onclick="runSuggest()">分析此專案</button>
         </div>
       </div>
       <div id="suggestLog" class="small text-muted mt-2"></div>
@@ -74,29 +80,39 @@
 
 <script>
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function renderCandidates(d){
+  var cands=d.candidates||[];
+  var prot=d.n_protected_entities?('，白名單保護 '+d.n_protected_entities+' 個實體'):'';
+  if(!cands.length){ document.getElementById('suggestLog').textContent='沒有找到新候選（可能都已在清單中）。'; return; }
+  document.getElementById('suggestLog').textContent='找到 '+cands.length+' 個候選（'+(d.scope_label||('共 '+(d.n_docs||0)+' 篇'))+prot+'）。勾選後加入。';
+  var rows=cands.map(c=>{
+    var sc=(c.scope||[]).join(',');
+    var val=esc(c.term)+' | '+esc(sc)+(c.type==='media'?' | media':'');
+    return '<tr><td><input class="form-check-input" type="checkbox" name="pick" value="'+esc(val)+'" '+(c.kind==='chrome'||c.kind==='填充'?'checked':'')+'></td>'
+      +'<td><code>'+esc(c.term)+'</code></td><td>'+esc(sc)+'</td>'
+      +'<td><span class="badge bg-'+(c.kind==='chrome'?'warning text-dark':(c.kind==='填充'?'secondary':'light text-dark'))+'">'+esc(c.kind||'')+'</span></td>'
+      +'<td>'+(c.disc||0).toFixed(2)+'</td><td>'+(c.rep||0).toFixed(1)+'×</td></tr>';
+  }).join('');
+  document.getElementById('suggestRows').innerHTML=rows;
+  document.getElementById('suggestForm').classList.remove('d-none');
+}
+function fetchSuggest(url, btn){
+  btn.disabled=true;
+  document.getElementById('suggestForm').classList.add('d-none');
+  document.getElementById('suggestLog').textContent='分析中…（可能需數十秒）';
+  fetch(url).then(r=>r.json()).then(d=>{
+    btn.disabled=false;
+    if(d.error){ document.getElementById('suggestLog').textContent='錯誤：'+d.error; return; }
+    renderCandidates(d);
+  }).catch(e=>{ btn.disabled=false; document.getElementById('suggestLog').textContent='請求失敗：'+e; });
+}
+function runSuggestAll(){
+  fetchSuggest("{{ url_for('admin_bp.term_filters_suggest_all') }}", document.getElementById('suggestAllBtn'));
+}
 function runSuggest(){
   var pid=document.getElementById('suggestProj').value.trim();
-  if(!pid){ document.getElementById('suggestLog').textContent='請先填專案 ID。'; return; }
-  var btn=document.getElementById('suggestBtn'); btn.disabled=true;
-  document.getElementById('suggestLog').textContent='分析中…（可能需數十秒）';
-  fetch("{{ url_for('admin_bp.term_filters_suggest') }}?pid="+encodeURIComponent(pid))
-    .then(r=>r.json()).then(d=>{
-      btn.disabled=false;
-      if(d.error){ document.getElementById('suggestLog').textContent='錯誤：'+d.error; return; }
-      var cands=d.candidates||[];
-      if(!cands.length){ document.getElementById('suggestLog').textContent='沒有找到新候選（可能都已在清單中）。'; return; }
-      document.getElementById('suggestLog').textContent='找到 '+cands.length+' 個候選（共分析 '+(d.n_docs||0)+' 篇）。勾選後加入。';
-      var rows=cands.map((c,i)=>{
-        var sc=(c.scope||[]).join(',');
-        var val=esc(c.term)+' | '+esc(sc)+(c.type==='media'?' | media':'');
-        return '<tr><td><input class="form-check-input" type="checkbox" name="pick" value="'+esc(val)+'" '+(c.kind==='chrome'||c.kind==='填充'?'checked':'')+'></td>'
-          +'<td><code>'+esc(c.term)+'</code></td><td>'+esc(sc)+'</td>'
-          +'<td><span class="badge bg-'+(c.kind==='chrome'?'warning text-dark':(c.kind==='填充'?'secondary':'light text-dark'))+'">'+esc(c.kind||'')+'</span></td>'
-          +'<td>'+(c.disc||0).toFixed(2)+'</td><td>'+(c.rep||0).toFixed(1)+'×</td></tr>';
-      }).join('');
-      document.getElementById('suggestRows').innerHTML=rows;
-      document.getElementById('suggestForm').classList.remove('d-none');
-    }).catch(e=>{ btn.disabled=false; document.getElementById('suggestLog').textContent='請求失敗：'+e; });
+  if(!pid){ document.getElementById('suggestLog').textContent='請先填專案 ID（或用上方全庫學習）。'; return; }
+  fetchSuggest("{{ url_for('admin_bp.term_filters_suggest') }}?pid="+encodeURIComponent(pid), document.getElementById('suggestBtn'));
 }
 </script>
 {% endblock %}
