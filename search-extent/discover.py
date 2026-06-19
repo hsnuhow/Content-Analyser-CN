@@ -87,8 +87,10 @@ _DEFAULT_ANGLES = [
 _MODEL = "gemini-2.5-flash"
 
 
-def _ground(token, project, prompt, tries=2):
-    """單次 grounding 呼叫，回 (chunks:[(title,uri)], usage:{prompt,output,total})。"""
+def _ground(token, project, prompt, tries=1):
+    """單次 grounding 呼叫，回 (chunks:[(title,uri)], usage:{prompt,output,total})。
+    tries=1 + 45s 上限：多角度會平行跑，單一角度逾時就放棄該角度（其他角度仍有結果），
+    避免同步請求破 Cloudflare ~100s 代理上限（TypeError: Load failed 根因）。"""
     url = (f"https://aiplatform.googleapis.com/v1/projects/{project}"
            f"/locations/global/publishers/google/models/{_MODEL}:generateContent")
     body = {
@@ -103,7 +105,7 @@ def _ground(token, project, prompt, tries=2):
                 url, data=json.dumps(body).encode(),
                 headers={"Authorization": "Bearer " + token,
                          "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with urllib.request.urlopen(req, timeout=45) as r:
                 d = json.load(r)
             cand = (d.get("candidates") or [{}])[0]
             gm = cand.get("groundingMetadata", {})
@@ -124,7 +126,7 @@ def _ground(token, project, prompt, tries=2):
 def _resolve(uri):
     """解析 vertexaisearch 轉址成真實 URL。失敗回 None。"""
     try:
-        r = requests.head(uri, allow_redirects=True, timeout=10,
+        r = requests.head(uri, allow_redirects=True, timeout=8,
                           headers={"User-Agent": "Mozilla/5.0"})
         return r.url
     except Exception:
@@ -143,10 +145,13 @@ def discover(query: str, max_results: int = 50, angles=None) -> dict:
     token = _access_token()
     angles = angles or _DEFAULT_ANGLES
 
+    # 多角度 grounding **平行**跑：牆鐘 ≈ 最慢一個角度，而非相加（壓在 Cloudflare ~100s 內）。
     raw = {}  # uri -> title
     usage_total = {"prompt": 0, "output": 0, "total": 0}
-    for a in angles:
-        chunks, usage = _ground(token, project, a.format(q=query))
+    with ThreadPoolExecutor(max_workers=max(1, len(angles))) as ex:
+        ground_results = list(ex.map(
+            lambda a: _ground(token, project, a.format(q=query)), angles))
+    for chunks, usage in ground_results:
         for t, u in chunks:
             if u and u not in raw:
                 raw[u] = t
