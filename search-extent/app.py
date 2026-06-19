@@ -19,9 +19,10 @@ from flask import Flask, request, jsonify
 
 import ads_client
 import discover as discover_mod
+import brand_presence as brand_mod
 from auth import is_authorized
 
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.3.0"
 
 # Firebase（供 api_keys 白名單）；初始化失敗則只接受系統金鑰。
 db = None
@@ -64,6 +65,7 @@ def health():
         # 子功能就緒狀態（各自獨立；A 需 Ads 憑證、B 只需 Vertex 專案）
         "expand_configured": ads_client.is_configured(),    # A 需求側·關鍵字延伸（卡 Ads token＝未完成）
         "discover_configured": discover_mod.is_configured(),  # B 供給側·內容發現（可用）
+        "brand_presence_configured": brand_mod.is_configured(),  # D 品牌聲量探勘（可用）
         "firebase": "connected" if db is not None else "unavailable",
     }), 200
 
@@ -116,7 +118,7 @@ def expand():
     }), 200
 
 
-def _write_system_usage(usage: dict, query: str):
+def _write_system_usage(usage: dict, job_kind: str = "discover"):
     """grounding 系統付 token → system_token_usage（與 analysis-pipeline 同 collection/schema）。best-effort。"""
     if db is None or not usage or not usage.get("total"):
         return
@@ -125,11 +127,11 @@ def _write_system_usage(usage: dict, query: str):
         db.collection("system_token_usage").add({
             "payer": "system",
             "service": "search-extent",
-            "job_kind": "discover",
+            "job_kind": job_kind,
             "job_id": "", "project_id": "",
-            "by_category": {"discover": {"prompt": usage.get("prompt", 0),
-                                         "output": usage.get("output", 0),
-                                         "total": usage.get("total", 0)}},
+            "by_category": {job_kind: {"prompt": usage.get("prompt", 0),
+                                       "output": usage.get("output", 0),
+                                       "total": usage.get("total", 0)}},
             "prompt_tokens": usage.get("prompt", 0),
             "output_tokens": usage.get("output", 0),
             "total_tokens": usage.get("total", 0),
@@ -163,7 +165,32 @@ def discover():
     except Exception as e:
         return jsonify({"status": "failed", "error": f"內容發現失敗：{e}"}), 502
     if result.get("status") == "ok":
-        _write_system_usage(result.pop("usage", None), query)
+        _write_system_usage(result.pop("usage", None), "discover")
+    return jsonify(result), (200 if result.get("status") == "ok" else 503)
+
+
+@app.route("/api/brand-presence", methods=["POST"])
+@require_api_key
+def brand_presence():
+    """子功能 D：品牌聲量探勘（同步）。
+
+    Request body: {"topic": "循環扇", "brands": ["GQ Shop","Vornado",...], "max_brands": 15}
+    Response: {status, topic, count, results:[{brand, presence_level, earned_count,
+               official_present, sources:[{url,domain,source_type,kind}], summary}]}
+    每品牌一次 grounding（系統 SA），回 earned 聲量等級 + share-of-voice 排序。
+    """
+    data = request.get_json(silent=True) or {}
+    topic = (data.get("topic") or "").strip()
+    brands = data.get("brands")
+    if not topic or not isinstance(brands, list) or not brands:
+        return jsonify({"status": "failed", "error": "缺少 topic 或 brands（非空陣列）"}), 400
+    try:
+        n = int(data.get("max_brands") or 15)
+        result = brand_mod.brand_presence(topic, brands, max_brands=max(1, min(n, 30)))
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"品牌聲量探勘失敗：{e}"}), 502
+    if result.get("status") == "ok":
+        _write_system_usage(result.pop("usage", None), "brand-presence")
     return jsonify(result), (200 if result.get("status") == "ok" else 503)
 
 

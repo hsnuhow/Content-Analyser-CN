@@ -27,6 +27,25 @@ def is_configured() -> bool:
     return bool(_base_url() and os.environ.get("SEARCH_EXTENT_API_KEY"))
 
 
+def brand_presence(topic: str, brands: list, timeout: int = 180) -> dict:
+    """品牌聲量探勘：主題 × 品牌清單 → 各品牌 earned 聲量等級。
+    回 {status, topic, count, results:[...]} 或 {error}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "SEARCH_EXTENT_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.post(f"{base}/api/brand-presence",
+                             json={"topic": topic, "brands": brands},
+                             headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "搜尋情報服務金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"品牌聲量探勘逾時（{timeout}s），請減少品牌數。"}
+    except Exception as e:
+        return {"error": f"無法連線至搜尋情報服務：{e}"}
+
+
 def discover(query: str, max_results: int = 50, timeout: int = 180) -> dict:
     """關鍵字 → 推薦爬取 URL 清單。回 {status, candidates:[...], by_source, count} 或 {error}。"""
     base = _base_url()

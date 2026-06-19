@@ -30,6 +30,7 @@
 |--------|------|------------|--------|---------|------|
 | **A 需求側·關鍵字延伸** | `POST /api/expand` | 種子詞 → 關聯關鍵字 + 量級 + 競爭度 | Google Ads Keyword Planner（唯讀） | `ADS_*` 憑證齊 | ⚠️ **未完成**（卡 `ADS_DEVELOPER_TOKEN`，Basic access 待核准） |
 | **B 供給側·內容發現** | `POST /api/discover` | 關鍵字 → 推薦爬取 URL（+來源類型/地區/旗標） | Vertex Gemini + Google Search grounding（系統 SA） | `GOOGLE_CLOUD_PROJECT` | ✅ **可用** |
+| **D 品牌聲量探勘** | `POST /api/brand-presence` | 主題 × 品牌清單 → 各品牌 earned 聲量等級（有聲量/僅自有/缺席）+ share-of-voice | Vertex Gemini grounding（系統 SA）| `GOOGLE_CLOUD_PROJECT` | ✅ **可用** |
 | **C 趨勢層** | `POST /api/trends`（規劃） | 主題 → 趨勢/季節性 | BigQuery `google_trends` | — | 🔲 未做 |
 
 > grounding 在 Google 伺服器端執行（**非本服務直爬 Google**），故無資料中心 IP / CAPTCHA 問題；
@@ -42,6 +43,7 @@
 | `GET /health` | 探活；含 `expand_configured`（A 是否就緒）、`discover_configured`（B 是否就緒） |
 | `POST /api/expand` | A：`{seeds:[...], language_id?, geo_ids?, limit?}` → 關聯關鍵字（**未完成**） |
 | `POST /api/discover` | B：`{query, max?:50, angles?}` → `{status, query, count, by_source, candidates:[{url,title,domain,source_type,region,flag}]}` |
+| `POST /api/brand-presence` | D：`{topic, brands:[...]}` → `{results:[{brand,presence_level,earned_count,official_present,sources,summary}]}`。每品牌一次 grounding，回 earned 聲量 + share-of-voice |
 
 `/api/discover` 範例：
 ```bash
