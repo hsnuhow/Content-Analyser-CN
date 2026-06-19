@@ -1,12 +1,20 @@
 # Changelog
 
-## 2026-06-19 修正：SSRF 6to4 AAAA 誤殺 + neterror 靜態救援/封鎖判別（未部署）
+## 2026-06-19 修正：SSRF 封鎖橫幅卡死（永遠無法關閉）（未部署）
+問題：被 SSRF 安全過濾擋下的 URL 存進 dataset `blocked`/`n_blocked` 後**只寫不清** → 即使該 URL 已修好、重爬成功，橫幅仍永遠掛著、無關閉鈕、且被擋 URL 不是 item 不在列表（使用者回報「沒解決、無法關閉、不在列表」）。僅 content-analyser。
+- `recrawl_dataset` 啟動重爬時將 `blocked`/`n_blocked` 設 `DELETE_FIELD`（被擋 URL 本就落在 failed/all 重爬範圍）→ 橫幅立即消失。
+- `_sync_crawling_dataset` 完成時**權威重寫** `blocked`/`n_blocked` 為最新 job 結果（沒有就歸零）→ 仍真被擋者誠實重現、已修好者清掉。
+- `dataset_detail.html` 橫幅補 CTA：指向「🔄 重爬未完成/失敗項」，並說明成功後提示自動消失。
+- 搭配同日 SSRF 6to4 修正：100.com.tw 重爬即通過 → 變列表中的成功 item，橫幅清除。
+- 驗證：py_compile + Jinja parse 通過。分支 `fix/clear-blocked-banner`，未部署。
+
+## 2026-06-19 修正：SSRF 6to4 AAAA 誤殺 + neterror 靜態救援/封鎖判別（已部署 deploy-20260619-2）
 背景：診斷康泰「爬取失敗測試」資料集兩筆失敗，發現一筆其實是自家 bug。
 - **100.com.tw（SSRF 誤判，真 bug）**：DNS 有合法公網 A（203.69.66.6）＋一個 6to4 AAAA（2002::cb45:4206）。`crawler-service/app.py` 的 SSRF 守門「任一解析 IP 危險就整站擋」，而 **Python 3.11 對 6to4(2002::/16) 全域位址誤判 `is_reserved=True`** → 整站被自家擋（先前「100.com.tw 禁止爬取」之謎，這層是自我封鎖）。修法：守門改「**IPv4 嚴格 / IPv6 縱深**」——IPv4 是 Cloud Run 實際出口，任一危險即拒；IPv6 不再以 `is_reserved` 過度封鎖全域/6to4 位址，但仍解出 6to4/Teredo/v4-mapped 內嵌 v4 擋住包私有位址的繞過（`2002:a9fe:a9fe::`→169.254.169.254 metadata、`2002:0a00::`→10.x 等仍擋）。
 - **myfone.blog（資料中心 IP 封鎖，非暫時性）**：log 顯示 headless Chrome 一秒內 neterror（research 流程曾成功 398 字，之後每次都 neterror）；本機住宅 IP curl 得 200。判定為 WordPress.com/Automattic 在連線層級封鎖 Cloud Run 機房 IP，重爬無益。新增 `crawler.py:_neterror_salvage`：neterror 後以**同容器靜態 HTTP** 再試 → 抽得到內文就直接採用（Chrome 被擋但站台可達）；連線層級失敗則判機房 IP 被封 → 標 `cloaked/needs_manual`（🚫需手動），不再當可重試 failure 無限重爬。
 - 驗證：py_compile×3 + bash -n；SSRF 單元測試（100.com.tw 解封、metadata/私有/6to4 包私有/loopback 仍擋、公網 v6 放行、localhost 擋）全過；`_is_safe_url` 對 100.com.tw 真 DNS 回 (True,'')。分支 `fix/ssrf-6to4-neterror-salvage`（與下方 token 修正一併部署），未部署。
 
-## 2026-06-19 修正：Token 價格預估 + Cache-Control 根治舊版 + 內容偏少提示（未部署）
+## 2026-06-19 修正：Token 價格預估 + Cache-Control 根治舊版 + 內容偏少提示（已部署 deploy-20260619-2）
 僅 content-analyser，單一服務一次部署。
 - **Token 價格預估**：新增 `app/pricing.py`（2026-06-19 查得最新單價：gemini-2.5-flash 0.30/2.50、flash-lite 0.10/0.40、pro 1.25/10、claude opus 5/25、sonnet 3/15、haiku 1/5；embedding $0.025/1M chars）。模型名子字串比對（flash-lite 不誤判 flash）。analysis_detail 用戶付 token 旁顯示估算 $（含延伸報告）；`/admin/usage` 系統付改用此模組（**修正 embedding 單價 0.20→0.025，差約 8 倍**）。est_cost/est_embed_cost 註冊為 Jinja global。
 - **Cache-Control 根治舊版**：`_security_headers` 對 HTML 回應加 `Cache-Control: no-cache, must-revalidate`（不動 /static）→ 部署後不再看到舊版 UI。

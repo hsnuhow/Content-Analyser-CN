@@ -102,7 +102,10 @@
       <li><code>{{ b.url }}</code> — {{ b.reason }}</li>
       {% endfor %}
     </ul>
-    <div class="small text-muted mt-1">常見原因：網域打錯/失效、非 http(s)、解析到私有/保留 IP。修正後可重新匯入或重爬。</div>
+    <div class="small text-muted mt-1">常見原因：網域打錯/失效、非 http(s)、解析到私有/保留 IP。</div>
+    {% if dataset.status == 'completed' and role in ('owner', 'editor') %}
+    <div class="small mt-1">👉 按上方 <strong>「🔄 重爬未完成/失敗項」</strong> 即可重試這些網址；成功後此提示會自動消失、網址會出現在下方列表。</div>
+    {% endif %}
   </div>
   {% endif %}
 
