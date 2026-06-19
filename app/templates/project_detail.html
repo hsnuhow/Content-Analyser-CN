@@ -31,32 +31,36 @@
 
       {# 步驟〇：關鍵字自動推薦（搜尋情報·內容發現，爬蟲前置；Owner/Editor） #}
       {% if role in ('owner', 'editor') %}
-      <div class="card shadow-sm mb-4 border-info">
+      {# ───── 區 ① 內容來源（三種入口；產物都是「資料集」）───── #}
+      <h5 class="fw-bold mb-1">① 內容來源</h5>
+      <div class="text-muted small mb-3">先把要分析的內容弄進專案（三選一）。產物都會成為下方的<strong>資料集</strong>。</div>
+
+      <div class="card shadow-sm mb-3 border-info">
         <div class="card-header fw-semibold bg-info-subtle">
-          🔍 ⓪ 關鍵字自動推薦爬取清單（選用）
+          🔍 關鍵字推薦（選用）
         </div>
         <div class="card-body">
           <p class="small text-muted mb-2">
             輸入主題關鍵字，系統用 Google 搜尋情報找出該主題台灣現正排名的代表性內容
-            （媒體 / 論壇 / 影音 / 電商），勾選後直接帶入下方清單。列表頁/首頁預設不勾。
+            （媒體 / 論壇 / 影音 / 電商），結果存成<strong>推薦清單</strong>，勾選後建立草稿資料集。列表頁/首頁預設不勾。
           </p>
           <div class="row g-2 align-items-end">
             <div class="col-md-8">
               <input id="discQ" class="form-control" placeholder="例如：循環扇　或　循環扇 美型">
             </div>
             <div class="col-md-4">
-              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦筆記</button>
+              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦清單</button>
             </div>
           </div>
           <div id="discLog" class="small text-muted mt-2"></div>
-          <div class="small text-muted mt-1">產生後會存成下方「推薦筆記」，可隨時回來勾選 → 建新草稿或併入現有草稿。</div>
+          <div class="small text-muted mt-1">產生後會存成下方「推薦清單」，可隨時回來勾選 → 建立草稿資料集或併入現有草稿。</div>
         </div>
       </div>
 
       {# 推薦筆記（持久化的 ⓪ 結果，可勾選 → 建/併草稿）#}
       {% if discoveries %}
       <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">🗒 推薦筆記（{{ discoveries|length }}）</div>
+        <div class="card-header fw-semibold">🗒 推薦清單（{{ discoveries|length }}）</div>
         <div class="list-group list-group-flush">
           {% for dc in discoveries %}
           <div class="list-group-item">
@@ -66,7 +70,7 @@
                 <span class="fw-semibold">🔍 {{ dc.query }} <span class="text-muted small">（{{ dc.count }} 條）</span></span>
                 <button type="submit" formaction="{{ url_for('project_bp.delete_discovery', pid=pid, did=dc.id) }}"
                         class="btn btn-sm btn-outline-danger"
-                        onclick="return confirm('刪除這則推薦筆記？')">🗑</button>
+                        onclick="return confirm('刪除這則推薦清單？')">🗑</button>
               </div>
               <div class="border rounded p-2 mb-2" style="max-height:260px;overflow:auto">
                 {% for c in dc.candidates %}
@@ -84,12 +88,12 @@
               </div>
               <div class="row g-2 align-items-end">
                 <div class="col-md-5">
-                  <label class="form-label small mb-0">建立新草稿（名稱）</label>
+                  <label class="form-label small mb-0">建立草稿資料集（名稱）</label>
                   <input type="text" name="name" class="form-control form-control-sm"
-                         value="{{ dc.query }} 推薦" placeholder="新草稿名稱">
+                         value="{{ dc.query }} 推薦" placeholder="新草稿資料集名稱">
                 </div>
                 <div class="col-md-3">
-                  <button type="submit" name="mode" value="new" class="btn btn-sm btn-success w-100">建立新草稿</button>
+                  <button type="submit" name="mode" value="new" class="btn btn-sm btn-success w-100">建立草稿資料集</button>
                 </div>
                 <div class="col-md-4">
                   <label class="form-label small mb-0">或併入現有草稿</label>
@@ -113,9 +117,9 @@
       </div>
       {% endif %}
 
-      {# 步驟一：爬取資料集（Owner/Editor） #}
-      <div class="card shadow-sm mb-4">
-        <div class="card-header fw-semibold">① 建立網址清單（草稿）</div>
+      {# 內容來源 2：貼上網址 → 草稿資料集 #}
+      <div class="card shadow-sm mb-3">
+        <div class="card-header fw-semibold">📋 貼上網址</div>
         <div class="card-body">
           <form method="POST" action="{{ url_for('project_bp.create_dataset', pid=pid) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -125,7 +129,7 @@
                      placeholder="例如：CHANEL 初生光采 競品內容">
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold">網址清單（每行一個，最多 100）</label>
+              <label class="form-label fw-semibold">網址（每行一個，最多 100）</label>
               <textarea name="urls" class="form-control" rows="6" required
                         placeholder="https://example.com/article1&#10;https://example.com/article2"></textarea>
             </div>
@@ -135,19 +139,56 @@
                 啟用 Gemini 輔助抽取（用 Project 的 Gemini Key，低置信度時協助找正文）
               </label>
             </div>
-            <button type="submit" class="btn btn-primary">建立清單（草稿）</button>
-            <div class="form-text">先存成草稿清單，可檢視/刪除網址；之後在資料集頁按「▶ 開始爬取」才送入爬蟲。</div>
+            <button type="submit" class="btn btn-primary">建立草稿資料集</button>
+            <div class="form-text">先存成草稿資料集，可檢視/刪除網址；之後在資料集頁按「▶ 開始爬取」才送入爬蟲。</div>
           </form>
         </div>
       </div>
+
+      {# 內容來源 3：手動／上傳匯入（Cowork 蒐集）→ 直接完成資料集 #}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <a class="text-decoration-none text-dark" data-bs-toggle="collapse" href="#manualImport">
+            ▸ 📥 手動匯入（Claude Cowork / 外部蒐集）
+          </a>
+        </div>
+        <div class="collapse" id="manualImport">
+          <div class="card-body">
+            <p class="text-muted small mb-3">
+              貼上或上傳 JSON 陣列，每筆 <code>{"url","title","text"}</code>，直接建立<strong>完成</strong>狀態的資料集（不經爬蟲），可照常分析。
+              適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。
+            </p>
+            <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
+                  enctype="multipart/form-data">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="mb-2">
+                <input type="text" name="name" class="form-control" placeholder="資料集名稱" required>
+              </div>
+              <div class="mb-2">
+                <textarea name="items_json" class="form-control font-monospace" rows="5"
+                          placeholder='[{"url":"https://...","title":"標題","text":"內文..."}]'></textarea>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small text-muted mb-1">或上傳 JSON 檔（擇一）</label>
+                <input type="file" name="file" accept=".json,application/json" class="form-control form-control-sm">
+              </div>
+              <button type="submit" class="btn btn-outline-primary btn-sm">匯入資料集</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {# ───── 區 ② 資料集　③ 送出分析 ───── #}
+      <h5 class="fw-bold mb-1 mt-4">② 資料集 → ③ 分析</h5>
+      <div class="text-muted small mb-3">勾選一或多個<strong>完成</strong>的資料集 → 送出分析（多選＝合併分析）→ 產生<strong>報告</strong>。</div>
 
       {# 資料集列表（可勾選 → 合併分析）#}
       <form method="POST" action="{{ url_for('project_bp.analyse_combined', pid=pid) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-          <span>② 資料集 → 一鍵分析（{{ datasets|length }}）</span>
-          <small class="text-muted fw-normal">勾選多個可合併分析</small>
+          <span>資料集（{{ datasets|length }}）</span>
+          <small class="text-muted fw-normal">勾選一或多個 → 送出分析（多選＝合併分析）</small>
         </div>
         <div class="list-group list-group-flush">
           {% if datasets %}
@@ -196,7 +237,7 @@
           </div>
           {% endfor %}
           {% else %}
-          <div class="list-group-item text-muted text-center py-4">尚無資料集。先在上方輸入網址爬取，或下方手動匯入。</div>
+          <div class="list-group-item text-muted text-center py-4">尚無資料集。請先用上方「內容來源」建立（關鍵字推薦／貼上網址／手動匯入）。</div>
           {% endif %}
         </div>
         {% if datasets %}
@@ -204,45 +245,12 @@
           <input type="text" name="report_title" class="form-control form-control-sm" style="max-width:280px"
                  placeholder="合併分析報告標題（可留空）">
           <button type="submit" class="btn btn-sm btn-primary"
-                  {% if not project.llm_config.api_key %}disabled{% endif %}>勾選的資料集 → 合併分析</button>
+                  {% if not project.llm_config.api_key %}disabled{% endif %}>送出分析（勾選的）</button>
           {% if not project.llm_config.api_key %}<small class="text-warning">需先設定 LLM Key</small>{% endif %}
         </div>
         {% endif %}
       </div>
       </form>
-
-      {# 手動 / 上傳匯入資料集（Cowork 蒐集內容）#}
-      <div class="card shadow-sm mb-4">
-        <div class="card-header">
-          <a class="text-decoration-none text-dark" data-bs-toggle="collapse" href="#manualImport">
-            ▸ 手動匯入資料集（Claude Cowork / 外部蒐集）
-          </a>
-        </div>
-        <div class="collapse" id="manualImport">
-          <div class="card-body">
-            <p class="text-muted small mb-3">
-              貼上或上傳 JSON 陣列，每筆 <code>{"url","title","text"}</code>，直接建立資料集（不經爬蟲），可照常分析。
-              適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。
-            </p>
-            <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
-                  enctype="multipart/form-data">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <div class="mb-2">
-                <input type="text" name="name" class="form-control" placeholder="資料集名稱" required>
-              </div>
-              <div class="mb-2">
-                <textarea name="items_json" class="form-control font-monospace" rows="5"
-                          placeholder='[{"url":"https://...","title":"標題","text":"內文..."}]'></textarea>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small text-muted mb-1">或上傳 JSON 檔（擇一）</label>
-                <input type="file" name="file" accept=".json,application/json" class="form-control form-control-sm">
-              </div>
-              <button type="submit" class="btn btn-outline-primary btn-sm">匯入資料集</button>
-            </form>
-          </div>
-        </div>
-      </div>
 
       {# 進階：直接貼 JSON 提交分析 #}
       <div class="card shadow-sm mb-4">
@@ -277,7 +285,7 @@
 
       {# 歷史分析列表 #}
       <div class="card shadow-sm">
-        <div class="card-header fw-semibold">歷史分析（{{ analyses|length }} 次）</div>
+        <div class="card-header fw-semibold">④ 報告（歷史分析 {{ analyses|length }} 次）</div>
         <div class="list-group list-group-flush">
           {% if analyses %}
           {% for a in analyses %}
@@ -576,7 +584,7 @@ function runDiscover(){
   fetch("{{ url_for('project_bp.discover_urls', pid=pid) }}", {method:'POST', body:fd})
     .then(r=>r.json()).then(d=>{
       if(d.error){ btn.disabled=false; document.getElementById('discLog').textContent='錯誤：'+d.error; return; }
-      document.getElementById('discLog').textContent='已產生推薦筆記（'+(d.count||0)+' 條），重新整理中…';
+      document.getElementById('discLog').textContent='已產生推薦清單（'+(d.count||0)+' 條），重新整理中…';
       location.reload();
     }).catch(e=>{ btn.disabled=false; document.getElementById('discLog').textContent='請求失敗：'+e; });
 }
