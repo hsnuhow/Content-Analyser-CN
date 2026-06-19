@@ -112,20 +112,245 @@ def _is_social_url(url: str) -> bool:
     return any(d in u for d in _SOCIAL_DOMAINS)
 
 
-def _strip_social_ui(text: str) -> str:
-    """移除社群 UI 雜訊詞（僅用於社群/論壇來源的文本，於斷詞前以空白取代）。"""
-    for w in _SOCIAL_UI_STOPWORDS:
+# ──────────────────────────────────────────────────────────────────────
+# 來源分類 + 可後台編輯的字詞過濾清單（內建為地板，Firestore 額外項合併，60s 快取）
+# 同一個詞在不同來源意義不同（「編輯」在媒體是內容、在論壇是功能按鈕文字），
+# 故每個過濾詞帶 scope（在哪種來源才算垃圾）。套用發生在「還知道來源」的逐篇階段。
+# ──────────────────────────────────────────────────────────────────────
+SOURCE_TYPES = ('媒體', '社群', '論壇', '影音', '電商')
+
+
+def _source_type(url: str) -> str:
+    """依 URL 網域判定文本來源類型（預設『媒體』）。供 scope 過濾使用。"""
+    u = (url or '').lower()
+    if ('youtube.com' in u or 'youtu.be' in u or '/videos/' in u
+            or '/reel' in u or 'tiktok.com' in u or 'bilibili' in u):
+        return '影音'
+    if (any(d in u for d in ('facebook.com', 'fb.com', 'fb.watch',
+                             'instagram.com', 'threads.net', 'threads.com',
+                             'twitter.com'))
+            or '//x.com/' in u):   # x.com 需精確比對，避免誤中 winrex.com 等子字串
+        return '社群'
+    if any(d in u for d in ('ptt.cc', 'dcard.tw', 'mobile01.com',
+                            'gamer.com.tw', 'bahamut', 'eyny.com', 'komica')):
+        return '論壇'
+    if any(d in u for d in ('shopee.', 'momoshop', 'momo.com.tw', 'pchome',
+                            'books.com.tw', 'rakuten', 'amazon.', 'ruten')):
+        return '電商'
+    return '媒體'
+
+
+# 內建地板：通用停用詞 = 全部來源；社群 UI 詞 = 社群+論壇。後台只能「增」不能刪這些。
+_BUILTIN_ALL_SCOPE = frozenset(_STOPWORDS)
+_BUILTIN_SOCIAL_SCOPE = frozenset(_SOCIAL_UI_STOPWORDS)
+
+_TERM_FILTER_CACHE = {"val": None, "ts": 0.0}
+
+
+def get_term_filters() -> Dict[str, Any]:
+    """生效過濾清單 = 內建地板 + Firestore `system/config.term_filters`（後台可編輯）。
+
+    Firestore 格式：term_filters: [{term, scope:[類型…], type?:"media"}]
+      - scope 含 "全部" → 不分來源過濾；否則只在列出的來源類型過濾。
+      - type=="media" → 也 jieba.add_word 整塊切出（媒體名）。
+    回 {'all': set（全部來源停用）, 'by_source': {stype:set}, 'media_names': list}。
+    60s 行程快取；讀失敗回退只用內建（與 crawler get_ad_blocklist 同模式）。
+    """
+    import time
+    now = time.time()
+    c = _TERM_FILTER_CACHE
+    if c["val"] is not None and now - c["ts"] < 60:
+        return c["val"]
+    all_scope = set(_BUILTIN_ALL_SCOPE)
+    by_source = {s: (set(_BUILTIN_SOCIAL_SCOPE) if s in ('社群', '論壇') else set())
+                 for s in SOURCE_TYPES}
+    media_names = list(_MEDIA_NAMES)
+    try:
+        from firebase_admin import firestore
+        doc = firestore.client().collection("system").document("config").get()
+        if doc.exists:
+            for e in ((doc.to_dict() or {}).get("term_filters") or []):
+                if not isinstance(e, dict):
+                    continue
+                term = str(e.get("term", "")).strip()
+                if not term:
+                    continue
+                scopes = e.get("scope") or e.get("scopes") or ["全部"]
+                if isinstance(scopes, str):
+                    scopes = [scopes]
+                if e.get("type") == "media":
+                    media_names.append(term)
+                if "全部" in scopes:
+                    all_scope.add(term)
+                else:
+                    for s in scopes:
+                        if s in by_source:
+                            by_source[s].add(term)
+    except Exception:
+        pass
+    # 媒體名：jieba 整塊切出 + 一律全部來源停用
+    for m in media_names:
+        try:
+            jieba.add_word(m)
+        except Exception:
+            pass
+        all_scope.add(m)
+    val = {"all": all_scope, "by_source": by_source, "media_names": media_names}
+    c["val"], c["ts"] = val, now
+    return val
+
+
+def _strip_terms(text: str, terms) -> str:
+    """斷詞前以空白取代指定字詞（用於來源 scope 過濾）。"""
+    for w in terms:
         if w in text:
             text = text.replace(w, ' ')
     return text
 
 
+# 詞性白名單/填充判定（F2 建議用）。BRAND=專名/英文/數字 → 保護；FILLER=副詞/語助等 → 建議。
+_BRAND_POS = frozenset({'eng', 'nr', 'ns', 'nt', 'nz', 'm', 'mq'})
+_FILLER_POS = frozenset({'d', 'u', 'y', 'c', 'r', 'p', 'o', 'e', 'f'})
+
+
+def _salient_entity_names(contents, max_docs: int = 15,
+                          deadline_sec: float = 30.0,
+                          min_salience: float = 0.01):
+    """best-effort 取語料的 Cloud NL 實體名（領域詞/品牌）→ suggest_filters 白名單保護。
+
+    解決「影音逐字稿把領域詞重複講」被誤判 chrome 的問題（如汽車稿的 鋁合金/結構/材質
+    會是高 salience 實體 → 保護；然後/什麼 不是實體 → 仍可建議）。
+    NL 未啟用 / 逾時 / 失敗 → 回空集合（演算法降級為純 jieba，不致命）。
+    """
+    names = set()
+    try:
+        from google.cloud import language_v1 as language
+        client = language.LanguageServiceClient()
+    except Exception:
+        return names
+    import time as _t
+    from collections import defaultdict
+    agg = defaultdict(float)
+    deadline = _t.time() + deadline_sec
+    for c in contents[:max_docs]:
+        if _t.time() > deadline:
+            break
+        text = ((c.get("title", "") or "") + "\n"
+                + (c.get("text") or c.get("content") or ""))[:8000].strip()
+        if len(text) < 30:
+            continue
+        try:
+            er = client.analyze_entities(request={
+                "document": {"content": text,
+                             "type_": language.Document.Type.PLAIN_TEXT},
+                "encoding_type": language.EncodingType.UTF8})
+        except Exception:
+            return names  # API 未啟用等 → 直接降級（已收集者作廢，保守回空）
+        for ent in er.entities:
+            agg[ent.name] += ent.salience
+    return {n for n, s in agg.items() if s >= min_salience}
+
+
+def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str, Any]:
+    """依爬蟲文本，用三信號找「該過濾但目前沒過濾」的候選垃圾詞，分來源建議 scope。
+
+    信號：① 跨來源歧異度（某來源高、媒體低）② 同頁重複次數（chrome 會重複）
+          ③ 詞性（副詞/語助→填充建議；專名/英文→品牌白名單保護）。
+    排除：已在現行過濾清單（get_term_filters）者。輸出候選需人工勾選才生效。
+    """
+    import jieba.posseg as pseg
+    from collections import Counter, defaultdict
+
+    conf = get_term_filters()
+    already = set(conf['all']) | set(conf['media_names'])
+    for s in conf['by_source'].values():
+        already |= s
+
+    df = defaultdict(Counter)
+    tfc = defaultdict(Counter)
+    doc_n = Counter()
+    for c in contents:
+        text = f"{c.get('title', '')} {c.get('text') or c.get('content') or ''}"
+        st = _source_type(c.get('url', ''))
+        doc_n[st] += 1
+        toks = [t.strip() for t in jieba.cut(text, cut_all=False)
+                if len(t.strip()) > 1 and not re.fullmatch(r'[\d\s\W]+', t.strip())]
+        for t in set(toks):
+            df[st][t] += 1
+        for t in toks:
+            tfc[st][t] += 1
+
+    def rate(s, t):
+        return df[s][t] / doc_n[s] if doc_n[s] else 0.0
+
+    def reps(s, t):
+        return (tfc[s][t] / df[s][t]) if df[s][t] else 0.0
+
+    nonmedia = [s for s in SOURCE_TYPES if s != '媒體']
+    allt = set()
+    for s in df:
+        allt |= set(df[s])
+
+    # Cloud NL salience 白名單：領域詞/品牌（影音逐字稿重複講的 鋁合金/結構 等）→ 保護。
+    # best-effort，NL 未啟用/逾時 → 空集合，降級為純 jieba（不致命）。
+    salient = _salient_entity_names(contents)
+
+    poscache = {}
+
+    def pos_of(t):
+        if t not in poscache:
+            try:
+                poscache[t] = next(pseg.cut(t)).flag
+            except StopIteration:
+                poscache[t] = 'x'
+        return poscache[t]
+
+    cands = []
+    for t in allt:
+        if t in already:
+            continue
+        rm = rate('媒體', t)
+        best = max(nonmedia, key=lambda s: rate(s, t))
+        rb = rate(best, t)
+        disc = rb - rm
+        if rb < 0.66 or disc < 0.4:          # 信號①：跨來源歧異
+            continue
+        # 小樣本防呆：該來源至少 2 篇、且該詞在該來源出現於 ≥2 篇，
+        # 否則單一頁的版面文字/領域詞會以 rate=1.0 灌爆候選（如單篇電商頁的購物車詞）。
+        if doc_n[best] < 2 or df[best][t] < 2:
+            continue
+        p = pos_of(t)
+        if p in _BRAND_POS:                    # 白名單：品牌/英文/專名/數字
+            continue
+        if t in salient:                        # 白名單：Cloud NL 實體（領域詞/品牌）
+            continue
+        rep = reps(best, t)
+        if rep >= 3.0:                          # 信號②：同頁高重複 = 平台 chrome
+            kind, score = 'chrome', disc + rep / 6.0
+        elif p in _FILLER_POS:                  # 信號③：詞性=填充
+            kind, score = '填充', disc + 0.3
+        else:                                   # 名詞/低重複 → 需複查（防領域詞，預設不勾）
+            kind, score = '需複查', disc
+        cands.append({
+            'term': t, 'scope': [best], 'kind': kind,
+            'disc': round(disc, 2), 'rep': round(rep, 1), 'pos': p,
+            'media_rate': round(rm, 2), 'score': round(score, 3),
+        })
+    cands.sort(key=lambda x: -x['score'])
+    return {'candidates': cands[:max_candidates],
+            'n_docs': int(sum(doc_n.values())),
+            'by_source': {s: int(doc_n[s]) for s in doc_n},
+            'n_protected_entities': len(salient)}
+
+
 def _text_for_keywords(content: Dict) -> str:
-    """組關鍵字/關聯用的文本：title + body；社群/論壇來源額外去 UI 雜訊。
-    （embedding 用原始文本、不經此處理，故快取 key 不受影響。）"""
+    """組關鍵字/關聯用的文本：title + body；依該篇來源類型套用對應 scope 的過濾詞。
+    （全部 scope 的詞於 _tokenize 統一過濾；此處只處理「特定來源才算垃圾」的詞。
+    embedding 用原始文本、不經此處理，故快取 key 不受影響。）"""
     t = f"{content.get('title', '')} {content.get('text') or content.get('content') or ''}"
-    if _is_social_url(content.get('url', '')):
-        t = _strip_social_ui(t)
+    scoped = get_term_filters()["by_source"].get(_source_type(content.get('url', '')))
+    if scoped:
+        t = _strip_terms(t, scoped)
     return t
 
 TOP_KEYWORDS = 50
@@ -147,13 +372,14 @@ NL_DEADLINE_SEC = 120        # Cloud NL 實體 / 情感全程上限
 
 
 def _tokenize(text: str) -> List[str]:
-    """jieba 分詞，過濾停用詞、純數字、單字、符號。"""
+    """jieba 分詞，過濾停用詞（全部來源 scope，含後台增補）、純數字、單字、符號。"""
+    stop_all = get_term_filters()["all"]
     tokens = jieba.cut(text, cut_all=False)
     result = []
     for t in tokens:
         t = t.strip()
         if (len(t) > 1
-                and t not in _STOPWORDS
+                and t not in stop_all
                 and not re.fullmatch(r'[\d\s\W]+', t)):
             result.append(t)
     return result
@@ -508,10 +734,13 @@ def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
         return {"entities": [], "enabled": False, "reason": "無可分析文本"}
     # Cloud NL 獨立於 jieba 抽實體，媒體名（如「地球黃金線」）與停用詞雜訊會混進來 →
     # 比照關鍵字管道過濾：丟掉名稱屬媒體名/停用詞，或被媒體名包含（碎片，如「黃金」）的實體。
+    _tf = get_term_filters()
+    _stop_all, _media = _tf["all"], _tf["media_names"]
+
     def _is_entity_noise(name: str) -> bool:
-        if name in _STOPWORDS or name in _MEDIA_NAMES:
+        if name in _stop_all or name in _media:
             return True
-        return any(name in m for m in _MEDIA_NAMES if len(name) >= 2)
+        return any(name in m for m in _media if len(name) >= 2)
     ents = [{"name": k, "type": v["type"], "salience": round(v["salience"], 4),
              "mentions": v["mentions"]} for k, v in agg.items()
             if not _is_entity_noise(k)]

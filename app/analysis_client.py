@@ -70,6 +70,27 @@ def check_health(timeout: int = POLL_TIMEOUT) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def suggest_filters(contents: list, max_candidates: int = 60,
+                    timeout: int = 120) -> dict:
+    """同步呼叫分析服務找候選垃圾詞（三信號）。
+    回傳 {"candidates":[...], "n_docs", "by_source"} 或 {"error": "..."}。"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
+    try:
+        resp = requests.post(
+            f"{base}/api/suggest-filters",
+            json={"contents": contents, "max_candidates": max_candidates},
+            headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "分析服務金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": f"分析逾時（{timeout}s）。"}
+    except Exception as e:
+        return {"error": f"無法連線至分析服務：{e}"}
+
+
 def submit_analysis(report_title: str, contents: list,
                     llm_provider: str, llm_model: str, llm_api_key: str,
                     temperature: float = 0.3, thinking: bool = False,

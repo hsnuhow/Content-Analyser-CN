@@ -130,6 +130,167 @@ def tier3_toggle():
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 字詞過濾清單（垃圾詞）編輯區 — 寫 Firestore system/config.term_filters
+# analysis-pipeline 的 get_term_filters() 讀此清單（60s 快取）＋內建地板合併。
+# 每個詞帶 scope（在哪種來源算垃圾）：全部 / 媒體 / 社群 / 論壇 / 影音 / 電商。
+# ──────────────────────────────────────────────────────────────────────
+_TERM_SCOPES = ('全部', '媒體', '社群', '論壇', '影音', '電商')
+
+
+def _serialize_term_filters(entries) -> str:
+    """term_filters 陣列 → 每行 `詞 | 範圍,範圍 | media` 的可編輯文字。"""
+    lines = []
+    for e in (entries or []):
+        if not isinstance(e, dict):
+            continue
+        term = str(e.get('term', '')).strip()
+        if not term:
+            continue
+        scopes = e.get('scope') or e.get('scopes') or ['全部']
+        if isinstance(scopes, str):
+            scopes = [scopes]
+        line = f"{term} | {','.join(scopes)}"
+        if e.get('type') == 'media':
+            line += " | media"
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+def _parse_term_filters(text: str):
+    """每行 `詞 | 範圍,範圍 | media` → term_filters 陣列（去重、驗證範圍）。"""
+    out, seen = [], set()
+    for raw in (text or '').splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith('#'):
+            continue
+        parts = [p.strip() for p in raw.split('|')]
+        term = parts[0].strip()
+        if not term or term in seen:
+            continue
+        seen.add(term)
+        scopes = []
+        if len(parts) > 1 and parts[1]:
+            scopes = [s.strip() for s in parts[1].split(',')
+                      if s.strip() in _TERM_SCOPES]
+        if not scopes:
+            scopes = ['全部']
+        entry = {'term': term, 'scope': scopes}
+        if len(parts) > 2 and 'media' in parts[2].lower():
+            entry['type'] = 'media'
+        out.append(entry)
+    return out
+
+
+@bp.route('/terms')
+@admin_required
+def term_filters():
+    """字詞過濾清單編輯區。"""
+    try:
+        doc = db.collection('system').document('config').get()
+        entries = (doc.to_dict() or {}).get('term_filters') if doc.exists else []
+    except Exception:
+        entries = []
+    return render_template(
+        'admin_terms.html', user=session.get('user'),
+        terms_text=_serialize_term_filters(entries),
+        scopes=_TERM_SCOPES, n_entries=len(entries or []))
+
+
+@bp.route('/terms/save', methods=['POST'])
+@admin_required
+def term_filters_save():
+    entries = _parse_term_filters(request.form.get('terms_text', ''))
+    try:
+        db.collection('system').document('config').set(
+            {'term_filters': entries}, merge=True)
+        flash(f'已儲存 {len(entries)} 個過濾詞（分析服務最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'儲存失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.term_filters'))
+
+
+@bp.route('/terms/suggest')
+@admin_required
+def term_filters_suggest():
+    """依某專案的爬蟲文本，回傳候選垃圾詞（三信號，呼叫分析服務）。"""
+    pid = (request.args.get('pid') or '').strip()
+    if not pid:
+        return jsonify({'error': '缺少專案 ID'}), 400
+    from .project_routes import _load_dataset_items
+    contents = []
+    try:
+        ds_col = db.collection('projects').document(pid).collection('datasets')
+        for ds in ds_col.stream():
+            for it in _load_dataset_items(pid, ds.id):
+                txt = it.get('content') or it.get('text')
+                if txt and it.get('status', 'success') != 'failed':
+                    contents.append({'url': it.get('url', ''),
+                                     'title': it.get('title', ''), 'text': txt})
+    except Exception as e:
+        return jsonify({'error': f'讀取專案資料失敗：{e}'}), 500
+    if not contents:
+        return jsonify({'error': '此專案沒有可分析的爬蟲文本'}), 400
+    from .analysis_client import suggest_filters as _sf
+    return jsonify(_sf(contents))
+
+
+@bp.route('/terms/suggest-all')
+@admin_required
+def term_filters_suggest_all():
+    """全庫學習：聚合『所有專案』的爬蟲文本，一次找候選垃圾詞（優化引擎用）。
+    比單一專案更準（跨來源歧異有更多論壇/影音樣本）。文本量大時取樣上限 MAX_DOCS。"""
+    MAX_DOCS = 400
+    from .project_routes import _load_dataset_items
+    contents = []
+    try:
+        for proj in db.collection('projects').stream():
+            pid = proj.id
+            for ds in (db.collection('projects').document(pid)
+                       .collection('datasets').stream()):
+                for it in _load_dataset_items(pid, ds.id):
+                    txt = it.get('content') or it.get('text')
+                    if txt and it.get('status', 'success') != 'failed':
+                        contents.append({'url': it.get('url', ''),
+                                         'title': it.get('title', ''), 'text': txt})
+                        if len(contents) >= MAX_DOCS:
+                            raise StopIteration
+    except StopIteration:
+        pass
+    except Exception as e:
+        return jsonify({'error': f'讀取全庫資料失敗：{e}'}), 500
+    if not contents:
+        return jsonify({'error': '全庫沒有可分析的爬蟲文本'}), 400
+    from .analysis_client import suggest_filters as _sf
+    res = _sf(contents, max_candidates=80, timeout=180)
+    if isinstance(res, dict):
+        res['scope_label'] = f'全庫（{len(contents)} 篇）'
+    return jsonify(res)
+
+
+@bp.route('/terms/suggest/apply', methods=['POST'])
+@admin_required
+def term_filters_suggest_apply():
+    """把勾選的候選詞（格式 `詞 | 範圍 | media`）併入現行 term_filters。"""
+    picks = request.form.getlist('pick')
+    new_entries = _parse_term_filters('\n'.join(picks))
+    if not new_entries:
+        flash('沒有勾選任何候選詞。', 'info')
+        return redirect(url_for('admin_bp.term_filters'))
+    try:
+        doc = db.collection('system').document('config').get()
+        existing = (doc.to_dict() or {}).get('term_filters') if doc.exists else []
+        existing = existing or []
+        have = {str(e.get('term', '')).strip() for e in existing if isinstance(e, dict)}
+        added = [e for e in new_entries if e['term'] not in have]
+        db.collection('system').document('config').set(
+            {'term_filters': existing + added}, merge=True)
+        flash(f'已加入 {len(added)} 個過濾詞（最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'加入失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.term_filters'))
+
+
+# ──────────────────────────────────────────────────────────────────────
 # 用戶白名單管理
 # ──────────────────────────────────────────────────────────────────────
 

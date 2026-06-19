@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-19 新增：字詞過濾編輯區（可後台增刪、依來源 scope）+ 過濾建議分析（未部署）
+背景：垃圾詞寫死在 nlp_path，越來越多要處理；且同詞跨來源語意不同（「編輯/積分/編號/此人」在論壇是版面文字，在媒體是內容）。先用循環扇真實語料驗證概念再開發。
+- **F1 編輯區（content-analyser `/admin/terms`）**：後台 textarea 編輯 `詞 | 範圍 | media`，寫 Firestore `system/config.term_filters`。範圍多選（全部/媒體/社群/論壇/影音/電商）。
+- **nlp_path 存取器化**：`_STOPWORDS` 等寫死清單改成 `get_term_filters()`（內建地板 + Firestore 合併，60s 快取，照 crawler `get_ad_blocklist` 模式）。新增 `_source_type(url)`。`全部` scope 走 `_tokenize` 統一過濾；其餘 scope 在 `_text_for_keywords` 依該篇來源逐篇 strip（推廣自既有 `_strip_social_ui`）。媒體名動態 `jieba.add_word`。**只增不減**（內建核心不可刪）。
+- **F2 建議分析（analysis-pipeline `POST /api/suggest-filters` 同步 + 後台勾選 UI）**：三信號「跨來源歧異 × 同頁重複次數 × 詞性」找候選垃圾詞，自動建議 scope；品牌/英文/專名白名單保護；排除已在清單者。候選需人工勾選才寫入。
+- **Cloud NL salience 白名單**：留出驗證（保時捷 49 篇含影音）發現影音逐字稿把領域詞（鋁合金/結構/材質）重複講 → 被誤判 chrome。`suggest_filters` 加 `_salient_entity_names()`：對語料跑 Cloud NL，高 salience 實體（領域詞/品牌）一律保護排除（best-effort + 30s 時限，NL 未啟用/逾時則降級為純 jieba，不致命）。CHANEL 33 篇全媒體 → 0 候選（精度安全，不誤殺領域詞）。
+- **全庫學習（content-analyser `/admin/terms/suggest-all`）**：一鍵聚合『所有專案』爬蟲文本（上限 400 篇）跑 suggest_filters，發掘全站候選垃圾詞。比單一專案準（跨來源歧異有更多論壇/影音樣本）。後台「🧠 全庫學習」按鈕為主、單一專案分析為輔，共用候選勾選表。驗證：103 篇跨 3 主題合併，積分/編號/此人/文章/個人 強信號浮出。
+- **概念驗證（循環扇 21 篇）**：積分/編號/此人/文章（論壇 chrome，同頁重複 6–12×）、觀看/總代理（影音）、不管/每天/之前/的話（填充）全精準浮出；品牌（Vornado/小米/Acerpure）正確白名單排除。
+- **測試抓到 2 個真 bug 並修**：① `_source_type` 的 `'x.com'` 子字串誤中 winrex.com → 改精確 `//x.com/`；② 單篇來源 rate=1.0 灌爆候選 → 加 `df≥2 且該來源≥2 篇` 小樣本防呆。
+- 驗證：py_compile×全 + Jinja×2；空 Firestore 回退 == 內建（向後相容）；論壇文本去 回覆/樓主、留 編輯/馬達；`suggest_filters` 循環扇端到端、`_parse/_serialize` round-trip 全過。分支 `feat/term-filter-editor`，未部署。
+
 ## 2026-06-19 修正：SSRF 封鎖橫幅卡死（永遠無法關閉）（已部署 deploy-20260619-3）
 問題：被 SSRF 安全過濾擋下的 URL 存進 dataset `blocked`/`n_blocked` 後**只寫不清** → 即使該 URL 已修好、重爬成功，橫幅仍永遠掛著、無關閉鈕、且被擋 URL 不是 item 不在列表（使用者回報「沒解決、無法關閉、不在列表」）。僅 content-analyser。
 - `recrawl_dataset` 啟動重爬時將 `blocked`/`n_blocked` 設 `DELETE_FIELD`（被擋 URL 本就落在 failed/all 重爬範圍）→ 橫幅立即消失。
