@@ -397,10 +397,36 @@
         </div>
         <div class="collapse" id="brandScan">
           <div class="card-body">
-            <p class="small text-muted mb-2">
+            <p class="small text-muted mb-1">
               主題 + 品牌清單 → 看每個品牌在台灣這主題有沒有「第三方」聲量（評測/開箱/討論），
               找出「有賣卻沒人談」的缺口。每行一個品牌（建議 ≤8 個，較快）。
             </p>
+            <a class="small text-decoration-none" data-bs-toggle="collapse" href="#brandScanHelp">❓ 怎麼用 / 怎麼看（點開）</a>
+            <div class="collapse mb-2" id="brandScanHelp">
+              <div class="border rounded bg-light p-3 small mt-2">
+                <div class="fw-semibold mb-1">這工具回答：「這個主題上，哪些品牌有人在談、哪些沒人理？」</div>
+                <div class="mb-2">
+                  <strong>怎麼用：</strong>① 填<strong>主題</strong>（消費者會搜的詞，如「循環扇」）→
+                  ② 一行一個<strong>品牌</strong>（自家 + 競品）→ ③ 按「分析品牌聲量」，等幾十秒。
+                </div>
+                <div class="mb-1"><strong>三個燈號怎麼看：</strong></div>
+                <ul class="mb-2 ps-3">
+                  <li><span class="badge bg-success">有聲量</span>　很多別人（媒體/論壇/YouTuber）在談 → 已有口碑</li>
+                  <li><span class="badge bg-warning text-dark">僅自有</span>　只有品牌自己的官網/賣場、別人沒談 → <strong>有賣但沒人幫它說話</strong></li>
+                  <li><span class="badge bg-danger">缺席</span>　幾乎找不到 → 在這主題上等於隱形</li>
+                </ul>
+                <div class="mb-1">（「第三方」數字＝有幾個外部來源在談它，越大聲量越強。）</div>
+                <div><strong>看到結果可以做什麼：</strong></div>
+                <ul class="mb-1 ps-3">
+                  <li>自家是<span class="badge bg-warning text-dark">僅自有</span>/<span class="badge bg-danger">缺席</span> → 該做內容/找 KOL/投放，把聲音做出來。</li>
+                  <li>競品<span class="badge bg-success">有聲量</span>、你缺席 → 點開它的來源，看它在哪被談，照著補。</li>
+                  <li>大家都缺席 → 藍海，先做先贏、搶當代表內容。</li>
+                  <li>找客戶：<span class="badge bg-warning text-dark">僅自有</span>的品牌＝「在賣卻沒聲量」，正是需要內容行銷的對象。</li>
+                  <li>驗證成效：活動前後各跑一次，看有沒有從 🟡/🔴 變 🟢。</li>
+                </ul>
+                <div class="text-muted">小提醒：這是快速研判、不是精準普查，每次略有不同；要更確定就多跑一兩次看趨勢。</div>
+              </div>
+            </div>
             <div class="row g-2 align-items-start">
               <div class="col-md-4">
                 <input id="bsTopic" class="form-control form-control-sm" placeholder="主題，如：循環扇">
