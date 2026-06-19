@@ -124,12 +124,32 @@ def _ground(token, project, prompt, tries=1):
 
 
 def _resolve(uri):
-    """解析 vertexaisearch 轉址成真實 URL。失敗回 None。"""
+    """解析 vertexaisearch 轉址成真實 URL。
+
+    只讀第一個 302 的 Location（即真實 URL），**不一路跟到最終網站**——
+    否則會被「封鎖資料中心 IP」的站（myfone/cool-style 等）在 Cloud Run 上 HEAD 失敗而丟掉，
+    而那些站本來就該交給爬蟲處理。多跟幾跳直到拿到非 vertexaisearch 的 URL。失敗回 None。
+    """
+    cur = uri
     try:
-        r = requests.head(uri, allow_redirects=True, timeout=8,
-                          headers={"User-Agent": "Mozilla/5.0"})
-        return r.url
+        for _ in range(5):
+            r = requests.head(cur, allow_redirects=False, timeout=8,
+                              headers={"User-Agent": "Mozilla/5.0"})
+            loc = r.headers.get("Location")
+            if loc and r.status_code in (301, 302, 303, 307, 308):
+                if loc.startswith("/"):
+                    from urllib.parse import urljoin
+                    loc = urljoin(cur, loc)
+                # 已跳離 vertexaisearch（拿到真實站 URL）→ 收工
+                if "vertexaisearch.cloud.google.com" not in loc:
+                    return loc
+                cur = loc
+                continue
+            # 非轉址（200/4xx 等）：cur 已是最終 URL
+            return cur if r.status_code < 400 else (cur if cur != uri else None)
+        return cur if cur != uri else None
     except Exception:
+        # 連 Location 都拿不到時，至少回原 redirect URL（爬蟲可跟轉址）；避免直接丟失候選
         return None
 
 
