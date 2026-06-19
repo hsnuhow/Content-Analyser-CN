@@ -25,6 +25,13 @@ from . import oauth
 bp = Blueprint('main_bp', __name__)
 
 
+@bp.route('/_diag/se')
+def _diag_search_extent():
+    """臨時：診斷 content-analyser → search-extent 連線（除錯用，修好後移除）。"""
+    from .search_extent_client import diag
+    return jsonify(diag())
+
+
 @bp.route('/debug')
 def debug():
     # 安全：僅本地開發環境可用；正式環境回 404，避免洩漏 session/設定狀態。
