@@ -1138,7 +1138,7 @@ def discovery_to_draft(pid, did, project, role):
             'updated_at': firestore.SERVER_TIMESTAMP,
         })
         _save_dataset_items(pid, ds_ref.id, [{'url': u, 'status': 'pending'} for u in urls])
-        flash(f'已建立草稿「{name}」（{len(urls)} 個網址）。', 'success')
+        flash(f'已建立草稿資料集「{name}」（{len(urls)} 個網址）。', 'success')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
     # 併入現有草稿
     existing_did = request.form.get('existing_did', '')
@@ -1187,7 +1187,7 @@ def create_dataset(pid, project, role):
     })
     # 待爬 items（status='pending'）：可逐筆刪除、重載不消失。
     _save_dataset_items(pid, ds_ref.id, [{'url': u, 'status': 'pending'} for u in urls])
-    flash(f'草稿清單「{name}」已建立（{len(urls)} 個網址）。確認清單後按「開始爬取」。', 'success')
+    flash(f'草稿資料集「{name}」已建立（{len(urls)} 個網址）。確認後按「開始爬取」。', 'success')
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
 
 
@@ -1208,7 +1208,7 @@ def start_crawl(pid, did, project, role):
     items = _load_dataset_items(pid, did)
     urls = list(dict.fromkeys(it.get('url') for it in items if it.get('url')))
     if not urls:
-        flash('清單沒有可爬取的網址。', 'danger')
+        flash('資料集沒有可爬取的網址。', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
     llm_config = project.get('llm_config', {})
@@ -1216,7 +1216,7 @@ def start_crawl(pid, did, project, role):
     result = submit_crawl_batch(urls, use_gemini=bool(dataset.get('use_gemini')),
                                 gemini_api_key=gemini_key)
     if 'error' in result:
-        flash(f'啟動爬取失敗：{result["error"]}（草稿清單已保留，可稍後重試）', 'danger')
+        flash(f'啟動爬取失敗：{result["error"]}（草稿資料集已保留，可稍後重試）', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
     ref.update({
