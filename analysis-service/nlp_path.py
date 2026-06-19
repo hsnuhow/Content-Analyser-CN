@@ -213,6 +213,44 @@ _BRAND_POS = frozenset({'eng', 'nr', 'ns', 'nt', 'nz', 'm', 'mq'})
 _FILLER_POS = frozenset({'d', 'u', 'y', 'c', 'r', 'p', 'o', 'e', 'f'})
 
 
+def _salient_entity_names(contents, max_docs: int = 15,
+                          deadline_sec: float = 30.0,
+                          min_salience: float = 0.01):
+    """best-effort 取語料的 Cloud NL 實體名（領域詞/品牌）→ suggest_filters 白名單保護。
+
+    解決「影音逐字稿把領域詞重複講」被誤判 chrome 的問題（如汽車稿的 鋁合金/結構/材質
+    會是高 salience 實體 → 保護；然後/什麼 不是實體 → 仍可建議）。
+    NL 未啟用 / 逾時 / 失敗 → 回空集合（演算法降級為純 jieba，不致命）。
+    """
+    names = set()
+    try:
+        from google.cloud import language_v1 as language
+        client = language.LanguageServiceClient()
+    except Exception:
+        return names
+    import time as _t
+    from collections import defaultdict
+    agg = defaultdict(float)
+    deadline = _t.time() + deadline_sec
+    for c in contents[:max_docs]:
+        if _t.time() > deadline:
+            break
+        text = ((c.get("title", "") or "") + "\n"
+                + (c.get("text") or c.get("content") or ""))[:8000].strip()
+        if len(text) < 30:
+            continue
+        try:
+            er = client.analyze_entities(request={
+                "document": {"content": text,
+                             "type_": language.Document.Type.PLAIN_TEXT},
+                "encoding_type": language.EncodingType.UTF8})
+        except Exception:
+            return names  # API 未啟用等 → 直接降級（已收集者作廢，保守回空）
+        for ent in er.entities:
+            agg[ent.name] += ent.salience
+    return {n for n, s in agg.items() if s >= min_salience}
+
+
 def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str, Any]:
     """依爬蟲文本，用三信號找「該過濾但目前沒過濾」的候選垃圾詞，分來源建議 scope。
 
@@ -253,6 +291,10 @@ def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str,
     for s in df:
         allt |= set(df[s])
 
+    # Cloud NL salience 白名單：領域詞/品牌（影音逐字稿重複講的 鋁合金/結構 等）→ 保護。
+    # best-effort，NL 未啟用/逾時 → 空集合，降級為純 jieba（不致命）。
+    salient = _salient_entity_names(contents)
+
     poscache = {}
 
     def pos_of(t):
@@ -280,6 +322,8 @@ def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str,
         p = pos_of(t)
         if p in _BRAND_POS:                    # 白名單：品牌/英文/專名/數字
             continue
+        if t in salient:                        # 白名單：Cloud NL 實體（領域詞/品牌）
+            continue
         rep = reps(best, t)
         if rep >= 3.0:                          # 信號②：同頁高重複 = 平台 chrome
             kind, score = 'chrome', disc + rep / 6.0
@@ -295,7 +339,8 @@ def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str,
     cands.sort(key=lambda x: -x['score'])
     return {'candidates': cands[:max_candidates],
             'n_docs': int(sum(doc_n.values())),
-            'by_source': {s: int(doc_n[s]) for s in doc_n}}
+            'by_source': {s: int(doc_n[s]) for s in doc_n},
+            'n_protected_entities': len(salient)}
 
 
 def _text_for_keywords(content: Dict) -> str:
