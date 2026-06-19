@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-19 新增：推薦筆記（⓪ 內容發現持久化 + 建新/併入現有草稿）（未部署）
+延伸 ⓪ 關鍵字自動推薦：把推薦結果存成「筆記」可累積、勾選後建新草稿或併入現有草稿（使用者要求「草稿像筆記、有好幾個、勾選多個後才進爬蟲」）。
+- **持久化**：`discover_urls` 改 POST，結果存 `projects/{pid}/discoveries/{id}`（query/candidates/count/by_source）。專案頁 `project_detail` 載入並渲染「🗒 推薦筆記」清單，重整不消失、可回來繼續勾。
+- **建新 / 併入**：`discovery_to_draft` 路由——勾選的 URL 依 `mode`：`new` 建新草稿、`append` 併入選定現有草稿（`_append_urls_to_draft` 去重 append pending items + 更新 source_urls/計數）。可跨關鍵字累積成多個草稿筆記。
+- **刪除**：`delete_discovery` 路由（🗑）。
+- **UI**：⓪ 卡改「產生推薦筆記」（POST + reload）；每則筆記候選預設勾文章頁（列表/首頁不勾）、來源色標籤、建新草稿名稱 + 併入現有草稿下拉。
+- 修掉 form 兩個同名 `target` 衝突 → 改 `mode`(new/append) + `existing_did`。
+- 驗證：py_compile + Jinja。附錄 C 新增 discoveries 子集合。分支待建、未部署。
+
 ## 2026-06-19 新增：search-extent 重定義為「搜尋情報層」+ 內容發現（爬蟲前置第 0 階，未部署）
 重新定義 search-extent 的模組目的、邊界、功能歸屬（章程寫進 README + CLAUDE.md 附錄 B）。
 - **重定義**：從「需求側情報」升格為**搜尋情報層**——爬取之前提供主題的「需求（搜什麼）+ 供給（什麼在贏）」。唯讀、無狀態、單向、不爬不分析、只回情報清單。管線第 0 階：search-extent →(URL)→ 草稿 → crawler → analysis。

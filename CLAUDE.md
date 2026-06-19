@@ -915,6 +915,10 @@ projects/{project_id}             頂層，多人協作
     title / status / created_by / crawl_job_id
     items/{auto-id}               ⭐子集合（避免 1MB 文件上限、筆數不限）
       url / title / text / source_type / status / _seq（排序）
+  discoveries/{auto-id}           ⭐推薦筆記（⓪ 內容發現持久化結果，search-extent /api/discover）
+    query / count / by_source / created_by / created_at
+    candidates: [{url,title,domain,source_type,region,flag}]
+                                  使用者勾選 → 建新草稿 or 併入現有草稿（discovery_to_draft）
   analyses/{analysis_id}
     report_title / status / progress / log
     job_id                        對應 analysis-pipeline 的 job
