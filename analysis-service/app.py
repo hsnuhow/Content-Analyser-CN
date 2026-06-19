@@ -247,6 +247,28 @@ def get_job(job_id: str):
     return jsonify(safe_fields), 200
 
 
+@app.route("/api/suggest-filters", methods=["POST"])
+@require_api_key
+def suggest_filters_endpoint():
+    """同步：依爬蟲文本分來源找候選垃圾詞（三信號：歧異 × 重複 × 詞性）。
+
+    Request body: {"contents": [{"url","title","text"}], "max_candidates": 60}
+    Response: {"candidates": [{term, scope, kind, disc, rep, ...}], "n_docs", "by_source"}
+    純本地統計（jieba + 詞性），不呼叫 LLM，秒級回傳。候選需人工勾選才生效。
+    """
+    data = request.get_json(silent=True) or {}
+    contents = data.get("contents")
+    if not isinstance(contents, list) or not contents:
+        return jsonify({"error": "缺少 contents（非空陣列）"}), 400
+    try:
+        from nlp_path import suggest_filters
+        n = int(data.get("max_candidates") or 60)
+        result = suggest_filters(contents, max_candidates=max(1, min(n, 200)))
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": f"分析失敗：{e}"}), 500
+
+
 @app.route("/api/analyse-images", methods=["POST"])
 @require_api_key
 def analyse_images():

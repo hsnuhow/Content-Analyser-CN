@@ -825,6 +825,7 @@ Content-Analyser-CN/
 | `POST /api/audience-reports` | 提交延伸行動報告（非同步）。body `{report_title, source_markdown, experts:[{slug,label,prompt,playbook}], llm_provider, llm_model, llm_api_key, temperature?}`，回 `{job_id}`。experts 由 content-analyser 的知識庫（啟用專家）傳入 |
 | `GET /api/audience-reports/{job_id}` | 查詢進度與結果；completed 回 `audience_reports{<slug>: Markdown}`（每啟用專家一份）|
 | `POST /api/kb/index` | 重新索引某知識庫專家文件（切塊 + 系統 SA embedding → kb_chunks）。body `{expert_slug}`，回 `{indexed: N}` |
+| `POST /api/suggest-filters` | **同步**：依爬蟲文本分來源找候選垃圾詞（三信號：跨來源歧異 × 同頁重複 × 詞性；品牌/英文白名單）。body `{contents:[{url,title,text}], max_candidates?}`，回 `{candidates:[{term,scope,kind,disc,rep,...}], n_docs, by_source}`。純本地統計、不呼叫 LLM。候選需人工勾選才生效 |
 
 `POST /api/analyse` body：
 ```json
@@ -883,6 +884,12 @@ status = requests.get(
 ```
 system/config
   admin_email: string             setup_admin.sh 寫入
+  tier3_enabled: bool             爬蟲 Tier 3 住宅代理開關（admin 控制台切換）
+  ad_blocklist: [string]          爬蟲額外封鎖網域（內建 AD_BLOCKLIST + 此清單）
+  term_filters: [{term, scope:[全部|媒體|社群|論壇|影音|電商], type?:"media"}]
+                                  字詞過濾清單（垃圾詞，admin /admin/terms 編輯）。
+                                  analysis-pipeline get_term_filters() 讀取（60s 快取，內建為地板）。
+                                  scope 決定該詞在哪種來源才過濾（同詞跨來源語意不同）。
 
 users/{email}                     doc ID 即 email（權威來源）
   email: string                   doc ID 的鏡射欄位；舊文件可能缺，讀取端一律以 doc ID 補齊
