@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-19 新增：search-extent 重定義為「搜尋情報層」+ 內容發現（爬蟲前置第 0 階，未部署）
+重新定義 search-extent 的模組目的、邊界、功能歸屬（章程寫進 README + CLAUDE.md 附錄 B）。
+- **重定義**：從「需求側情報」升格為**搜尋情報層**——爬取之前提供主題的「需求（搜什麼）+ 供給（什麼在贏）」。唯讀、無狀態、單向、不爬不分析、只回情報清單。管線第 0 階：search-extent →(URL)→ 草稿 → crawler → analysis。
+- **子功能歸屬**：A 需求側·關鍵字延伸（`/api/expand`，Ads，**卡 token 未完成不啟動**）；B 供給側·內容發現（`/api/discover`，**新增可用**）；C 趨勢層（規劃）。各自端點/資料源/開關，`/health` 各有 `*_configured`。
+- **B 內容發現**（`search-extent/discover.py` + `/api/discover`）：關鍵字 → Vertex Gemini + Google Search grounding（**在 Google 端執行、非直爬 → 無 IP/CAPTCHA 問題**，系統 SA、不需 key/CSE）→ 多角度查詢 + 平行解析 vertexaisearch 轉址 → 標 source_type/region/flag、TW 優先。grounding 系統付 token → `system_token_usage`（service=search-extent）。
+- **content-analyser**：新增 `app/search_extent_client.py`；專案頁「⓪ 關鍵字自動推薦」UI（關鍵字 → 候選勾選，列表頁/首頁預設不勾 → 帶入 create_dataset 建草稿）；`project_routes.discover_urls` 路由。
+- **deploy.sh**：content-analyser 注入 `SEARCH_EXTENT_SERVICE_URL`（取自 search-extent）+ `SEARCH_EXTENT_API_KEY`。
+- 驗證：py_compile 全 + Jinja + bash -n；`discover()` 本地端到端（循環扇 12 條全 TW、分類乾淨、token 計量、100.com.tw 因 SSRF 修復回歸）；留出驗證（循環扇/保時捷/CHANEL）。分支 `feat/search-extent-discover`，未部署。
+- ⚠️ **A（Ads）依使用者指示維持不啟動**；標註未完成。
+
 ## 2026-06-19 新增：字詞過濾編輯區（可後台增刪、依來源 scope）+ 過濾建議分析（未部署）
 背景：垃圾詞寫死在 nlp_path，越來越多要處理；且同詞跨來源語意不同（「編輯/積分/編號/此人」在論壇是版面文字，在媒體是內容）。先用循環扇真實語料驗證概念再開發。
 - **F1 編輯區（content-analyser `/admin/terms`）**：後台 textarea 編輯 `詞 | 範圍 | media`，寫 Firestore `system/config.term_filters`。範圍多選（全部/媒體/社群/論壇/影音/電商）。

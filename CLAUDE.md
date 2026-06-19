@@ -838,17 +838,21 @@ Content-Analyser-CN/
 }
 ```
 
-## search-extent（X-API-Key 保護，需 'expand' 權限）
+## search-extent — 搜尋情報層（X-API-Key 保護，需 'expand' 權限）
 
-需求側情報服務（第 4 個 Cloud Run 服務）。種子關鍵字 → Google Ads Keyword Planner 關聯關鍵字。唯讀。
+第 4 個 Cloud Run 服務。**目的（2026-06-19 重定義）**：在「爬取之前」提供主題的搜尋面貌——
+需求（大家搜什麼）+ 供給（什麼內容在贏）。**唯讀、無狀態、單向、不爬不分析、只回情報清單**。
+管線第 0 階：search-extent →(URL)→ 草稿 → crawler → analysis。完整章程見 `search-extent/README.md`。
 
-| 端點 | 說明 |
-|------|------|
-| `GET /health` | 探活（含 `ads_configured`）|
-| `POST /api/expand` | `{seeds:[...], language_id?, geo_ids?, limit?}` → 關聯關鍵字 |
+| 端點 | 子功能 | 說明 |
+|------|--------|------|
+| `GET /health` | — | 探活（含 `expand_configured` / `discover_configured`）|
+| `POST /api/expand` | A 需求側 | `{seeds:[...], language_id?, geo_ids?, limit?}` → 關聯關鍵字 + 量級 + 競爭度（Ads）。**⚠️ 卡 ADS_DEVELOPER_TOKEN、未完成、不啟動** |
+| `POST /api/discover` | B 供給側 | `{query, max?:50}` → `{status, query, count, by_source, candidates:[{url,title,domain,source_type,region,flag}]}`。Vertex Gemini Search grounding（系統 SA），grounding 在 Google 端執行不直爬。**✅ 可用** |
 
-回傳：`{status, seeds, count, ideas:[{text, avg_monthly_searches, competition, competition_index}]}`
-（預設語言 1018＝繁中、地區 2158＝台灣）。觸及 Firestore：`api_keys`（僅驗證）。
+- A 回傳：`{status, seeds, count, ideas:[{text, avg_monthly_searches, competition, competition_index}]}`（預設語言 1018＝繁中、地區 2158＝台灣）。
+- B：`source_type`（媒體/社群/論壇/影音/電商）、`region`（TW/HK/?，TW 優先）、`flag`（列表頁/首頁＝非文章頁）。grounding 系統付 token → `system_token_usage`（service=search-extent）。content-analyser 經 `app/search_extent_client.py` 呼叫，UI 在專案頁「⓪ 關鍵字自動推薦」→ 勾選 → 沿用 create_dataset 建草稿。
+- 觸及 Firestore：`api_keys`（驗證）、`system_token_usage`（B 記帳）。content-analyser 需注入 `SEARCH_EXTENT_SERVICE_URL` + `SEARCH_EXTENT_API_KEY`（deploy.sh 已加）。
 
 ## 從 Colab / 外部工具呼叫
 

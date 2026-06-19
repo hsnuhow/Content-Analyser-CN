@@ -18,9 +18,10 @@ import functools
 from flask import Flask, request, jsonify
 
 import ads_client
+import discover as discover_mod
 from auth import is_authorized
 
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.2.0"
 
 # Firebase（供 api_keys 白名單）；初始化失敗則只接受系統金鑰。
 db = None
@@ -58,7 +59,9 @@ def health():
         "service": "search-extent",
         "version": SERVICE_VERSION,
         "api_key_configured": bool(SEARCH_EXTENT_API_KEY),
-        "ads_configured": ads_client.is_configured(),
+        # 子功能就緒狀態（各自獨立；A 需 Ads 憑證、B 只需 Vertex 專案）
+        "expand_configured": ads_client.is_configured(),    # A 需求側·關鍵字延伸（卡 Ads token＝未完成）
+        "discover_configured": discover_mod.is_configured(),  # B 供給側·內容發現（可用）
         "firebase": "connected" if db is not None else "unavailable",
     }), 200
 
@@ -109,6 +112,57 @@ def expand():
         "count": len(ideas),
         "ideas": ideas,
     }), 200
+
+
+def _write_system_usage(usage: dict, query: str):
+    """grounding 系統付 token → system_token_usage（與 analysis-pipeline 同 collection/schema）。best-effort。"""
+    if db is None or not usage or not usage.get("total"):
+        return
+    try:
+        from firebase_admin import firestore
+        db.collection("system_token_usage").add({
+            "payer": "system",
+            "service": "search-extent",
+            "job_kind": "discover",
+            "job_id": "", "project_id": "",
+            "by_category": {"discover": {"prompt": usage.get("prompt", 0),
+                                         "output": usage.get("output", 0),
+                                         "total": usage.get("total", 0)}},
+            "prompt_tokens": usage.get("prompt", 0),
+            "output_tokens": usage.get("output", 0),
+            "total_tokens": usage.get("total", 0),
+            "embedding": None,
+            "at": firestore.SERVER_TIMESTAMP,
+        })
+    except Exception as e:
+        print(f"[discover] 系統用量寫入略過：{e}", flush=True)
+
+
+@app.route("/api/discover", methods=["POST"])
+@require_api_key
+def discover():
+    """子功能 B：關鍵字 → 推薦爬取 URL（同步）。
+
+    Request body: {"query": "循環扇", "max": 50, "angles": [...]?}
+    Response: {status, query, count, by_source, candidates:[{url,title,domain,source_type,region,flag}]}
+    grounding 在 Google 端執行（非本服務直爬），系統 SA、無狀態、只回情報。
+    """
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"status": "failed", "error": "缺少 query"}), 400
+    try:
+        max_results = max(1, min(100, int(data.get("max", 50))))
+    except (TypeError, ValueError):
+        max_results = 50
+    angles = data.get("angles") if isinstance(data.get("angles"), list) else None
+    try:
+        result = discover_mod.discover(query, max_results=max_results, angles=angles)
+    except Exception as e:
+        return jsonify({"status": "failed", "error": f"內容發現失敗：{e}"}), 502
+    if result.get("status") == "ok":
+        _write_system_usage(result.pop("usage", None), query)
+    return jsonify(result), (200 if result.get("status") == "ok" else 503)
 
 
 if __name__ == "__main__":
