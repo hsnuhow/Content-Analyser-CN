@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-20 修正：報告 §3.2 情感/好感度消失（Cloud NL 逾時被降級）（未部署）
+循環扇最新報告好感度沒出來、編號 3.1→4 中間缺 §3.2。根因：Cloud NL（run_entities_sentiment）
+**逐篇序列**跑（最多 25 篇 × 2 次 API：實體+情感），合併分析篇數多時 >120s NL_DEADLINE → 被降級略過
+→ enabled=False → `_section_entities` 回空字串 → §3.2 整段不渲染（好感度、實體都沒了）。
+- 修：NL 逐篇改 **ThreadPoolExecutor 平行（8 workers）**，25 篇從 ~100–150s 降到 ~10–15s，穩在 120s 內。
+- 順帶：單篇 API 失敗不再整段中止（原本第一個錯誤就 return enabled=False）；全失敗才降級。
+- py_compile 通過（本地無 google-cloud-language，平行邏輯對齊已驗證的 grounding 平行化）。僅 analysis-pipeline。
+- 註：該報告 §3.1 仍有 shopping/文章 等 URL 雜訊＝URL 修正部署前所跑；重跑即乾淨。
+
 ## 2026-06-19 新增：品牌聲量探勘（search-extent 子功能 D）（未部署）
 回答「某品牌在某主題有沒有 earned 聲量」的缺席洞察（源於 GQ Shop 賣循環扇卻搜不到、報告零影響力）。
 - **search-extent `brand_presence.py` + `POST /api/brand-presence`**：主題 × 品牌清單，對每品牌一次品牌錨定 grounding（系統 SA），請 Gemini 判定第三方聲量等級（有聲量/僅自有/缺席）+ 列依據來源；來源解析真實 URL、分自有 vs 第三方；依 earned_count 排 share-of-voice。品牌平行（max_workers 8）、grounding timeout 70s。token 記帳 system_token_usage(job_kind=brand-presence)。health 加 brand_presence_configured。

@@ -714,35 +714,58 @@ def run_entities_sentiment(contents: List[Dict]) -> Dict[str, Any]:
     except Exception as e:
         return {"entities": [], "enabled": False, "reason": str(e)}
     from collections import defaultdict
-    agg = defaultdict(lambda: {"salience": 0.0, "mentions": 0, "type": ""})
-    sent_sum, sent_docs, used = 0.0, 0, 0
+    from concurrent.futures import ThreadPoolExecutor
+    # 取樣文本（每篇 ≥30 字才送）
+    texts = []
     for c in contents[:NL_MAX_DOCS]:
-        text = ((c.get("title", "") or "") + "\n"
-                + (c.get("text") or c.get("content") or ""))[:8000].strip()
-        if len(text) < 30:
-            continue
+        t = ((c.get("title", "") or "") + "\n"
+             + (c.get("text") or c.get("content") or ""))[:8000].strip()
+        if len(t) >= 30:
+            texts.append(t)
+    if not texts:
+        return {"entities": [], "enabled": False, "reason": "無可分析文本"}
+
+    def _one(text):
+        """單篇：實體 + 情感。回 (entities_tuples, sentiment_or_None, error_or_None)。"""
         doc = {"content": text, "type_": language.Document.Type.PLAIN_TEXT}
         try:
             er = client.analyze_entities(
                 request={"document": doc, "encoding_type": language.EncodingType.UTF8})
+            ents = [(e.name, language.Entity.Type(e.type_).name, e.salience, len(e.mentions))
+                    for e in er.entities]
         except Exception as e:
-            return {"entities": [], "enabled": False,
-                    "reason": f"API 失敗（是否已啟用 language.googleapis.com？）：{e}"}
-        used += 1
-        for ent in er.entities:
-            a = agg[ent.name]
-            a["salience"] += ent.salience
-            a["mentions"] += len(ent.mentions)
-            a["type"] = language.Entity.Type(ent.type_).name
+            return None, None, e
+        score = None
         try:
             sr = client.analyze_sentiment(
                 request={"document": doc, "encoding_type": language.EncodingType.UTF8})
-            sent_sum += sr.document_sentiment.score
-            sent_docs += 1
+            score = sr.document_sentiment.score
         except Exception:
             pass
+        return ents, score, None
+
+    # 平行處理（治本：序列 25 篇×2 呼叫易破 120s 上限導致 §3.2 整段被略過）。
+    agg = defaultdict(lambda: {"salience": 0.0, "mentions": 0, "type": ""})
+    sent_sum, sent_docs, used = 0.0, 0, 0
+    last_err = None
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for ents, score, err in ex.map(_one, texts):
+            if err is not None:
+                last_err = err
+                continue
+            used += 1
+            for name, typ, sal, men in ents:
+                a = agg[name]
+                a["salience"] += sal
+                a["mentions"] += men
+                a["type"] = typ
+            if score is not None:
+                sent_sum += score
+                sent_docs += 1
     if used == 0:
-        return {"entities": [], "enabled": False, "reason": "無可分析文本"}
+        return {"entities": [], "enabled": False,
+                "reason": (f"API 失敗（是否已啟用 language.googleapis.com？）：{last_err}"
+                           if last_err else "無可分析文本")}
     # Cloud NL 獨立於 jieba 抽實體，媒體名（如「地球黃金線」）與停用詞雜訊會混進來 →
     # 比照關鍵字管道過濾：丟掉名稱屬媒體名/停用詞，或被媒體名包含（碎片，如「黃金」）的實體。
     _tf = get_term_filters()
