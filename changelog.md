@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-19 修正：URL 碎片污染關鍵字（https/ptt/cc…）+ 建議引擎英文白名單過寬（未部署）
+循環扇分析報告 TF-IDF 出現 https/ptt/cc/bbs 等無法濾掉的雜訊。根因二：
+- **URL 沒清就斷詞**：一條 `https://www.ptt.cc/bbs/...html` 被 jieba 切成 https/www/ptt/cc/bbs/html… 一堆垃圾 token。修：`_text_for_keywords` 斷詞前 `re.sub(https?://\S+|www\.\S+)` 清 URL（全來源）。
+- **內建停用詞補 URL/平台碎片**（地板）：http/https/www/com/net/org/html/htm/ptt/bbs/php，擋裸詞提及。
+- **建議引擎（全庫學習）抓不到英文垃圾**：`_BRAND_POS` 含 'eng' → 所有英文 token（含 http/https/ptt 與品牌 Vornado/IRIS）一律白名單排除。改：移除 'eng'，真品牌改靠既有 Cloud NL salience 白名單保護（高 salience 實體），讓非實體的英文垃圾能被建議。
+- 保留：`dc`(DC馬達=規格)、iris/vornado/acerpure(品牌) 不誤濾。
+- 驗證：PTT 樣本斷詞後無 https/www/ptt/cc/bbs/html、保留 dc/循環/馬達；py_compile 通過。僅 analysis-pipeline，未部署。
+
 ## 2026-06-19 改善：內容來源區介面（流程說明＋關鍵字推薦收合＋上傳資料支援檔案/文字）（未部署）
 依使用者要求調整「內容來源」UX；一般人用 doc/txt 不用 JSON。
 - **流程說明**：專案頁最上方加說明卡「① 內容來源 → ② 資料集 → ③ 分析 → ④ 報告」，一進來就懂。

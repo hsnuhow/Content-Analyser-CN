@@ -88,6 +88,9 @@ _STOPWORDS = frozenset([
     '目前', '透過', '擁有', '採用', '具備', '包括', '以及', '不僅',
     '甚至', '例如', '這款', '這個', '那個', '還有', '等等', '其中',
     '同時', '此外', '全新', '更加', '非常', '十分', '相當', '一款',
+    # URL / 平台碎片（URL 被斷詞切碎的殘渣；雖已在 _text_for_keywords 清 URL，
+    #   這裡作地板，連「在 ptt 上」這種裸詞提及也擋。dc=DC馬達/cc視情況保留語意者不列）。
+    'http', 'https', 'www', 'com', 'net', 'org', 'html', 'htm', 'ptt', 'bbs', 'php',
     # 媒體名碎片（整塊複合詞，配合上方 add_word）
     *(_MEDIA_NAMES),
 ])
@@ -208,8 +211,11 @@ def _strip_terms(text: str, terms) -> str:
     return text
 
 
-# 詞性白名單/填充判定（F2 建議用）。BRAND=專名/英文/數字 → 保護；FILLER=副詞/語助等 → 建議。
-_BRAND_POS = frozenset({'eng', 'nr', 'ns', 'nt', 'nz', 'm', 'mq'})
+# 詞性白名單/填充判定（F2 建議用）。BRAND=專名/數字 → 保護；FILLER=副詞/語助等 → 建議。
+# 不含 'eng'：英文 token 同時有品牌(Vornado/IRIS)與垃圾(http/https/ptt/cc)，一律保護會讓
+# URL/平台垃圾永遠抓不到。改靠 Cloud NL salience 白名單保護真品牌（高 salience 實體），
+# 讓非實體的英文垃圾能被建議出來。
+_BRAND_POS = frozenset({'nr', 'ns', 'nt', 'nz', 'm', 'mq'})
 _FILLER_POS = frozenset({'d', 'u', 'y', 'c', 'r', 'p', 'o', 'e', 'f'})
 
 
@@ -343,11 +349,16 @@ def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str,
             'n_protected_entities': len(salient)}
 
 
+_URL_RE = re.compile(r'https?://\S+|www\.\S+', re.IGNORECASE)
+
+
 def _text_for_keywords(content: Dict) -> str:
-    """組關鍵字/關聯用的文本：title + body；依該篇來源類型套用對應 scope 的過濾詞。
-    （全部 scope 的詞於 _tokenize 統一過濾；此處只處理「特定來源才算垃圾」的詞。
+    """組關鍵字/關聯用的文本：title + body；先清掉 URL，再依來源 scope 套用過濾詞。
+    （URL 不清會被 jieba 切成 https/www/ptt/cc/bbs/html… 一堆垃圾 token 污染關鍵字。
+    全部 scope 的詞於 _tokenize 統一過濾；此處處理 URL + 特定來源垃圾詞。
     embedding 用原始文本、不經此處理，故快取 key 不受影響。）"""
     t = f"{content.get('title', '')} {content.get('text') or content.get('content') or ''}"
+    t = _URL_RE.sub(' ', t)   # 斷詞前清 URL（治本：URL 碎片不進關鍵字）
     scoped = get_term_filters()["by_source"].get(_source_type(content.get('url', '')))
     if scoped:
         t = _strip_terms(t, scoped)
