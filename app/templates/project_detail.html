@@ -45,19 +45,73 @@
               <input id="discQ" class="form-control" placeholder="例如：循環扇　或　循環扇 美型">
             </div>
             <div class="col-md-4">
-              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦清單</button>
+              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦筆記</button>
             </div>
           </div>
           <div id="discLog" class="small text-muted mt-2"></div>
-          <div id="discResult" class="mt-2 d-none">
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <span class="small fw-semibold">勾選要爬的內容：</span>
-              <button class="btn btn-sm btn-success" type="button" onclick="discToDraft()">↓ 帶入下方清單（勾選的）</button>
-            </div>
-            <div id="discRows" class="border rounded p-2" style="max-height:300px;overflow:auto"></div>
-          </div>
+          <div class="small text-muted mt-1">產生後會存成下方「推薦筆記」，可隨時回來勾選 → 建新草稿或併入現有草稿。</div>
         </div>
       </div>
+
+      {# 推薦筆記（持久化的 ⓪ 結果，可勾選 → 建/併草稿）#}
+      {% if discoveries %}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header fw-semibold">🗒 推薦筆記（{{ discoveries|length }}）</div>
+        <div class="list-group list-group-flush">
+          {% for dc in discoveries %}
+          <div class="list-group-item">
+            <form method="POST" action="{{ url_for('project_bp.discovery_to_draft', pid=pid, did=dc.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="fw-semibold">🔍 {{ dc.query }} <span class="text-muted small">（{{ dc.count }} 條）</span></span>
+                <button type="submit" formaction="{{ url_for('project_bp.delete_discovery', pid=pid, did=dc.id) }}"
+                        class="btn btn-sm btn-outline-danger"
+                        onclick="return confirm('刪除這則推薦筆記？')">🗑</button>
+              </div>
+              <div class="border rounded p-2 mb-2" style="max-height:260px;overflow:auto">
+                {% for c in dc.candidates %}
+                <div class="form-check small">
+                  <input class="form-check-input" type="checkbox" name="urls" value="{{ c.url }}"
+                         id="d{{ dc.id }}_{{ loop.index }}" {% if not c.flag %}checked{% endif %}>
+                  <label class="form-check-label" for="d{{ dc.id }}_{{ loop.index }}">
+                    <span class="badge bg-{% if c.source_type=='媒體' %}primary{% elif c.source_type=='影音' %}danger{% elif c.source_type=='論壇' %}secondary{% elif c.source_type=='電商' %}warning text-dark{% else %}info{% endif %}">{{ c.source_type }}</span>
+                    <span class="text-muted">{{ c.domain }}</span>
+                    {% if c.flag %}<span class="badge bg-light text-muted">{{ c.flag }}</span>{% endif %}
+                    <span class="text-muted" style="font-size:.8em">— {{ (c.title or c.url)[:60] }}</span>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+              <div class="row g-2 align-items-end">
+                <div class="col-md-5">
+                  <label class="form-label small mb-0">建立新草稿（名稱）</label>
+                  <input type="text" name="name" class="form-control form-control-sm"
+                         value="{{ dc.query }} 推薦" placeholder="新草稿名稱">
+                </div>
+                <div class="col-md-3">
+                  <button type="submit" name="mode" value="new" class="btn btn-sm btn-success w-100">建立新草稿</button>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small mb-0">或併入現有草稿</label>
+                  <div class="input-group input-group-sm">
+                    <select name="existing_did" class="form-select">
+                      {% for d in draft_datasets %}
+                      <option value="{{ d.id }}">{{ d.name }}</option>
+                      {% else %}
+                      <option disabled>（無草稿）</option>
+                      {% endfor %}
+                    </select>
+                    <button type="submit" name="mode" value="append" class="btn btn-outline-success"
+                            {% if not draft_datasets %}disabled{% endif %}>併入</button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
 
       {# 步驟一：爬取資料集（Owner/Editor） #}
       <div class="card shadow-sm mb-4">
@@ -513,43 +567,18 @@
 </div>
 
 <script>
-function escH(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function runDiscover(){
   var q=document.getElementById('discQ').value.trim();
   if(!q){ document.getElementById('discLog').textContent='請先輸入關鍵字。'; return; }
   var btn=document.getElementById('discBtn'); btn.disabled=true;
-  document.getElementById('discResult').classList.add('d-none');
-  document.getElementById('discLog').textContent='搜尋情報分析中…（grounding + 解析，可能需數十秒）';
-  fetch("{{ url_for('project_bp.discover_urls', pid=pid) }}?q="+encodeURIComponent(q))
+  document.getElementById('discLog').textContent='搜尋情報分析中…（grounding + 解析，可能需數十秒，請稍候）';
+  var fd=new FormData(); fd.append('q', q); fd.append('csrf_token', '{{ csrf_token() }}');
+  fetch("{{ url_for('project_bp.discover_urls', pid=pid) }}", {method:'POST', body:fd})
     .then(r=>r.json()).then(d=>{
-      btn.disabled=false;
-      if(d.error){ document.getElementById('discLog').textContent='錯誤：'+d.error; return; }
-      var cs=d.candidates||[];
-      if(!cs.length){ document.getElementById('discLog').textContent='沒有找到結果。'; return; }
-      document.getElementById('discLog').textContent='找到 '+cs.length+' 條（來源：'+JSON.stringify(d.by_source||{})+'）。已預設勾選文章頁。';
-      var badge={'媒體':'primary','社群':'info','論壇':'secondary','影音':'danger','電商':'warning'};
-      document.getElementById('discRows').innerHTML=cs.map(c=>{
-        var checked = c.flag ? '' : 'checked';   // 列表頁/首頁預設不勾
-        var fl = c.flag ? ' <span class="badge bg-light text-muted">'+escH(c.flag)+'</span>' : '';
-        return '<div class="form-check small">'
-          +'<input class="form-check-input disc-pick" type="checkbox" value="'+escH(c.url)+'" '+checked+'>'
-          +'<label class="form-check-label">'
-          +'<span class="badge bg-'+(badge[c.source_type]||'secondary')+'">'+escH(c.source_type)+'</span> '
-          +'<span class="text-muted">'+escH(c.domain)+'</span>'+fl+'<br>'
-          +'<span class="text-muted" style="font-size:.8em">'+escH((c.title||c.url).slice(0,80))+'</span>'
-          +'</label></div>';
-      }).join('');
-      document.getElementById('discResult').classList.remove('d-none');
+      if(d.error){ btn.disabled=false; document.getElementById('discLog').textContent='錯誤：'+d.error; return; }
+      document.getElementById('discLog').textContent='已產生推薦筆記（'+(d.count||0)+' 條），重新整理中…';
+      location.reload();
     }).catch(e=>{ btn.disabled=false; document.getElementById('discLog').textContent='請求失敗：'+e; });
-}
-function discToDraft(){
-  var urls=Array.from(document.querySelectorAll('.disc-pick:checked')).map(c=>c.value);
-  if(!urls.length){ alert('請至少勾選一條。'); return; }
-  var ta=document.querySelector('form[action$="/datasets"] textarea[name="urls"]');
-  var nm=document.querySelector('form[action$="/datasets"] input[name="name"]');
-  if(ta){ ta.value=urls.join('\n'); }
-  if(nm && !nm.value){ nm.value=document.getElementById('discQ').value.trim()+' 自動推薦'; }
-  if(ta){ ta.scrollIntoView({behavior:'smooth',block:'center'}); ta.focus(); }
 }
 </script>
 {% endblock %}

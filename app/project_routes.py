@@ -285,9 +285,23 @@ def project_detail(pid, project, role):
         for ds in datasets
     ]
 
+    # 載入「推薦筆記」（持久化的 ⓪ 內容發現結果）
+    try:
+        disc_docs = (db.collection('projects').document(pid)
+                     .collection('discoveries')
+                     .order_by('created_at', direction=firestore.Query.DESCENDING)
+                     .limit(20).stream())
+        discoveries = [d.to_dict() | {'id': d.id} for d in disc_docs]
+    except Exception:
+        discoveries = []
+    # 草稿清單（供「加入現有草稿」下拉）
+    draft_datasets = [{'id': ds['id'], 'name': ds.get('name', '')}
+                      for ds in datasets if ds.get('status') == 'draft']
+
     return render_template('project_detail.html',
                            project=project, pid=pid,
                            analyses=analyses, datasets=datasets, role=role,
+                           discoveries=discoveries, draft_datasets=draft_datasets,
                            is_admin=is_admin())
 
 
@@ -1059,18 +1073,81 @@ def delete_analysis(pid, aid, project, role):
 # Firestore: projects/{pid}/datasets/{did}
 # ──────────────────────────────────────────────────────────────────────
 
-@bp.route('/<pid>/discover')
+@bp.route('/<pid>/discover', methods=['POST'])
 @project_access_required(min_role='editor')
 def discover_urls(pid, project, role):
     """搜尋情報·內容發現（爬蟲前置）：關鍵字 → 推薦爬取 URL 清單（呼叫 search-extent）。
-    回 JSON 候選清單供前端勾選；勾選後沿用 create_dataset 建草稿。"""
-    q = (request.args.get('q') or '').strip()
+    結果**持久化**為「推薦筆記」（discoveries 子集合），供之後回來勾選建/併草稿。
+    回 {ok, discovery_id} 供前端 reload 顯示。"""
+    q = (request.form.get('q') or request.args.get('q') or '').strip()
     if not q:
         return jsonify({'error': '缺少關鍵字'}), 400
     from .search_extent_client import discover as _discover, is_configured
     if not is_configured():
         return jsonify({'error': '搜尋情報服務尚未接上（SEARCH_EXTENT 未設定）。'}), 503
-    return jsonify(_discover(q, max_results=50))
+    res = _discover(q, max_results=50)
+    if res.get('error'):
+        return jsonify(res), 502
+    cands = res.get('candidates') or []
+    if not cands:
+        return jsonify({'error': f'「{q}」沒有找到推薦結果。'}), 200
+    ref = (db.collection('projects').document(pid)
+           .collection('discoveries').document())
+    ref.set({
+        'id': ref.id, 'query': q, 'candidates': cands,
+        'count': len(cands), 'by_source': res.get('by_source', {}),
+        'created_by': current_user_email(),
+        'created_at': firestore.SERVER_TIMESTAMP,
+    })
+    return jsonify({'ok': True, 'discovery_id': ref.id, 'count': len(cands)})
+
+
+@bp.route('/<pid>/discoveries/<did>/delete', methods=['POST'])
+@project_access_required(min_role='editor')
+def delete_discovery(pid, did, project, role):
+    """刪除一則推薦筆記。"""
+    try:
+        (db.collection('projects').document(pid)
+         .collection('discoveries').document(did).delete())
+        flash('已刪除推薦筆記。', 'success')
+    except Exception as e:
+        flash(f'刪除失敗：{e}', 'danger')
+    return redirect(url_for('project_bp.project_detail', pid=pid))
+
+
+@bp.route('/<pid>/discoveries/<did>/to-draft', methods=['POST'])
+@project_access_required(min_role='editor')
+def discovery_to_draft(pid, did, project, role):
+    """把推薦筆記勾選的 URL → 建立新草稿 或 併入現有草稿。"""
+    urls = [u.strip() for u in request.form.getlist('urls') if u.strip()]
+    urls = list(dict.fromkeys(urls))  # 去重保序
+    if not urls:
+        flash('請至少勾選一個結果。', 'warning')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    mode = request.form.get('mode', 'new')        # 'new' 建新草稿 / 'append' 併入現有
+    if mode == 'new':
+        name = (request.form.get('name') or '').strip() or '推薦清單'
+        ds_ref = (db.collection('projects').document(pid)
+                  .collection('datasets').document())
+        ds_ref.set({
+            'id': ds_ref.id, 'name': name, 'source_urls': urls,
+            'crawl_job_id': None, 'status': 'draft', 'use_gemini': False,
+            'progress': 0, 'log': '由推薦筆記建立的草稿清單。',
+            'item_count': len(urls), 'created_by': current_user_email(),
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'updated_at': firestore.SERVER_TIMESTAMP,
+        })
+        _save_dataset_items(pid, ds_ref.id, [{'url': u, 'status': 'pending'} for u in urls])
+        flash(f'已建立草稿「{name}」（{len(urls)} 個網址）。', 'success')
+        return redirect(url_for('project_bp.dataset_detail', pid=pid, did=ds_ref.id))
+    # 併入現有草稿
+    existing_did = request.form.get('existing_did', '')
+    added = _append_urls_to_draft(pid, existing_did, urls)
+    if added is None:
+        flash('目標草稿不存在或已非草稿狀態。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    flash(f'已加入現有草稿（新增 {added} 個、去重略過 {len(urls) - added} 個）。', 'success')
+    return redirect(url_for('project_bp.dataset_detail', pid=pid, did=existing_did))
 
 
 @bp.route('/<pid>/datasets', methods=['POST'])
@@ -1336,6 +1413,31 @@ def _delete_dataset_items(pid: str, did: str) -> None:
             d.reference.delete()
     except Exception:
         pass
+
+
+def _append_urls_to_draft(pid: str, did: str, urls: list):
+    """把 urls 併入現有『草稿』資料集（去重、append pending items、更新 source_urls/計數）。
+    回新增筆數；目標不存在或非草稿回 None。"""
+    ds_ref = (db.collection('projects').document(pid)
+              .collection('datasets').document(did))
+    doc = ds_ref.get()
+    if not doc.exists:
+        return None
+    data = doc.to_dict() or {}
+    if data.get('status') != 'draft':
+        return None
+    existing = _load_dataset_items(pid, did)
+    have = {it.get('url_key') or _url_key(it.get('url', '')) for it in existing}
+    fresh = [u for u in urls if _url_key(u) not in have]
+    fresh = list(dict.fromkeys(fresh))
+    if fresh:
+        _save_dataset_items(pid, did, [{'url': u, 'status': 'pending'} for u in fresh],
+                            append=True)
+        merged_urls = list(dict.fromkeys((data.get('source_urls') or []) + fresh))
+        ds_ref.update({'source_urls': merged_urls,
+                       'item_count': len(merged_urls),
+                       'updated_at': firestore.SERVER_TIMESTAMP})
+    return len(fresh)
 
 
 def _replace_items_by_url(pid: str, did: str, urls_set: set, new_items: list) -> None:
