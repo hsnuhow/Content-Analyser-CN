@@ -47,30 +47,3 @@ def discover(query: str, max_results: int = 50, timeout: int = 180) -> dict:
         print(f"[search_extent] discover EXC base={base} type={type(e).__name__} e={e!r}", flush=True)
         traceback.print_exc()
         return {"error": f"無法連線至搜尋情報服務：{type(e).__name__}: {e}"}
-
-
-def diag() -> dict:
-    """臨時診斷：從本服務環境實打 search-extent，回原始結果/例外（含 /health 與一次小 discover）。"""
-    import traceback
-    out = {"base": _base_url(), "key_set": bool(os.environ.get("SEARCH_EXTENT_API_KEY"))}
-    base = _base_url()
-    if not base:
-        out["error"] = "SEARCH_EXTENT_SERVICE_URL 未設定"
-        return out
-    # 1) /health（無金鑰）
-    try:
-        h = requests.get(f"{base}/health", timeout=20)
-        out["health_status"] = h.status_code
-        out["health_body"] = h.text[:200]
-    except Exception as e:
-        out["health_exc"] = f"{type(e).__name__}: {e}"
-    # 2) /api/discover（帶金鑰，小查詢）
-    try:
-        r = requests.post(f"{base}/api/discover", json={"query": "循環扇", "max": 3},
-                          headers=_headers(), timeout=180)
-        out["discover_status"] = r.status_code
-        out["discover_body"] = r.text[:400]
-    except Exception as e:
-        out["discover_exc"] = f"{type(e).__name__}: {e}"
-        out["discover_tb"] = traceback.format_exc()[-600:]
-    return out
