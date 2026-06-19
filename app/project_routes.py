@@ -1233,6 +1233,28 @@ def start_crawl(pid, did, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
+def _extract_doc_text(filename: str, blob: bytes):
+    """上傳檔 → 純文字。支援 .txt/.md/.docx；.doc 不支援。回 (text, error)。"""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if ext in ('txt', 'md', 'markdown', 'text', ''):
+        return blob.decode('utf-8', 'ignore'), None
+    if ext == 'docx':
+        try:
+            import io
+            from docx import Document
+            doc = Document(io.BytesIO(blob))
+            parts = [p.text for p in doc.paragraphs]
+            for tbl in doc.tables:               # 表格文字也納入
+                for row in tbl.rows:
+                    parts.append(' '.join(c.text for c in row.cells))
+            return '\n'.join(parts), None
+        except Exception as e:
+            return None, f'.docx 解析失敗（{filename}）：{e}'
+    if ext == 'doc':
+        return None, f'「{filename}」是舊版 .doc，請在 Word 另存為 .docx 或 .txt 再上傳。'
+    return None, f'不支援的檔案型別「{filename}」（支援 .txt / .md / .docx）。'
+
+
 @bp.route('/<pid>/datasets/manual', methods=['POST'])
 @project_access_required(min_role='editor')
 def create_manual_dataset(pid, project, role):
@@ -1243,75 +1265,89 @@ def create_manual_dataset(pid, project, role):
     直接建立 status=completed 的資料集，items 與爬蟲結果同 schema，可照常一鍵分析。
     """
     name = request.form.get('name', '').strip()
-    raw = request.form.get('items_json', '').strip()
-    # 上傳檔優先（限大小，避免大檔讀進記憶體 OOM）
-    up = request.files.get('file')
-    if up and up.filename:
-        try:
-            _MAX_UPLOAD = 3 * 1024 * 1024  # 3MB
-            blob = up.read(_MAX_UPLOAD + 1)
-            if len(blob) > _MAX_UPLOAD:
-                flash('上傳檔過大（上限 3MB），請拆分後再匯入。', 'danger')
-                return redirect(url_for('project_bp.project_detail', pid=pid))
-            raw = blob.decode('utf-8', 'ignore').strip()
-        except Exception:
-            flash('上傳檔讀取失敗，請確認為 UTF-8 JSON。', 'danger')
-            return redirect(url_for('project_bp.project_detail', pid=pid))
-
     if not name:
         flash('請填寫資料集名稱。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
-    if not raw:
-        flash('請貼上 JSON 或上傳檔案。', 'danger')
-        return redirect(url_for('project_bp.project_detail', pid=pid))
 
-    # 早期長度防護（在 json.loads 前）：擋超大貼上內容耗記憶體；給明確訊息而非 413。
-    # 全域另有 MAX_CONTENT_LENGTH=16MB 作為 body 硬上限（見 app/__init__.py）。
-    _MAX_ITEMS_JSON = 12 * 1024 * 1024  # 12MB 文字
-    if len(raw) > _MAX_ITEMS_JSON:
-        flash('貼上內容過大（上限約 12MB），請拆分後再匯入。', 'danger')
-        return redirect(url_for('project_bp.project_detail', pid=pid))
-
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, list) or not data:
-            raise ValueError('內容必須是非空 JSON 陣列')
-        if len(data) > 1000:
-            raise ValueError('每個資料集最多 1000 筆')
-    except Exception as e:
-        flash(f'JSON 解析失敗：{e}', 'danger')
-        return redirect(url_for('project_bp.project_detail', pid=pid))
-
+    _MAX_FILE = 3 * 1024 * 1024          # 單檔 3MB
     items = []
-    seen_keys = set()   # 資料集內去重：同一 URL 只保留一筆（正規化判同）
+    seen_keys = set()                    # 資料集內 URL 去重
     skipped_dup = 0
-    for i, it in enumerate(data):
-        if not isinstance(it, dict):
-            flash(f'第 {i+1} 筆不是物件。', 'danger')
-            return redirect(url_for('project_bp.project_detail', pid=pid))
-        text = str(it.get('text') or it.get('content') or '').strip()
-        title = str(it.get('title') or '').strip() or f'項目 {i+1}'
-        url = str(it.get('url') or '').strip()
+
+    def _add(title, text, url=''):
+        nonlocal skipped_dup
+        text = (text or '').strip()
         if not text:
-            continue  # 跳過無內文的項目
-        # 去重：有 url 才比對（無 url 的純文字項保留全部）
+            return
         key = _url_key(url)
         if key:
             if key in seen_keys:
                 skipped_dup += 1
-                continue
+                return
             seen_keys.add(key)
         text = text[:50000]
-        items.append({
-            'url': url,
-            'title': title,
-            'content': text,
-            'length': len(text),
-            'status': 'success',
-            'source': 'manual',
-        })
+        items.append({'url': url, 'title': (title or '未命名').strip()[:200] or '未命名',
+                      'content': text, 'length': len(text),
+                      'status': 'success', 'source': 'manual'})
+
+    docs = [f for f in request.files.getlist('docs') if f and f.filename]
+    paste_text = request.form.get('paste_text', '').strip()
+    raw_json = request.form.get('items_json', '').strip()
+    json_file = request.files.get('file')
+
+    if docs:
+        # 模式一：上傳檔案（txt/md/docx），每檔一筆（標題＝檔名）
+        for f in docs:
+            blob = f.read(_MAX_FILE + 1)
+            if len(blob) > _MAX_FILE:
+                flash(f'檔案「{f.filename}」過大（單檔上限 3MB）。', 'danger')
+                return redirect(url_for('project_bp.project_detail', pid=pid))
+            txt, err = _extract_doc_text(f.filename, blob)
+            if err:
+                flash(err, 'danger')
+                return redirect(url_for('project_bp.project_detail', pid=pid))
+            base = f.filename.rsplit('.', 1)[0]
+            _add(base, txt, url='')
+    elif paste_text:
+        # 模式二：貼上文字 → 一筆（標題用「貼上標題」或資料集名）
+        _add(request.form.get('paste_title', '').strip() or name, paste_text, url='')
+    else:
+        # 模式三：進階 JSON（貼上 items_json 或上傳 JSON 檔）
+        raw = raw_json
+        if json_file and json_file.filename:
+            blob = json_file.read(12 * 1024 * 1024 + 1)
+            if len(blob) > 12 * 1024 * 1024:
+                flash('上傳 JSON 檔過大（上限 12MB）。', 'danger')
+                return redirect(url_for('project_bp.project_detail', pid=pid))
+            raw = blob.decode('utf-8', 'ignore').strip()
+        if not raw:
+            flash('請選擇：上傳檔案、貼上文字、或進階 JSON。', 'danger')
+            return redirect(url_for('project_bp.project_detail', pid=pid))
+        if len(raw) > 12 * 1024 * 1024:
+            flash('貼上內容過大（上限約 12MB），請拆分後再匯入。', 'danger')
+            return redirect(url_for('project_bp.project_detail', pid=pid))
+        try:
+            data = json.loads(raw)
+            if not isinstance(data, list) or not data:
+                raise ValueError('內容必須是非空 JSON 陣列')
+            if len(data) > 1000:
+                raise ValueError('每個資料集最多 1000 筆')
+        except Exception as e:
+            flash(f'JSON 解析失敗：{e}', 'danger')
+            return redirect(url_for('project_bp.project_detail', pid=pid))
+        for i, it in enumerate(data):
+            if not isinstance(it, dict):
+                flash(f'第 {i+1} 筆不是物件。', 'danger')
+                return redirect(url_for('project_bp.project_detail', pid=pid))
+            _add(str(it.get('title') or '').strip() or f'項目 {i+1}',
+                 str(it.get('text') or it.get('content') or ''),
+                 str(it.get('url') or '').strip())
+
     if not items:
-        flash('沒有可用項目（每筆需有 text/content）。', 'danger')
+        flash('沒有可用內容（檔案／文字為空，或每筆 JSON 需有 text）。', 'danger')
+        return redirect(url_for('project_bp.project_detail', pid=pid))
+    if len(items) > 1000:
+        flash('每個資料集最多 1000 筆，請拆分後再匯入。', 'danger')
         return redirect(url_for('project_bp.project_detail', pid=pid))
 
     # items 改存子集合（無 1MB 上限），dataset 文件只放 metadata。

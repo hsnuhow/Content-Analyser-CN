@@ -30,15 +30,43 @@
     <div class="col-lg-8">
 
       {# 步驟〇：關鍵字自動推薦（搜尋情報·內容發現，爬蟲前置；Owner/Editor） #}
+      {# 流程說明（所有人可見，一進來就懂怎麼用）#}
+      <div class="card shadow-sm mb-4 bg-light">
+        <div class="card-body py-3">
+          <div class="fw-semibold mb-2">這個專案怎麼用？四個步驟：</div>
+          <div class="d-flex flex-wrap align-items-center gap-2 small">
+            <span class="badge bg-primary">① 內容來源</span>
+            <span class="text-muted">把要分析的內容弄進來</span>
+            <span class="text-muted">→</span>
+            <span class="badge bg-primary">② 資料集</span>
+            <span class="text-muted">可分析的內容單位（草稿→爬取→完成）</span>
+            <span class="text-muted">→</span>
+            <span class="badge bg-primary">③ 分析</span>
+            <span class="text-muted">勾選資料集送出分析</span>
+            <span class="text-muted">→</span>
+            <span class="badge bg-primary">④ 報告</span>
+            <span class="text-muted">產出洞察報告</span>
+          </div>
+        </div>
+      </div>
+
       {% if role in ('owner', 'editor') %}
       {# ───── 區 ① 內容來源（三種入口；產物都是「資料集」）───── #}
       <h5 class="fw-bold mb-1">① 內容來源</h5>
-      <div class="text-muted small mb-3">先把要分析的內容弄進專案（三選一）。產物都會成為下方的<strong>資料集</strong>。</div>
+      <div class="text-muted small mb-3">
+        把要分析的內容弄進專案，<strong>三種方式擇一</strong>：
+        🔍 <strong>關鍵字推薦</strong>（系統找代表性內容）／
+        📋 <strong>貼上網址</strong>（自己有連結）／
+        📥 <strong>上傳資料</strong>（已蒐集的檔案或文字）。產物都會成為下方的<strong>資料集</strong>。
+      </div>
 
       <div class="card shadow-sm mb-3 border-info">
         <div class="card-header fw-semibold bg-info-subtle">
-          🔍 關鍵字推薦（選用）
+          <a class="text-decoration-none text-dark d-block" data-bs-toggle="collapse" href="#kwRecommend">
+            ▸ 🔍 關鍵字推薦（選用，點此展開）
+          </a>
         </div>
+        <div class="collapse" id="kwRecommend">
         <div class="card-body">
           <p class="small text-muted mb-2">
             輸入主題關鍵字，系統用 Google 搜尋情報找出該主題台灣現正排名的代表性內容
@@ -55,9 +83,10 @@
           <div id="discLog" class="small text-muted mt-2"></div>
           <div class="small text-muted mt-1">產生後會存成下方「推薦清單」，可隨時回來勾選 → 建立草稿資料集或併入現有草稿。</div>
         </div>
+        </div>{# /collapse kwRecommend #}
       </div>
 
-      {# 推薦筆記（持久化的 ⓪ 結果，可勾選 → 建/併草稿）#}
+      {# 推薦清單（持久化的 ⓪ 結果，可勾選 → 建/併草稿）#}
       {% if discoveries %}
       <div class="card shadow-sm mb-4">
         <div class="card-header fw-semibold">🗒 推薦清單（{{ discoveries|length }}）</div>
@@ -145,36 +174,50 @@
         </div>
       </div>
 
-      {# 內容來源 3：手動／上傳匯入（Cowork 蒐集）→ 直接完成資料集 #}
+      {# 內容來源 3：上傳資料（已蒐集的檔案或文字）→ 直接完成資料集 #}
       <div class="card shadow-sm mb-4">
-        <div class="card-header">
-          <a class="text-decoration-none text-dark" data-bs-toggle="collapse" href="#manualImport">
-            ▸ 📥 手動匯入（Claude Cowork / 外部蒐集）
-          </a>
-        </div>
-        <div class="collapse" id="manualImport">
-          <div class="card-body">
-            <p class="text-muted small mb-3">
-              貼上或上傳 JSON 陣列，每筆 <code>{"url","title","text"}</code>，直接建立<strong>完成</strong>狀態的資料集（不經爬蟲），可照常分析。
-              適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。
-            </p>
-            <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
-                  enctype="multipart/form-data">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <div class="mb-2">
-                <input type="text" name="name" class="form-control" placeholder="資料集名稱" required>
-              </div>
-              <div class="mb-2">
-                <textarea name="items_json" class="form-control font-monospace" rows="5"
+        <div class="card-header fw-semibold">📥 上傳資料（已蒐集的檔案或文字）</div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            把你已經蒐集好的內容直接匯入（不經爬蟲，建立後即<strong>完成</strong>可分析）。
+            適合用 Claude Cowork 真實瀏覽器蒐集的 Dcard 等內容。<strong>三種方式擇一</strong>，下方填一個即可。
+          </p>
+          <form method="POST" action="{{ url_for('project_bp.create_manual_dataset', pid=pid) }}"
+                enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="mb-3">
+              <label class="form-label fw-semibold">資料集名稱</label>
+              <input type="text" name="name" class="form-control" placeholder="例如：循環扇 Dcard 討論" required>
+            </div>
+
+            {# 方式 A：上傳檔案 #}
+            <div class="border rounded p-2 mb-2">
+              <label class="form-label fw-semibold mb-1">方式 A — 上傳檔案</label>
+              <div class="small text-muted mb-1">支援 <code>.txt</code> / <code>.md</code> / <code>.docx</code>，可一次多檔；<strong>每個檔＝一篇內容</strong>（標題＝檔名）。舊版 .doc 請先另存為 .docx。</div>
+              <input type="file" name="docs" multiple accept=".txt,.md,.docx" class="form-control form-control-sm">
+            </div>
+
+            {# 方式 B：貼上文字 #}
+            <div class="border rounded p-2 mb-2">
+              <label class="form-label fw-semibold mb-1">方式 B — 貼上文字（一篇）</label>
+              <input type="text" name="paste_title" class="form-control form-control-sm mb-2" placeholder="這篇的標題（可留空，預設用資料集名稱）">
+              <textarea name="paste_text" class="form-control" rows="5" placeholder="把整篇文章內容貼這裡…"></textarea>
+            </div>
+
+            {# 方式 C：進階 JSON #}
+            <div class="mb-2">
+              <a class="small text-decoration-none" data-bs-toggle="collapse" href="#jsonImport">▸ 方式 C — 進階：JSON 匯入（給工程流程）</a>
+              <div class="collapse mt-2" id="jsonImport">
+                <textarea name="items_json" class="form-control font-monospace mb-2" rows="4"
                           placeholder='[{"url":"https://...","title":"標題","text":"內文..."}]'></textarea>
-              </div>
-              <div class="mb-2">
-                <label class="form-label small text-muted mb-1">或上傳 JSON 檔（擇一）</label>
                 <input type="file" name="file" accept=".json,application/json" class="form-control form-control-sm">
+                <div class="small text-muted mt-1">每筆 <code>{"url","title","text"}</code>，貼上或上傳 .json 檔。</div>
               </div>
-              <button type="submit" class="btn btn-outline-primary btn-sm">匯入資料集</button>
-            </form>
-          </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary">建立資料集</button>
+            <div class="form-text">同時填多個方式時，優先序：上傳檔案 ＞ 貼上文字 ＞ JSON。</div>
+          </form>
         </div>
       </div>
 

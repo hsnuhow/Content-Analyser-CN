@@ -11,4 +11,5 @@ Flask-WTF==1.2.1
 firebase-admin==6.5.0
 google-cloud-secret-manager==2.19.0
 pypdf==4.3.1
-# 移除：beautifulsoup4、lxml（主程式不解析 HTML）、python-docx（輸出改為 Markdown）
+python-docx==1.1.2
+# 移除：beautifulsoup4、lxml（主程式不解析 HTML）。python-docx 為「上傳資料」解析 .docx 用。
