@@ -1456,6 +1456,11 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
         update['status'] = 'completed'
         update['item_count'] = len(items)
         update['succeeded'] = sum(1 for it in items if it.get('status') == 'success')
+        # 完成時「權威重寫」被 SSRF 擋下的名單：依最新 job 結果（沒有就歸零）。
+        # 被擋的 URL 一律是非成功項、必落在 failed/all 重爬範圍，故最新 job 的 n_blocked 即現況；
+        # 不重寫的話舊的封鎖橫幅永遠掛著、無法關閉（即使該 URL 已修好重爬成功）。
+        update['blocked'] = job.get('blocked', []) or []
+        update['n_blocked'] = job.get('n_blocked', 0) or 0
         if recrawl_urls:
             update['recrawl_urls'] = firestore.DELETE_FIELD
         if dataset.get('auto_round'):
@@ -1630,6 +1635,10 @@ def recrawl_dataset(pid, did, project, role):
         'progress': 0,
         'log': f'重新爬取 {len(target_urls)} 項（{mode}）...',
         'updated_at': firestore.SERVER_TIMESTAMP,
+        # 啟動重爬即清掉舊的 SSRF 封鎖橫幅（被擋 URL 已納入本次重爬）；
+        # 完成時 _sync_crawling_dataset 會依新 job 結果重寫，若仍被擋會誠實重現。
+        'blocked': firestore.DELETE_FIELD,
+        'n_blocked': firestore.DELETE_FIELD,
     }
     if mode == 'all':
         update['recrawl_urls'] = firestore.DELETE_FIELD  # 完成時整批替換
