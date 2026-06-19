@@ -17,7 +17,9 @@ def _base_url() -> str:
 
 
 def _headers() -> dict:
-    return {"X-API-Key": os.environ.get("SEARCH_EXTENT_API_KEY", ""),
+    # strip()：secret 值可能含尾端換行（建立時用 echo 而非 echo -n）；
+    # header 值含 \n 會被 http.client 擋成 ValueError。一律去空白後送出。
+    return {"X-API-Key": os.environ.get("SEARCH_EXTENT_API_KEY", "").strip(),
             "Content-Type": "application/json"}
 
 

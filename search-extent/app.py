@@ -36,7 +36,9 @@ except Exception as e:
 
 app = Flask(__name__)
 
-SEARCH_EXTENT_API_KEY = os.environ.get("SEARCH_EXTENT_API_KEY")
+# strip()：secret 值可能含尾端換行（建立時用 echo 而非 echo -n）；
+# 與呼叫端送來的（已 strip）key 比對才會一致，否則 hmac 比對失敗回 401。
+SEARCH_EXTENT_API_KEY = (os.environ.get("SEARCH_EXTENT_API_KEY") or "").strip() or None
 if not SEARCH_EXTENT_API_KEY:
     print("[WARNING] SEARCH_EXTENT_API_KEY 未設定，僅 api_keys 白名單可通過驗證。", flush=True)
 
@@ -44,7 +46,7 @@ if not SEARCH_EXTENT_API_KEY:
 def require_api_key(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        provided = request.headers.get("X-API-Key", "")
+        provided = request.headers.get("X-API-Key", "").strip()
         if not is_authorized(provided, SEARCH_EXTENT_API_KEY, "expand", db):
             return jsonify({"status": "failed",
                             "error": "Unauthorized: missing or invalid X-API-Key（需 'expand' 權限）"}), 401
