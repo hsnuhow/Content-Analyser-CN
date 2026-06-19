@@ -46,24 +46,54 @@
         <div class="card-body">
           {% if pending_count > 0 %}
           <p class="text-warning mb-3">⚠️ 有 {{ pending_count }} 位用戶正在等待審核。</p>
+          <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-warning w-100">
+            前往審核 →
+          </a>
           {% else %}
-          <p class="text-muted mb-3">目前沒有待審核的用戶。</p>
+          <p class="text-muted mb-0">目前沒有待審核的用戶。用戶管理在下方<strong>功能選單</strong>。</p>
           {% endif %}
-          <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-outline-primary w-100 mb-2">
-            管理用戶白名單
-          </a>
-          <a href="{{ url_for('admin_bp.admin_api_keys') }}" class="btn btn-outline-primary w-100 mb-2">
-            管理 API 金鑰（Colab / Cowork）
-          </a>
-          <a href="{{ url_for('admin_bp.selector_candidates') }}" class="btn btn-outline-primary w-100 mb-2">
-            🔬 選擇器研究候選（確認升級）
-          </a>
-          <a href="{{ url_for('admin_bp.knowledge_base') }}" class="btn btn-outline-primary w-100 mb-2">
-            📚 知識庫管理（延伸報告專家）
-          </a>
-          <a href="{{ url_for('admin_bp.term_filters') }}" class="btn btn-outline-primary w-100">
-            🧹 字詞過濾清單（垃圾詞）
-          </a>
+        </div>
+      </div>
+    </div>
+
+    {# 功能選單 #}
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-header fw-semibold">功能選單</div>
+        <div class="card-body">
+          <div class="row g-4">
+
+            {# 用戶與存取 #}
+            <div class="col-md-6">
+              <div class="text-muted small text-uppercase fw-semibold mb-2">用戶與存取</div>
+              <a href="{{ url_for('admin_bp.admin_users') }}" class="btn btn-outline-primary w-100 mb-2 text-start">
+                👥 用戶白名單審核
+                <span class="d-block small text-muted">核准 / 拒絕等待中的登入用戶</span>
+              </a>
+              <a href="{{ url_for('admin_bp.admin_api_keys') }}" class="btn btn-outline-primary w-100 text-start">
+                🔑 API 金鑰管理
+                <span class="d-block small text-muted">Colab / Cowork 等外部工具的存取金鑰</span>
+              </a>
+            </div>
+
+            {# 內容分析調校 #}
+            <div class="col-md-6">
+              <div class="text-muted small text-uppercase fw-semibold mb-2">內容分析調校</div>
+              <a href="{{ url_for('admin_bp.term_filters') }}" class="btn btn-outline-primary w-100 mb-2 text-start">
+                🧹 字詞過濾清單（垃圾詞）
+                <span class="d-block small text-muted">依來源管理過濾詞 + 全庫學習建議</span>
+              </a>
+              <a href="{{ url_for('admin_bp.selector_candidates') }}" class="btn btn-outline-primary w-100 mb-2 text-start">
+                🔬 選擇器研究候選
+                <span class="d-block small text-muted">確認 / 升級爬蟲自動學到的內容選擇器</span>
+              </a>
+              <a href="{{ url_for('admin_bp.knowledge_base') }}" class="btn btn-outline-primary w-100 text-start">
+                📚 知識庫管理
+                <span class="d-block small text-muted">延伸行動報告的「專家」與參考文件</span>
+              </a>
+            </div>
+
+          </div>
         </div>
       </div>
     </div>
