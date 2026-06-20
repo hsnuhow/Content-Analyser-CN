@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-20 補強：全系統 code review 後技術債清理 A–D（已部署）
+多代理審查四服務 + 文件後，依序修正並部署（分支 chore/tech-debt-cleanup → main）。
+- **A 安全修正（crawler 00075 / analysis 00052 / search-extent 00007）**：
+  - deploy.sh content-analyser 補 ORIGIN_VERIFY_TOKEN secret + ENFORCE_ORIGIN_TOKEN=1（否則下次部署來源鎖定守衛靜默失效）。
+  - SSRF redirect 繞過（跨 3 服務）：新增 crawler `net_guard.safe_urlopen` 逐跳重驗、analysis image_report / search-extent `_resolve` 同樣逐跳驗 IP，擋 redirect→metadata。
+  - analysis job 加 owner 欄，外部金鑰只能查自己的 job（系統金鑰放行）；Path 1 逾時不再讀 daemon thread 半成品。
+  - crawler 移除 log 印金鑰末 4 碼、og_meta 讀取上限；search-extent ThreadPoolExecutor 部分失敗不中止整批。
+- **B 文件同步**：附錄 D / DEPLOY_CHECKLIST / SECURITY_INCIDENTS / MAINTENANCE 補來源鎖定與 7 把 secret；product_guideline 三→四服務 + search-extent 章節；§9.2「爬蟲不碰 Firestore」矛盾修正。
+- **C 首批自動化測試**（先前零測試）：`tests/`（無需 pytest 可直跑）——SSRF 守衛 15 例 + 定價 7 例，全過。巨檔拆分/JSON 去重屬維護性、零測試線上系統回歸風險>價值，暫緩。
+- **D 加固（search-extent 00008 / content-analyser 00070）**：移除 /profile 明文金鑰殘留（Phase 0，無處使用）、admin_usage/term_filters 加查詢上限、search-extent credential 快取 + angles 封頂。CSP unsafe-inline 移除需動 18 模板，暫緩。
+- **驗證**：四服務 health 全綠；來源鎖定 image-only 部署後仍強制（run.app=403、CF=302、WAF /phpinfo=403）。
+
 ## 2026-06-20 新增：Cloudflare 資安防護 + 來源鎖定（方案 B，已部署）
 為正式網域 insightout.annexix.cc 掛上 Cloudflare 防護，並封住 *.run.app 直打繞過。
 - **content-analyser 來源鎖定守衛**：`app/__init__.py` before_request 驗 `X-Origin-Token`（Cloudflare 注入）。
