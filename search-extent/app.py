@@ -160,6 +160,9 @@ def discover():
     except (TypeError, ValueError):
         max_results = 50
     angles = data.get("angles") if isinstance(data.get("angles"), list) else None
+    # 截斷角度數至合理上限，避免 caller 傳大量 angles 開出過多並行 grounding thread
+    if angles:
+        angles = angles[:8]
     try:
         result = discover_mod.discover(query, max_results=max_results, angles=angles)
     except Exception as e:

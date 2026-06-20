@@ -13,6 +13,7 @@ import json
 import ipaddress
 import socket
 import urllib.request
+import threading
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
@@ -66,14 +67,29 @@ def _flag(u: str) -> str:
     return ''
 
 
+_creds_cache = None
+_creds_lock = threading.Lock()
+
+
 def _access_token():
-    """Cloud Run SA 的 ADC access token（cloud-platform scope）。"""
+    """Cloud Run SA 的 ADC access token（cloud-platform scope）。
+
+    module-level 快取 credential 物件；只有在無快取或 token 失效（not creds.valid）
+    時才 refresh，避免每次請求都打 metadata/token endpoint（吃 Cloudflare 預算）。
+    grounding 多 thread 平行呼叫，故用 lock 保護快取與 refresh。
+    """
+    global _creds_cache
     import google.auth
     import google.auth.transport.requests
-    creds, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    creds.refresh(google.auth.transport.requests.Request())
-    return creds.token
+    with _creds_lock:
+        creds = _creds_cache
+        if creds is None:
+            creds, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            _creds_cache = creds
+        if not creds.valid:
+            creds.refresh(google.auth.transport.requests.Request())
+        return creds.token
 
 
 def is_configured() -> bool:
@@ -206,7 +222,7 @@ def discover(query: str, max_results: int = 50, angles=None) -> dict:
 
     raw = {}  # uri -> title
     usage_total = {"prompt": 0, "output": 0, "total": 0}
-    with ThreadPoolExecutor(max_workers=max(1, len(angles))) as ex:
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(angles)))) as ex:
         ground_results = list(ex.map(_ground_one, angles))
     for chunks, usage in ground_results:
         for t, u in chunks:
