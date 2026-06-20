@@ -198,23 +198,29 @@ def list_projects():
     email = current_user_email()
     admin = is_admin()
 
-    # 我是 Owner 的 Projects
-    owner_docs = db.collection('projects').where('owner', '==', email).stream()
-    projects = [d.to_dict() | {'id': d.id} for d in owner_docs]
+    projects = []
+    seen_ids = set()
 
-    # 全掃：我是成員的 Projects；**管理員則納入所有人的所有專案**（全站視角）。
-    # 小規模可接受；大規模應建立 subcollection。
-    all_docs = db.collection('projects').stream()
-    seen_ids = {p['id'] for p in projects}
-    for d in all_docs:
-        if d.id in seen_ids:
-            continue
-        data = d.to_dict() | {'id': d.id}
-        if admin or email in data.get('members', {}):
-            # 標記非自己 owner / 非成員的專案（admin 視角才會出現）
+    if admin:
+        # 管理員全站視角：仍需全掃（單一管理員，可接受；非熱路徑的多人頁面）。
+        for d in db.collection('projects').stream():
+            data = d.to_dict() | {'id': d.id}
             data['_foreign'] = (data.get('owner') != email
                                 and email not in data.get('members', {}))
             projects.append(data)
+            seen_ids.add(d.id)
+    else:
+        # 非管理員：兩個索引查詢，避免全表掃描（N+1 修正）。
+        #   1) 我是 Owner 的（owner 等值查，永遠可靠、不依賴 member_emails）。
+        #   2) 我是成員的（member_emails array_contains；與 members 同步維護，見 add/remove_member）。
+        for d in db.collection('projects').where('owner', '==', email).stream():
+            projects.append(d.to_dict() | {'id': d.id})
+            seen_ids.add(d.id)
+        for d in db.collection('projects').where('member_emails', 'array_contains', email).stream():
+            if d.id in seen_ids:
+                continue
+            projects.append(d.to_dict() | {'id': d.id})
+            seen_ids.add(d.id)
 
     # 按建立時間排序；封存的排到最後（穩定排序，仍灰階顯示於同一列表）
     projects.sort(key=lambda p: p.get('created_at') or '', reverse=True)
@@ -244,6 +250,7 @@ def create_project():
         'description': description,
         'owner': email,
         'members': {},
+        'member_emails': [],   # N+1 修正：成員 email 陣列（供 list_projects 用 array_contains 索引查，免全掃）
         'llm_config': {
             'provider': 'gemini',
             'model': 'gemini-2.5-flash',
@@ -463,6 +470,7 @@ def add_member(pid, project, role):
     members[member_email] = member_role
     db.collection('projects').document(pid).update({
         'members': members,
+        'member_emails': list(members.keys()),   # N+1：與 members 同步（供 array_contains 查詢）
         'updated_at': firestore.SERVER_TIMESTAMP,
     })
     flash(f'已新增成員 {member_email}（{member_role}）。', 'success')
@@ -479,6 +487,7 @@ def remove_member(pid, project, role):
         members.pop(member_email, None)
         db.collection('projects').document(pid).update({
             'members': members,
+            'member_emails': list(members.keys()),   # N+1：與 members 同步
             'updated_at': firestore.SERVER_TIMESTAMP,
         })
         flash(f'已移除成員 {member_email}。', 'success')

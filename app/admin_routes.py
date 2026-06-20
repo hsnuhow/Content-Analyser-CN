@@ -798,3 +798,25 @@ def knowledge_reindex(slug):
     else:
         flash(f'已重新索引（{res.get("indexed", 0)} 塊）。', 'success')
     return redirect(url_for('admin_bp.knowledge_base'))
+
+
+@bp.route('/backfill-member-emails')
+@admin_required
+def backfill_member_emails():
+    """一次性（冪等）資料修補：補既有 projects 的 member_emails 陣列（N+1 修正）。
+    list_projects 改用 member_emails array_contains 索引查詢；既有專案需補此欄位。
+    伺服器端以 SA 權限執行，admin 手動觸發一次即可（可安全重跑）。
+    """
+    total = changed = 0
+    for doc in db.collection('projects').stream():
+        total += 1
+        data = doc.to_dict() or {}
+        members = data.get('members') or {}
+        desired = sorted(members.keys())
+        current = data.get('member_emails')
+        if isinstance(current, list) and sorted(current) == desired:
+            continue
+        changed += 1
+        doc.reference.update({'member_emails': list(members.keys())})
+    return (f"backfill_member_emails 完成：專案總數 {total}，更新 {changed}。"
+            f"（冪等，可重跑）"), 200
