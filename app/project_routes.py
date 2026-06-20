@@ -50,66 +50,12 @@ def current_user_email() -> str:
     return session.get('user', {}).get('email', '')
 
 
-# 已知追蹤參數（保守清單）：去重時剝除，避免同頁因 utm/fbclid 等被當不同 URL 重複爬取。
-_TRACKING_PARAMS = {
-    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
-    'utm_name', 'utm_reader', 'fbclid', 'gclid', 'gclsrc', 'dclid', 'msclkid',
-    'mc_cid', 'mc_eid', 'igshid', 'ref_src', 'yclid', 'spm', '_ga',
-}
-
-
-def _url_key(url: str) -> str:
-    """去重鍵：正規化 URL 以判同（保守，避免誤併不同頁）。
-    小寫 scheme+host、去預設 port、去 fragment、去尾斜線、剝已知追蹤參數（保留其他 query）。
-    原始 URL 仍另存供爬取/顯示，本函式只產生比對用的 key。"""
-    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-    u = (url or '').strip()
-    if not u:
-        return ''
-    try:
-        sp = urlsplit(u)
-        scheme = (sp.scheme or '').lower()
-        host = (sp.hostname or '').lower()
-        if not host:
-            return u.lower()
-        netloc = host
-        port = sp.port
-        if port and not ((scheme == 'http' and port == 80) or (scheme == 'https' and port == 443)):
-            netloc = f"{host}:{port}"
-        path = sp.path or '/'
-        if len(path) > 1 and path.endswith('/'):
-            path = path.rstrip('/')
-        q = [(k, v) for k, v in parse_qsl(sp.query, keep_blank_values=True)
-             if k.lower() not in _TRACKING_PARAMS]
-        q.sort()
-        return urlunsplit((scheme, netloc, path, urlencode(q), ''))  # 去 fragment
-    except Exception:
-        return u.lower()
-
-
-def parse_url_list(raw: str) -> list:
-    """容錯解析網址清單，回傳去重保序的 http(s) 網址。
-
-    處理：真換行、被 URL 編碼的換行/空白（%0A/%0D/%20）、空白分隔、
-    以及多個網址黏成一坨（用 lookahead 在每個 http(s):// 前切開）。
-    去重以 _url_key 正規化判同（同頁不同追蹤參數/尾斜線/fragment 視為同一）。
-    """
-    if not raw:
-        return []
-    raw = (raw.replace('%0D', '\n').replace('%0d', '\n')
-              .replace('%0A', '\n').replace('%0a', '\n')
-              .replace('%20', ' ').replace('%09', ' '))
-    seen, out = set(), []
-    for tok in re.split(r'\s+', raw.strip()):
-        for part in re.split(r'(?=https?://)', tok):
-            p = part.strip().strip('<>"\'，。、')
-            if p.startswith(('http://', 'https://')):
-                k = _url_key(p)
-                if k and k not in seen:
-                    seen.add(k)
-                    out.append(p)
-    return out
-
+# URL 工具與資料集 items store 層已抽出（見 url_utils.py / datasets_store.py）。
+from .url_utils import _TRACKING_PARAMS, _url_key, parse_url_list  # noqa: F401
+from .datasets_store import (  # noqa: F401  （re-export：admin_routes 仍 from project_routes import _load_dataset_items）
+    _items_ref, _load_dataset_items, _save_dataset_items,
+    _delete_dataset_items, _append_urls_to_draft, _replace_items_by_url,
+)
 
 def is_admin() -> bool:
     admin = get_admin_email()
@@ -1436,109 +1382,6 @@ def create_manual_dataset(pid, project, role):
 # 內文存子集合而非內嵌於 dataset 文件 → 無單文件 1MB 上限、筆數不受限。
 # 每筆用 auto-id 文件 + `_seq` 單調遞增欄位（刪除後 append 不撞 id），讀取依 `_seq` 排序。
 # ──────────────────────────────────────────────────────────────────────
-
-def _items_ref(pid: str, did: str):
-    return (db.collection('projects').document(pid)
-            .collection('datasets').document(did).collection('items'))
-
-
-def _load_dataset_items(pid: str, did: str) -> list:
-    try:
-        items = []
-        for d in _items_ref(pid, did).order_by('_seq').stream():
-            it = d.to_dict()
-            it['_id'] = d.id   # 供單篇刪除引用
-            items.append(it)
-        if items:
-            return items
-    except Exception as e:
-        print(f"[items] 子集合讀取失敗 {did}: {e}", flush=True)
-    # 後備（向後相容）：舊格式 items 內嵌於 dataset 文件，子集合空時讀回。
-    try:
-        doc = (db.collection('projects').document(pid)
-               .collection('datasets').document(did).get())
-        return (doc.to_dict() or {}).get('items', []) if doc.exists else []
-    except Exception:
-        return []
-
-
-def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -> int:
-    """寫入 items。append=False 先清空既有。回傳寫入後的 _next_seq。"""
-    ref = _items_ref(pid, did)
-    ds_ref = db.collection('projects').document(pid).collection('datasets').document(did)
-    items = list(items)
-    count = len(items)
-    if not append:
-        for d in ref.stream():
-            d.reference.delete()
-        seq = 0
-    else:
-        # 並發安全：用交易「預約」一段連續的 _seq（count 個）。避免兩個併發 append
-        # （雙開分頁/續批）讀到同一 _next_seq → items _seq 重疊、計數器被後者覆蓋。
-        @firestore.transactional
-        def _reserve(t):
-            snap = ds_ref.get(transaction=t)
-            start = (snap.to_dict() or {}).get('_next_seq', 0) if snap.exists else 0
-            t.set(ds_ref, {'_next_seq': start + count}, merge=True)
-            return start
-        seq = _reserve(db.transaction())
-    batch = db.batch()
-    n = 0
-    for it in items:
-        batch.set(ref.document(), {**it, 'url_key': _url_key(it.get('url', '')), '_seq': seq})
-        seq += 1
-        n += 1
-        if n % 400 == 0:
-            batch.commit()
-            batch = db.batch()
-    if n % 400 != 0:
-        batch.commit()
-    if not append:
-        ds_ref.update({'_next_seq': seq})  # 覆寫模式無競爭，直接設定
-    return seq
-
-
-def _delete_dataset_items(pid: str, did: str) -> None:
-    try:
-        for d in _items_ref(pid, did).stream():
-            d.reference.delete()
-    except Exception:
-        pass
-
-
-def _append_urls_to_draft(pid: str, did: str, urls: list):
-    """把 urls 併入現有『草稿』資料集（去重、append pending items、更新 source_urls/計數）。
-    回新增筆數；目標不存在或非草稿回 None。"""
-    ds_ref = (db.collection('projects').document(pid)
-              .collection('datasets').document(did))
-    doc = ds_ref.get()
-    if not doc.exists:
-        return None
-    data = doc.to_dict() or {}
-    if data.get('status') != 'draft':
-        return None
-    existing = _load_dataset_items(pid, did)
-    have = {it.get('url_key') or _url_key(it.get('url', '')) for it in existing}
-    fresh = [u for u in urls if _url_key(u) not in have]
-    fresh = list(dict.fromkeys(fresh))
-    if fresh:
-        _save_dataset_items(pid, did, [{'url': u, 'status': 'pending'} for u in fresh],
-                            append=True)
-        merged_urls = list(dict.fromkeys((data.get('source_urls') or []) + fresh))
-        ds_ref.update({'source_urls': merged_urls,
-                       'item_count': len(merged_urls),
-                       'updated_at': firestore.SERVER_TIMESTAMP})
-    return len(fresh)
-
-
-def _replace_items_by_url(pid: str, did: str, urls_set: set, new_items: list) -> None:
-    """recrawl-failed：刪除 url 在 urls_set 的舊 item，再 append new_items（保留已成功項）。"""
-    ref = _items_ref(pid, did)
-    for d in ref.stream():
-        if (d.to_dict() or {}).get('url') in urls_set:
-            d.reference.delete()
-    _save_dataset_items(pid, did, new_items, append=True)
-
 
 def _claim_auto_continue(ds_ref, job_id: str) -> bool:
     """交易式認領「為此已完成 job 送出下一輪續批」的權利，防多 poller/多分頁重複 spawn。
