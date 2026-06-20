@@ -27,24 +27,24 @@
             data-bs-toggle="collapse" data-bs-target="#renameDataset">✏️ 更名</button>
     {% if dataset.status == 'crawling' %}
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？');">
+          data-confirm="強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-danger">⏹ 強制停止並刪除</button>
     </form>
     {% elif dataset.status == 'draft' %}
     <form method="POST" action="{{ url_for('project_bp.start_crawl', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('將目前清單的網址送入爬蟲開始爬取？');">
+          data-confirm="將目前清單的網址送入爬蟲開始爬取？">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-primary">▶ 開始爬取</button>
     </form>
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('刪除整份草稿清單？此操作不可還原。');">
+          data-confirm="刪除整份草稿清單？此操作不可還原。">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-outline-danger">🗑 刪除草稿</button>
     </form>
     {% else %}
     <form method="POST" action="{{ url_for('project_bp.recrawl_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('重爬未成功的項目（失敗/未爬/被略過），保留已成功項並合併？');"
+          data-confirm="重爬未成功的項目（失敗/未爬/被略過），保留已成功項並合併？"
           class="d-flex align-items-center gap-2">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="mode" value="failed">
@@ -55,7 +55,7 @@
       </span>
     </form>
     <form method="POST" action="{{ url_for('project_bp.recrawl_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('整份重爬全部項目？');">
+          data-confirm="整份重爬全部項目？">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="mode" value="all">
       <button type="submit" class="btn btn-sm btn-outline-secondary">↻ 重爬全部</button>
@@ -63,7 +63,7 @@
     {% set failed_count = (dataset['items'] or []) | selectattr('status', 'equalto', 'failed') | list | length %}
     {% if failed_count > 0 %}
     <form method="POST" action="{{ url_for('project_bp.research_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('對 {{ failed_count }} 個失敗項做選擇器研究？（與爬蟲不並行，約數分鐘）');">
+          data-confirm="對 {{ failed_count }} 個失敗項做選擇器研究？（與爬蟲不並行，約數分鐘）">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-outline-info">🔬 研究失敗項（{{ failed_count }}）</button>
     </form>
@@ -71,13 +71,13 @@
     {% set success_count = (dataset['items'] or []) | selectattr('status', 'equalto', 'success') | list | length %}
     {% if success_count > 0 %}
     <form method="POST" action="{{ url_for('project_bp.extract_images_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('對 {{ success_count }} 個成功項擷取主文大圖？（只取圖、與文字爬取分離，每篇隨機抽最多 10 張）');">
+          data-confirm="對 {{ success_count }} 個成功項擷取主文大圖？（只取圖、與文字爬取分離，每篇隨機抽最多 10 張）">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-outline-success">🖼 擷取主文大圖（{{ success_count }}）</button>
     </form>
     {% endif %}
     <form method="POST" action="{{ url_for('project_bp.delete_dataset', pid=pid, did=dataset.id) }}"
-          onsubmit="return confirm('確定刪除此資料集？此操作不可還原。');">
+          data-confirm="確定刪除此資料集？此操作不可還原。">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-sm btn-outline-danger">🗑 刪除資料集</button>
     </form>
@@ -129,21 +129,10 @@
         <div id="bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
              style="width:{{ dataset.progress }}%"></div>
       </div>
-      <div id="log" class="text-muted small">{{ dataset.log }}</div>
+      <div id="log" class="text-muted small"
+           data-status-url="{{ url_for('project_bp.dataset_status', pid=pid, did=dataset.id) }}">{{ dataset.log }}</div>
     </div>
   </div>
-  <script>
-  (function poll(){
-    fetch("{{ url_for('project_bp.dataset_status', pid=pid, did=dataset.id) }}")
-      .then(r=>r.json()).then(d=>{
-        document.getElementById('bar').style.width=(d.progress||0)+'%';
-        document.getElementById('pct').textContent=(d.progress||0)+'%';
-        document.getElementById('log').textContent=d.log||'';
-        if(d.status==='completed'||d.status==='failed'){ location.reload(); }
-        else { setTimeout(poll,3000); }
-      }).catch(()=>setTimeout(poll,5000));
-  })();
-  </script>
   {% endif %}
 
   {# 失敗項研究結果（research_job_id 存在時）#}
@@ -160,26 +149,10 @@
     </div>
     <div class="card-body">
       <div id="researchLog" class="text-muted small mb-2">研究進行中...</div>
-      <div id="researchResult"></div>
+      <div id="researchResult"
+           data-research-url="{{ url_for('project_bp.research_status', pid=pid, did=dataset.id) }}"></div>
     </div>
   </div>
-  <script>
-  (function pollR(){
-    const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    fetch("{{ url_for('project_bp.research_status', pid=pid, did=dataset.id) }}")
-      .then(r=>r.json()).then(d=>{
-        document.getElementById('researchLog').textContent = d.log || d.status || '';
-        if(d.status==='completed'){
-          const res=d.result||{}; let h='';
-          (res.candidates||[]).forEach(c=>{ h+=`<div class="alert alert-success py-2 mb-2"><b>${esc(c.domain)}</b> → 候選 <code>${esc(c.selector)}</code>（${c.validated_chars||0} 字）— 待管理員於後台確認升級</div>`; });
-          (res.diagnoses||[]).forEach(g=>{ h+=`<div class="alert alert-warning py-2 mb-2"><b>${esc(g.domain)}</b>：${esc(g.diagnosis)}</div>`; });
-          document.getElementById('researchResult').innerHTML = h || '<div class="text-muted">無候選/診斷。</div>';
-        } else if(d.status==='failed'){
-          document.getElementById('researchLog').textContent='研究失敗：'+(d.log||'');
-        } else { setTimeout(pollR,4000); }
-      }).catch(()=>setTimeout(pollR,6000));
-  })();
-  </script>
   {% endif %}
 
   {# 主文大圖擷取結果（image_job_id 存在時）#}
@@ -189,7 +162,7 @@
       <span>🖼 主文大圖擷取結果</span>
       {% if role in ('owner', 'editor') %}
       <form method="POST" action="{{ url_for('project_bp.analyse_images_dataset', pid=pid, did=dataset.id) }}"
-            onsubmit="return confirm('把已擷取的大圖送去視覺分析（色調/色澤/主題/吸睛要素，用專案 LLM Key）？');">
+            data-confirm="把已擷取的大圖送去視覺分析（色調/色澤/主題/吸睛要素，用專案 LLM Key）？">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-sm btn-success"
                 {% if not project.llm_config.api_key %}disabled title="請先設定 LLM Key"{% endif %}>🎨 分析這些大圖</button>
@@ -198,34 +171,10 @@
     </div>
     <div class="card-body">
       <div id="imgLog" class="text-muted small mb-2">擷取進行中...</div>
-      <div id="imgResult"></div>
+      <div id="imgResult"
+           data-img-url="{{ url_for('project_bp.extract_images_status', pid=pid, did=dataset.id) }}"></div>
     </div>
   </div>
-  <script>
-  (function pollImg(){
-    const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    fetch("{{ url_for('project_bp.extract_images_status', pid=pid, did=dataset.id) }}")
-      .then(r=>r.json()).then(d=>{
-        document.getElementById('imgLog').textContent = d.log || d.status || '';
-        if(d.status==='completed'){
-          const rs=d.results||[]; let h=`<div class="mb-2 small text-muted">共 ${d.n_images||0} 張大圖</div>`;
-          rs.forEach(it=>{
-            if(!(it.images||[]).length) return;
-            h+=`<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count||0} 張・${esc(it.source||'')}）</span></div><div class="d-flex flex-wrap gap-2">`;
-            (it.images||[]).forEach(im=>{
-              h+=`<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
-            });
-            h+=`</div></div>`;
-          });
-          document.getElementById('imgResult').innerHTML = h || '<div class="text-muted">無擷取到大圖。</div>';
-        } else if(d.status==='failed'){
-          document.getElementById('imgLog').textContent='擷取失敗：'+(d.log||'');
-        } else if(d.status==='none'){
-          document.getElementById('imgLog').textContent='（無擷取任務）';
-        } else { setTimeout(pollImg,4000); }
-      }).catch(()=>setTimeout(pollImg,6000));
-  })();
-  </script>
   {% endif %}
 
   {# 一鍵分析（completed 時，Owner/Editor）#}
@@ -295,7 +244,7 @@
             <td class="text-end">
               {% if it._id %}
               <form method="POST" action="{{ url_for('project_bp.delete_dataset_item', pid=pid, did=dataset.id, item_id=it._id) }}"
-                    onsubmit="return confirm('從此資料集刪除這個網址項目？此操作不可還原。');">
+                    data-confirm="從此資料集刪除這個網址項目？此操作不可還原。">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-link text-danger p-0" title="刪除此項">🗑</button>
               </form>
@@ -311,4 +260,5 @@
   {% endif %}
 
 </div>
+<script src="{{ url_for('static', filename='js/dataset_detail.js') }}"></script>
 {% endblock %}
