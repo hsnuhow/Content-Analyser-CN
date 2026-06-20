@@ -32,26 +32,8 @@
             <button type="submit" class="btn btn-sm btn-outline-secondary py-0 px-2" title="清除此結果面板">✕ 清除</button>
           </form>
         </div>
-        <div id="arResult"></div>
+        <div id="arResult" data-status-url="{{ url_for('admin_bp.research_url_status') }}"></div>
       </div>
-      <script>
-      (function pollAR(){
-        const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        fetch("{{ url_for('admin_bp.research_url_status') }}")
-          .then(r=>r.json()).then(d=>{
-            document.getElementById('arLog').textContent = d.log || d.status || '';
-            if(d.status==='completed'){
-              const res=d.result||{}; let h='';
-              (res.candidates||[]).forEach(c=>{ h+=`<div class="alert alert-success py-2 mb-2"><b>${esc(c.domain)}</b> → 候選 <code>${esc(c.selector)}</code>（${c.validated_chars||0} 字）— 下方可確認升級</div>`; });
-              (res.diagnoses||[]).forEach(g=>{ h+=`<div class="alert alert-warning py-2 mb-2"><b>${esc(g.domain)}</b>：${esc(g.diagnosis)}</div>`; });
-              document.getElementById('arResult').innerHTML = h || '<div class="text-muted">無候選/診斷。</div>';
-              setTimeout(()=>location.reload(), 1500);
-            } else if(d.status==='failed'){ document.getElementById('arLog').textContent='研究失敗：'+(d.log||''); }
-            else if(d.status==='none'){ document.getElementById('arLog').textContent=''; }
-            else { setTimeout(pollAR,4000); }
-          }).catch(()=>setTimeout(pollAR,6000));
-      })();
-      </script>
       {% endif %}
     </div>
   </div>
@@ -81,7 +63,7 @@
                 <button class="btn btn-sm btn-success">升級採用</button>
               </form>
               <form method="POST" action="{{ url_for('admin_bp.reject_selector_candidate', domain=c.get('domain')) }}" class="d-inline ms-1"
-                    onsubmit="return confirm('確定拒絕此候選？')">
+                    data-confirm="確定拒絕此候選？">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-sm btn-outline-danger">拒絕</button>
               </form>
@@ -108,4 +90,5 @@
   </ul>
   {% endif %}
 </div>
+<script src="{{ url_for('static', filename='js/admin_selector_candidates.js') }}"></script>
 {% endblock %}
