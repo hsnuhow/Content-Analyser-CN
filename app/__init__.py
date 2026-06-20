@@ -122,7 +122,9 @@ def create_app():
         return dict(user=user, is_admin=is_admin)
 
     # 安全標頭（縱深防禦）：防點擊劫持、MIME 嗅探；正式環境加 HSTS。
-    # CSP 保留 'unsafe-inline'（模板含 inline script，移除會破壞 UI）；
+    # CSP script-src 已移除 'unsafe-inline'（2026-06-21：所有 inline script/handler 已外部化成
+    # static/js/*.js + data-* helper + JSON 資料島，全 8 頁 Chrome 驗證）。
+    # style-src 仍保留 'unsafe-inline'（inline style 屬性尚未全移除，XSS 風險低，後續再處理）。
     # 報告 HTML 的 XSS 主防線仍為前端 DOMPurify。frame-ancestors/X-Frame-Options 防 iframe 劫持。
     @app.after_request
     def _security_headers(resp):
@@ -138,7 +140,7 @@ def create_app():
         resp.headers.setdefault('X-Robots-Tag', 'noindex, nofollow, noarchive')
         resp.headers.setdefault('Content-Security-Policy', (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "script-src 'self' https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "
