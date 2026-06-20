@@ -21,6 +21,7 @@ import ipaddress
 import json
 import re
 import socket
+import urllib.parse
 import urllib.request
 from typing import Callable, Dict, List
 from urllib.parse import urlparse
@@ -83,6 +84,44 @@ def _is_safe_url(url: str) -> bool:
     return True
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """阻止 urllib 自動跟隨 redirect；交由 _safe_urlopen 逐跳人工驗證 Location。"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _safe_urlopen(req, timeout):
+    """SSRF-safe urlopen：不自動 redirect，對最終 + 每個 redirect hop 的 Location
+    重跑 _is_safe_url 再續（上限 5 跳）。防止 302 → 169.254.169.254 metadata 繞過。
+    回傳已開啟的 response（200）。任一 hop 不安全或超過跳數則 raise。"""
+    import urllib.error
+    opener = urllib.request.build_opener(_NoRedirect)
+    max_hops = 5
+    cur = req
+    for _ in range(max_hops + 1):
+        target = cur.full_url if isinstance(cur, urllib.request.Request) else cur
+        if not _is_safe_url(target):
+            raise urllib.error.URLError(f"SSRF 拒絕（redirect 目標）：{target}")
+        try:
+            resp = opener.open(cur, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            # 3xx 被 _NoRedirect 攔下會以 HTTPError 形式出現（無 Location handler）
+            if e.code in (301, 302, 303, 307, 308):
+                newurl = e.headers.get("Location")
+                if not newurl:
+                    raise
+                newurl = urllib.parse.urljoin(target, newurl)
+                if not _is_safe_url(newurl):
+                    raise urllib.error.URLError(f"SSRF 拒絕（redirect 目標）：{newurl}")
+                # 沿用原 headers（Referer/UA）續跳
+                cur = urllib.request.Request(_encode_url(newurl), headers=dict(req.headers))
+                continue
+            raise
+        # 2xx：opener 已不自動 redirect，直接回傳
+        return resp
+    raise urllib.error.URLError(f"SSRF：redirect 超過 {max_hops} 跳，放棄")
+
+
 def _jpeg_variant(url: str) -> str:
     """部分 CDN 以 query 強制 AVIF（如 `format=avif`），Pillow/Gemini 皆無法解碼。
     改寫為 jpeg 變體（常見 resizer 參數），讓多數站可改取可解碼格式。回 None 表無可改。"""
@@ -111,7 +150,7 @@ def _fetch(url: str, referer: str, log: Callable[[str], None]):
         # Referer 也需 encode：中文 slug 文章 URL 直接放 header 會觸發 latin-1 編碼錯誤
         headers["Referer"] = _encode_url(referer)
     req = urllib.request.Request(_encode_url(url), headers=headers)
-    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
+    with _safe_urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
         mime = (resp.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
         data = resp.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:

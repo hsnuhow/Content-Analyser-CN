@@ -139,7 +139,7 @@ def _write_system_usage(usage: dict, job_kind: str = "discover"):
             "at": firestore.SERVER_TIMESTAMP,
         })
     except Exception as e:
-        print(f"[discover] 系統用量寫入略過：{e}", flush=True)
+        print(f"[{job_kind}] 系統用量寫入略過：{e}", flush=True)
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -163,7 +163,9 @@ def discover():
     try:
         result = discover_mod.discover(query, max_results=max_results, angles=angles)
     except Exception as e:
-        return jsonify({"status": "failed", "error": f"內容發現失敗：{e}"}), 502
+        # server 端記錄詳情；回 client 一般訊息（避免洩漏內部 URL / token-refresh 錯誤）
+        print(f"[discover] 內容發現失敗：{e}", flush=True)
+        return jsonify({"status": "failed", "error": "內容發現失敗，請稍後再試"}), 502
     if result.get("status") == "ok":
         _write_system_usage(result.pop("usage", None), "discover")
     return jsonify(result), (200 if result.get("status") == "ok" else 503)
@@ -188,7 +190,9 @@ def brand_presence():
         n = int(data.get("max_brands") or 15)
         result = brand_mod.brand_presence(topic, brands, max_brands=max(1, min(n, 30)))
     except Exception as e:
-        return jsonify({"status": "failed", "error": f"品牌聲量探勘失敗：{e}"}), 502
+        # server 端記錄詳情；回 client 一般訊息（避免洩漏內部錯誤細節）
+        print(f"[brand-presence] 品牌聲量探勘失敗：{e}", flush=True)
+        return jsonify({"status": "failed", "error": "品牌聲量探勘失敗，請稍後再試"}), 502
     if result.get("status") == "ok":
         _write_system_usage(result.pop("usage", None), "brand-presence")
     return jsonify(result), (200 if result.get("status") == "ok" else 503)

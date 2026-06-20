@@ -23,6 +23,8 @@ import urllib.request
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
+from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirect 目標）
+
 from bs4 import BeautifulSoup
 
 from crawler import (
@@ -267,7 +269,7 @@ def _fetch_static_html(url: str, log: Callable[[str], None]) -> Optional[str]:
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with safe_urlopen(req, timeout=15) as resp:
             ctype = (resp.headers.get("Content-Type", "") or "").lower()
             if "html" not in ctype:
                 return None

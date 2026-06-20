@@ -23,6 +23,8 @@ import traceback
 from typing import Optional, Tuple, Dict, Any, List, Callable
 from urllib.parse import urlparse
 
+from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirect 目標）
+
 from bs4 import BeautifulSoup
 # 統一使用 undetected-chromedriver（對齊 Colab，最佳反偵測）
 import undetected_chromedriver as uc
@@ -572,7 +574,7 @@ class HeadlessCrawler:
         """
         if HAS_GENAI and api_key:
             self.genai_api_key = api_key
-            self._log(f"[Crawler] Gemini configured with key: ...{api_key[-4:]}")
+            self._log("[Crawler] Gemini selector 輔助已設定")
 
     def _init_driver(self):
         """初始化 undetected-chromedriver（統一作法，對齊 Colab v3.8）。"""
@@ -1958,7 +1960,7 @@ class HeadlessCrawler:
                 "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
                 "Accept-Language": ZH_ACCEPT_LANGUAGE,
             })
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with safe_urlopen(req, timeout=15, max_bytes=3_000_000) as resp:
                 raw = resp.read().decode("utf-8", "ignore")
 
             def _og(prop: str) -> str:
@@ -1989,7 +1991,7 @@ class HeadlessCrawler:
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
-            with urllib.request.urlopen(req, timeout=12) as resp:
+            with safe_urlopen(req, timeout=12) as resp:
                 if "html" not in (resp.headers.get("Content-Type", "") or "").lower():
                     return None
                 html_raw = resp.read(3_000_000).decode("utf-8", "ignore")
@@ -2022,7 +2024,7 @@ class HeadlessCrawler:
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with safe_urlopen(req, timeout=15) as resp:
                 if "html" not in (resp.headers.get("Content-Type", "") or "").lower():
                     return None
                 html_raw = resp.read(3_000_000).decode("utf-8", "ignore")
@@ -2062,7 +2064,7 @@ class HeadlessCrawler:
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": DEFAULT_UA, "Accept-Language": ZH_ACCEPT_LANGUAGE})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with safe_urlopen(req, timeout=15) as resp:
                 ctype = (resp.headers.get("Content-Type", "") or "").lower()
                 html_raw = resp.read(3_000_000).decode("utf-8", "ignore") if "html" in ctype else ""
         except urllib.error.HTTPError as e:
@@ -2101,7 +2103,7 @@ class HeadlessCrawler:
         try:
             api = ("https://www.youtube.com/oembed?url="
                    + urllib.parse.quote(url, safe="") + "&format=json")
-            with urllib.request.urlopen(api, timeout=12) as r:
+            with safe_urlopen(api, timeout=12, max_bytes=1_000_000) as r:
                 d = json.loads(r.read().decode("utf-8", "ignore"))
             return {"title": d.get("title", ""), "author": d.get("author_name", "")}
         except Exception as e:

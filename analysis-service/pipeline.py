@@ -220,22 +220,21 @@ def run_analysis(job_id: str, report_title: str,
         t1 = threading.Thread(target=_run_path1, daemon=True)
         t1.start()
         t1.join(timeout=600)
-        path1_timed_out = t1.is_alive()
-        if path1_timed_out:
+        # join 後仍 alive == 逾時。逾時則 Path 1 daemon thread 仍可能在背景 mutate 共享
+        # nlp_results / search_extent_results（含 label_clusters 就地改 clusters dict）。
+        # 為杜絕「thread 仍在寫、主執行緒卻在讀半成品」的 race，逾時一律視 Path 1 不可信：
+        # 不再讀 nlp_results 後續欄位，直接走「TF-IDF 失敗」降級路徑（與既有數值閘門一致）。
+        path1_ok = not t1.is_alive()
+        if not path1_ok:
             stop_path1.set()  # 通知仍在跑的 search-extent 迴圈停止後續呼叫
             nlp_error.append("Path 1 超過 600s 未完成，已放棄等待")
-            _log("⚠️ Path 1 thread 逾時（600s）")
-
-        # Path 1 逾時：run_nlp 早已把 tfidf/clusters 寫入 nlp_results，逾時多半卡在其後的
-        # label_clusters / search-extent（仍在 daemon thread 內）。保留已完成的數值結果
-        # （TF-IDF 是閘門核心），只清空仍可能被 thread 寫入的 search_extent，避免 race。
-        if path1_timed_out:
+            _log("⚠️ Path 1 thread 逾時（600s），視為數值探勘失敗（不讀半成品結果）")
             search_extent_results = {}
-            _log("⚠️ Path 1 逾時，保留已完成數值結果、清空 search-extent")
 
         # ── 數值層閘門判定 ──
-        # 數值核心 = TF-IDF top_keywords。沒有它就代表數值探勘整體失敗 → 不進 LLM、直接失敗。
-        tfidf_ok = bool((nlp_results.get("tfidf") or {}).get("top_keywords"))
+        # 數值核心 = TF-IDF top_keywords。沒有它（或 Path 1 逾時不可信）就代表數值探勘
+        # 整體失敗 → 不進 LLM、直接失敗。逾時時不讀 nlp_results，避免與背景 thread 競態。
+        tfidf_ok = path1_ok and bool((nlp_results.get("tfidf") or {}).get("top_keywords"))
         if not tfidf_ok:
             reason = (nlp_error[0] if nlp_error else "TF-IDF 未產生關鍵字")
             err_msg = f"數值語意探勘失敗，已中止（不進入 LLM 分析）：{reason}"

@@ -13,7 +13,6 @@ import os
 import re
 import json
 import urllib.request
-import urllib.error
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
@@ -126,8 +125,19 @@ def brand_presence(topic: str, brands, max_brands: int = 15) -> dict:
     token = _d._access_token()
     usage_total = {"prompt": 0, "output": 0, "total": 0}
     results = []
+
+    # 單一品牌 worker 例外時回標記「探勘失敗」的 sentinel，不讓整批 map 中止（部分失敗仍回結果）。
+    def _assess_safe(b):
+        try:
+            return _assess_one(token, project, topic, b)
+        except Exception as e:
+            print(f"[brand_presence] 品牌探勘失敗（{b}）：{e}", flush=True)
+            sentinel = {"brand": b, "presence_level": "探勘失敗", "earned_count": 0,
+                        "official_present": False, "sources": [], "summary": "探勘失敗"}
+            return sentinel, {"prompt": 0, "output": 0, "total": 0}
+
     with ThreadPoolExecutor(max_workers=min(8, len(brands))) as ex:
-        for res, usage in ex.map(lambda b: _assess_one(token, project, topic, b), brands):
+        for res, usage in ex.map(_assess_safe, brands):
             results.append(res)
             for k in usage_total:
                 usage_total[k] += usage[k]
