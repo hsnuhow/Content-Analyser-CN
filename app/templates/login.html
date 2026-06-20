@@ -7,8 +7,8 @@
 
     <div class="d-flex justify-content-end mb-3">
       <div class="btn-group btn-group-sm" role="group" aria-label="language">
-        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="zh" onclick="setLang('zh')">中文</button>
-        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="en" onclick="setLang('en')">English</button>
+        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="zh">中文</button>
+        <button type="button" class="btn btn-outline-secondary lang-btn" data-lang="en">English</button>
       </div>
     </div>
 
@@ -133,20 +133,5 @@
   #landing[data-lang="en"] .only-zh { display: none; }
   .lang-btn.active { background-color: #6c757d; color: #fff; }
 </style>
-<script>
-  function setLang(l) {
-    var root = document.getElementById('landing');
-    root.setAttribute('data-lang', l);
-    document.querySelectorAll('.lang-btn').forEach(function (b) {
-      b.classList.toggle('active', b.getAttribute('data-lang') === l);
-    });
-    try { localStorage.setItem('insightout_lang', l); } catch (e) {}
-  }
-  // 記住上次選擇（預設中文）
-  (function () {
-    var saved = 'zh';
-    try { saved = localStorage.getItem('insightout_lang') || 'zh'; } catch (e) {}
-    setLang(saved === 'en' ? 'en' : 'zh');
-  })();
-</script>
+<script src="{{ url_for('static', filename='js/login.js') }}"></script>
 {% endblock %}
