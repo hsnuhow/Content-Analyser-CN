@@ -84,7 +84,7 @@
               <input id="discQ" class="form-control" placeholder="例如：循環扇　或　循環扇 美型">
             </div>
             <div class="col-md-4">
-              <button id="discBtn" class="btn btn-info w-100" type="button" onclick="runDiscover()">產生推薦清單</button>
+              <button id="discBtn" class="btn btn-info w-100" type="button" data-url="{{ url_for('project_bp.discover_urls', pid=pid) }}">產生推薦清單</button>
             </div>
           </div>
           <div id="discLog" class="small text-muted mt-2"></div>
@@ -106,7 +106,7 @@
                 <span class="fw-semibold">🔍 {{ dc.query }} <span class="text-muted small">（{{ dc.count }} 條）</span></span>
                 <button type="submit" formaction="{{ url_for('project_bp.delete_discovery', pid=pid, did=dc.id) }}"
                         class="btn btn-sm btn-outline-danger"
-                        onclick="return confirm('刪除這則推薦清單？')">🗑</button>
+                        data-confirm-click="刪除這則推薦清單？">🗑</button>
               </div>
               <div class="border rounded p-2 mb-2" style="max-height:260px;overflow:auto">
                 {% for c in dc.candidates %}
@@ -297,11 +297,11 @@
                 {% if ds.status == 'crawling' %}
                 <button type="submit" formaction="{{ url_for('project_bp.delete_dataset', pid=pid, did=ds.id) }}"
                         formnovalidate class="btn btn-sm btn-danger" title="強制停止並刪除"
-                        onclick="return confirm('強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？');">⏹</button>
+                        data-confirm-click="強制停止爬取會終止執行階段、廢除已爬資料並刪除此資料集，確定？">⏹</button>
                 {% else %}
                 <button type="submit" formaction="{{ url_for('project_bp.delete_dataset', pid=pid, did=ds.id) }}"
                         formnovalidate class="btn btn-sm btn-outline-danger" title="刪除資料集"
-                        onclick="return confirm('確定刪除資料集「{{ ds.name }}」？此操作不可還原。');">🗑</button>
+                        data-confirm-click="確定刪除資料集「{{ ds.name }}」？此操作不可還原。">🗑</button>
                 {% endif %}
                 {% endif %}
               </div>
@@ -384,7 +384,7 @@
                 </span>
                 {% if role in ('owner', 'editor') %}
                 <form method="POST" action="{{ url_for('project_bp.delete_analysis', pid=pid, aid=a.id) }}"
-                      onsubmit="return confirm({% if a.status in ('pending','running') %}'強制停止會終止分析、廢除中間結果並刪除此報告，確定？'{% else %}'確定刪除報告「{{ a.report_title }}」？此操作不可還原。'{% endif %});">
+                      data-confirm="{% if a.status in ('pending','running') %}強制停止會終止分析、廢除中間結果並刪除此報告，確定？{% else %}確定刪除報告「{{ a.report_title }}」？此操作不可還原。{% endif %}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   {% if a.status in ('pending', 'running') %}
                   <button type="submit" class="btn btn-sm btn-danger py-0 px-1" title="強制停止並刪除">⏹</button>
@@ -407,7 +407,7 @@
         <div class="card-footer">
           <form method="POST" id="combineForm"
                 action="{{ url_for('project_bp.combine_analyses', pid=pid) }}"
-                onsubmit="return confirm('整合所選的「文字報告 × 視覺報告」？');">
+                data-confirm="整合所選的「文字報告 × 視覺報告」？">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-outline-primary">🧩 整合所選報告</button>
             <span class="text-muted small ms-2">勾選 1 份文字 + 1 份視覺報告</span>
@@ -465,7 +465,7 @@
                           placeholder="GQ Shop&#10;Vornado&#10;小米"></textarea>
               </div>
               <div class="col-md-3">
-                <button id="bsBtn" class="btn btn-outline-dark w-100" type="button" onclick="runBrandScan()">分析品牌聲量</button>
+                <button id="bsBtn" class="btn btn-outline-dark w-100" type="button" data-url="{{ url_for('project_bp.brand_presence_run', pid=pid) }}">分析品牌聲量</button>
               </div>
             </div>
             <div id="bsLog" class="small text-muted mt-2"></div>
@@ -475,7 +475,7 @@
               <div class="d-flex justify-content-between align-items-center mb-1">
                 <span class="fw-semibold small">📊 {{ sc.topic }}（{{ sc.count }} 個品牌）</span>
                 <form method="POST" action="{{ url_for('project_bp.delete_brand_scan', pid=pid, sid=sc.id) }}"
-                      onsubmit="return confirm('刪除此品牌聲量紀錄？')">
+                      data-confirm="刪除此品牌聲量紀錄？">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <button class="btn btn-sm btn-outline-danger py-0 px-1">🗑</button>
                 </form>
@@ -531,7 +531,8 @@
             <div class="mb-2">
               <label class="form-label small fw-semibold d-flex justify-content-between">
                 <span>模型</span>
-                <button type="button" id="refreshModels" class="btn btn-link btn-sm p-0" style="font-size:.78rem">🔄 取得最新模型</button>
+                <button type="button" id="refreshModels" class="btn btn-link btn-sm p-0" style="font-size:.78rem"
+                        data-models-url="{{ url_for('project_bp.list_models', pid=pid) }}">🔄 取得最新模型</button>
               </label>
               <select id="modelSel" class="form-select form-select-sm mb-1"></select>
               <input type="text" id="modelCustom" class="form-control form-control-sm d-none" placeholder="自填模型名稱">
@@ -551,9 +552,8 @@
                 <span>溫度（創意度）</span>
                 <span class="text-muted" id="tempVal">{{ '%.2f'|format(project.llm_config.temperature|default(0.3)) }}</span>
               </label>
-              <input type="range" name="temperature" class="form-range" min="0" max="1" step="0.05"
-                     value="{{ project.llm_config.temperature|default(0.3) }}"
-                     oninput="document.getElementById('tempVal').textContent=this.value">
+              <input type="range" name="temperature" id="tempRange" class="form-range" min="0" max="1" step="0.05"
+                     value="{{ project.llm_config.temperature|default(0.3) }}">
               <div class="form-text">低=精準保守、高=發散有創意（建議分析用 0.2–0.5）</div>
               <a class="small text-decoration-none" data-bs-toggle="collapse" href="#llmHelp">❓ 溫度、top_p 是什麼（點開）</a>
               <div class="collapse mt-1" id="llmHelp">
@@ -613,48 +613,6 @@
           </form>
         </div>
       </div>
-      <script>
-      (function(){
-        const CURATED = {
-          gemini: ["gemini-2.5-pro","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"],
-          claude: ["claude-sonnet-4-5","claude-opus-4-1","claude-3-5-haiku-latest"],
-          openai: ["gpt-4o","gpt-4o-mini","gpt-4.1","o4-mini","o3"]
-        };
-        const CUSTOM = "__custom__";
-        const providerSel = document.getElementById('providerSel');
-        const modelSel = document.getElementById('modelSel');
-        const modelCustom = document.getElementById('modelCustom');
-        const modelHidden = document.getElementById('modelHidden');
-        const modelMsg = document.getElementById('modelMsg');
-
-        function toggleCustom(show){ modelCustom.classList.toggle('d-none', !show); }
-        function syncHidden(){ modelHidden.value = (modelSel.value===CUSTOM) ? modelCustom.value.trim() : modelSel.value; }
-        function populate(list, selected){
-          modelSel.innerHTML = "";
-          (list||[]).forEach(function(m){
-            const o=document.createElement('option'); o.value=m; o.textContent=m; modelSel.appendChild(o);
-          });
-          const oc=document.createElement('option'); oc.value=CUSTOM; oc.textContent="其他（自填）"; modelSel.appendChild(oc);
-          if (selected && (list||[]).indexOf(selected)>=0){ modelSel.value=selected; toggleCustom(false); }
-          else if (selected){ modelSel.value=CUSTOM; modelCustom.value=selected; toggleCustom(true); }
-          else { modelSel.value=(list&&list[0])||CUSTOM; toggleCustom(modelSel.value===CUSTOM); }
-          syncHidden();
-        }
-        modelSel.addEventListener('change', function(){ toggleCustom(modelSel.value===CUSTOM); syncHidden(); });
-        modelCustom.addEventListener('input', syncHidden);
-        providerSel.addEventListener('change', function(){ populate(CURATED[providerSel.value], ''); modelMsg.textContent=''; });
-        populate(CURATED[providerSel.value], modelHidden.value);
-
-        document.getElementById('refreshModels').addEventListener('click', function(){
-          modelMsg.textContent='取得中…';
-          fetch("{{ url_for('project_bp.list_models', pid=pid) }}?provider="+encodeURIComponent(providerSel.value))
-            .then(r=>r.json()).then(d=>{
-              if (d.models && d.models.length){ populate(d.models, modelHidden.value); modelMsg.textContent='已更新為最新模型清單'; }
-              else { modelMsg.textContent = d.error || '無法取得'; }
-            }).catch(()=>{ modelMsg.textContent='取得失敗'; });
-        });
-      })();
-      </script>
       {% endif %}
 
       {# 成員管理（Owner） #}
@@ -674,7 +632,7 @@
                 {{ member_role }}
               </span>
               <form method="POST" action="{{ url_for('project_bp.remove_member', pid=pid) }}"
-                    onsubmit="return confirm('確定移除此成員？')">
+                    data-confirm="確定移除此成員？">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="email" value="{{ email }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">✕</button>
@@ -724,7 +682,7 @@
           </form>
           <div class="form-text mb-3">封存後 Editor/Viewer 無法進入，僅 Owner/管理員可存取與還原。</div>
           <form method="POST" action="{{ url_for('project_bp.delete_project', pid=pid) }}" class="mb-1"
-                onsubmit="return confirm('確定刪除整個專案？將連同所有資料集與分析一併刪除，不可還原。');">
+                data-confirm="確定刪除整個專案？將連同所有資料集與分析一併刪除，不可還原。">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-outline-danger w-100">🗑 刪除整個專案</button>
           </form>
@@ -732,7 +690,7 @@
           {% if is_admin %}
           <hr>
           <form method="POST" action="{{ url_for('project_bp.force_delete_project', pid=pid) }}" class="mb-1"
-                onsubmit="return confirm('【管理員強制刪除】將取消所有執行中工作並刪除整個專案，不可還原。確定？');">
+                data-confirm="【管理員強制刪除】將取消所有執行中工作並刪除整個專案，不可還原。確定？">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-danger w-100">⚠ 強制刪除（管理員）</button>
           </form>
@@ -746,33 +704,5 @@
   </div>
 </div>
 
-<script>
-function runBrandScan(){
-  var topic=document.getElementById('bsTopic').value.trim();
-  var brands=document.getElementById('bsBrands').value.trim();
-  if(!topic||!brands){ document.getElementById('bsLog').textContent='請填主題與至少一個品牌。'; return; }
-  var btn=document.getElementById('bsBtn'); btn.disabled=true;
-  document.getElementById('bsLog').textContent='品牌聲量分析中…（每品牌一次搜尋情報，數十秒）';
-  var fd=new FormData(); fd.append('topic',topic); fd.append('brands',brands); fd.append('csrf_token','{{ csrf_token() }}');
-  fetch("{{ url_for('project_bp.brand_presence_run', pid=pid) }}", {method:'POST', body:fd})
-    .then(r=>r.json()).then(d=>{
-      if(d.error){ btn.disabled=false; document.getElementById('bsLog').textContent='錯誤：'+d.error; return; }
-      document.getElementById('bsLog').textContent='完成（'+(d.count||0)+' 個品牌），重新整理中…';
-      location.reload();
-    }).catch(e=>{ btn.disabled=false; document.getElementById('bsLog').textContent='請求失敗：'+e; });
-}
-function runDiscover(){
-  var q=document.getElementById('discQ').value.trim();
-  if(!q){ document.getElementById('discLog').textContent='請先輸入關鍵字。'; return; }
-  var btn=document.getElementById('discBtn'); btn.disabled=true;
-  document.getElementById('discLog').textContent='搜尋情報分析中…（grounding + 解析，可能需數十秒，請稍候）';
-  var fd=new FormData(); fd.append('q', q); fd.append('csrf_token', '{{ csrf_token() }}');
-  fetch("{{ url_for('project_bp.discover_urls', pid=pid) }}", {method:'POST', body:fd})
-    .then(r=>r.json()).then(d=>{
-      if(d.error){ btn.disabled=false; document.getElementById('discLog').textContent='錯誤：'+d.error; return; }
-      document.getElementById('discLog').textContent='已產生推薦清單（'+(d.count||0)+' 條），重新整理中…';
-      location.reload();
-    }).catch(e=>{ btn.disabled=false; document.getElementById('discLog').textContent='請求失敗：'+e; });
-}
-</script>
+<script src="{{ url_for('static', filename='js/project_detail.js') }}"></script>
 {% endblock %}
