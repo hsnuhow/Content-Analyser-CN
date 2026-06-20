@@ -56,3 +56,37 @@ InsightOut 的核心流程本身就是 prompt injection 的高風險面，務必
 
 > 結論：本平台「讀外部不可信內容 → 餵 LLM → 渲染輸出」的鏈路，每一段都要當不可信處理。
 > 相關修正見 `CODE_REVIEW.md`（C1 SSRF、C2 LLM 解析、C3 XSS）。
+
+---
+
+## 防護 #1：Cloudflare WAF + X-Origin-Token 來源鎖定（2026-06-20）
+
+### 問題
+1. **直打 run.app 繞過邊緣防護**：content-analyser 的 Cloud Run 預設網址（`*.run.app`）公開可達，
+   攻擊者可跳過自訂網域（`insightout.annexix.cc`）與其前置的任何 WAF / 速率限制，直接打到源站。
+2. **漏洞掃描器探測**：源站持續收到對 `.php` / `.env` / `.git` 等敏感路徑的自動化掃描探測。
+
+### 做法
+**A. content-analyser 來源鎖定守衛（app 端，軟→強旗標）**
+- `app/__init__.py` 的 `before_request` 驗證 Cloudflare 在邊緣注入的 `X-Origin-Token` 標頭。
+- 旗標分層：
+  - secret `ORIGIN_VERIFY_TOKEN`（Secret Manager）= 守衛比對的期望值，須與 Cloudflare Transform Rule
+    注入值一致；**未設密鑰 → 守衛靜默停用**（不影響既有流量，安全可漸進啟用）。
+  - env `ENFORCE_ORIGIN_TOKEN`：`=1` → 強制模式，缺/錯標頭一律 **403**；其餘值 → 軟模式，只記 log
+    供觀察、不阻擋（先驗證 Cloudflare 注入無誤，再切強制）。
+
+**B. Cloudflare 邊緣（網域 annexix.cc，Free 方案）**
+- `insightout.annexix.cc` 開**橘雲 proxied** → 自動 DDoS 緩解、隱藏源站 IP、邊緣 TLS、免費受管規則。
+- **Transform Rule**（`http_request_late_transform`）：對該 host 注入 `X-Origin-Token`（與 secret 同值）。
+- **自訂 WAF 規則**：block 對 `.php` / `.env` / `.git` 等漏洞掃描路徑的請求。
+- 既有規則：非台灣 IP 套用 `managed_challenge`。
+
+### 驗證結果
+- run.app 直連 → **403**（守衛攔截，無 X-Origin-Token）。
+- 經 Cloudflare（`insightout.annexix.cc`）→ **302**（正常導向登入流程）。
+- 目前線上 `ENFORCE_ORIGIN_TOKEN=1`（強制模式），revision `content-analyser-00069`。
+
+### 可秒退方式
+- 守衛誤擋時：`gcloud run services update content-analyser --region asia-east1 --set-env-vars ENFORCE_ORIGIN_TOKEN=0`
+  → 切回軟模式（只記 log 不擋），流量立即恢復；無須改程式碼或重 build。
+- 完全停用守衛：移除 `ORIGIN_VERIFY_TOKEN` 注入即靜默停用。

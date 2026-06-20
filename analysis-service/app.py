@@ -21,14 +21,14 @@ import functools
 
 import firebase_admin
 from firebase_admin import firestore
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 
 from pipeline import run_analysis, JOBS_COLLECTION
 from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLECTION
 from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
 from audience_reports import run_audience_reports, JOBS_COLLECTION as AUDIENCE_JOBS_COLLECTION
 import kb_index
-from auth import is_authorized
+from auth import authorize, SYSTEM_CALLER_ID
 
 SERVICE_VERSION = "1.2.0"
 
@@ -67,11 +67,27 @@ def require_api_key(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         provided = request.headers.get("X-API-Key", "")
-        if not is_authorized(provided, ANALYSIS_API_KEY, "analyse", db):
+        ok, caller_id = authorize(provided, ANALYSIS_API_KEY, "analyse", db)
+        if not ok:
             return jsonify({"status": "failed",
                             "error": "Unauthorized: missing or invalid X-API-Key（需 'analyse' 權限）"}), 401
+        # 呼叫者身分供 job 歸屬：系統金鑰="system"；外部金鑰=key_hash。
+        g.caller_id = caller_id
         return f(*args, **kwargs)
     return wrapper
+
+
+def _job_visible_to_caller(job: dict) -> bool:
+    """job 歸屬檢查：
+      - 系統金鑰（content-analyser 自身）→ 一律可讀（它在自家 Firestore 綁 job↔project）。
+      - 外部金鑰 → 僅當 job.owner == 該呼叫者 caller_id 才可讀；
+        無 owner 欄的舊 job（含他人建立）一律不可讀（保守，回 404）。
+    """
+    caller = getattr(g, "caller_id", None)
+    if caller == SYSTEM_CALLER_ID:
+        return True
+    owner = (job or {}).get("owner")
+    return bool(owner) and owner == caller
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -180,6 +196,7 @@ def analyse():
         "llm_provider": llm_provider,
         "llm_model": llm_model,
         "result_markdown": None,
+        "owner": g.caller_id,  # job 歸屬：外部金鑰僅能查自己的 job
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "completed_at": None,
@@ -226,6 +243,9 @@ def get_job(job_id: str):
         return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
 
     job = doc.to_dict()
+    # job 歸屬檢查：外部金鑰只能查自己的 job；他人的/無 owner 的回 404（不可區分存在與否）。
+    if not _job_visible_to_caller(job):
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     # 只回傳前端需要的欄位（避免傳回 llm_api_key）
     safe_fields = {
         "job_id": job.get("job_id"),
@@ -314,7 +334,7 @@ def analyse_images():
         "job_id": job_id, "status": "pending", "progress": 0,
         "log": "任務已建立，等待執行...", "report_title": report_title,
         "n_images": len(images), "llm_provider": llm_provider, "llm_model": llm_model,
-        "result_markdown": None,
+        "result_markdown": None, "owner": g.caller_id,
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
     })
@@ -338,6 +358,8 @@ def get_image_job(job_id: str):
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     job = doc.to_dict()
+    if not _job_visible_to_caller(job):
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     safe = {
         "job_id": job.get("job_id"), "status": job.get("status"),
         "progress": job.get("progress", 0), "log": job.get("log", ""),
@@ -392,7 +414,7 @@ def synthesize_combined():
         "job_id": job_id, "status": "pending", "progress": 0,
         "log": "任務已建立，等待整合...", "report_title": report_title,
         "llm_provider": llm_provider, "llm_model": llm_model,
-        "result_markdown": None,
+        "result_markdown": None, "owner": g.caller_id,
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
     })
@@ -416,6 +438,8 @@ def get_combined_job(job_id: str):
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     job = doc.to_dict()
+    if not _job_visible_to_caller(job):
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     safe = {
         "job_id": job.get("job_id"), "status": job.get("status"),
         "progress": job.get("progress", 0), "log": job.get("log", ""),
@@ -468,7 +492,7 @@ def audience_reports_submit():
         "job_id": job_id, "status": "pending", "progress": 0,
         "log": "任務已建立，等待產生延伸報告...", "report_title": report_title,
         "llm_provider": llm_provider, "llm_model": llm_model,
-        "audience_reports": None,
+        "audience_reports": None, "owner": g.caller_id,
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP, "completed_at": None,
     })
@@ -492,6 +516,8 @@ def get_audience_job(job_id: str):
     if not doc.exists:
         return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     job = doc.to_dict()
+    if not _job_visible_to_caller(job):
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
     safe = {
         "job_id": job.get("job_id"), "status": job.get("status"),
         "progress": job.get("progress", 0), "log": job.get("log", ""),
@@ -538,6 +564,8 @@ def cancel_job(job_id: str):
         ref = db.collection(JOBS_COLLECTION).document(job_id)
         doc = ref.get()
         if not doc.exists:
+            return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+        if not _job_visible_to_caller(doc.to_dict()):
             return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
         cur = doc.to_dict().get("status")
         if cur in ("completed", "failed", "cancelled"):

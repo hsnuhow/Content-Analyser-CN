@@ -46,14 +46,27 @@ def _within_daily_quota(ref, data) -> bool:
     return True
 
 
-def is_authorized(provided_key: str, system_key: str,
-                  required_permission: str, db) -> bool:
+# 系統金鑰（content-analyser，ANALYSIS_API_KEY）的呼叫者識別。
+# content-analyser 自身已在它的 Firestore 綁 job↔project，故系統金鑰可讀所有 job。
+SYSTEM_CALLER_ID = "system"
+
+
+def authorize(provided_key: str, system_key: str,
+              required_permission: str, db):
+    """驗證並回傳呼叫者身分，供 job 歸屬檢查。
+
+    回傳 (authorized: bool, caller_id: str | None)：
+      - 系統金鑰（ANALYSIS_API_KEY）通過 → (True, "system")
+      - 外部 api_keys（Firestore）通過 → (True, <該金鑰的 key_hash>)
+      - 失敗 → (False, None)
+    caller_id 用於 job owner 欄位：建立 job 時寫入，查詢時比對。
+    """
     if system_key and provided_key and hmac.compare_digest(provided_key, system_key):
-        return True
+        return True, SYSTEM_CALLER_ID
     if not provided_key:
-        return False
+        return False, None
     if db is None:
-        return False
+        return False, None
     try:
         h = _hash_key(provided_key)
         docs = db.collection('api_keys').where('key_hash', '==', h).limit(1).stream()
@@ -63,8 +76,16 @@ def is_authorized(provided_key: str, system_key: str,
                 # 每日配額（成本防護）：超量則拒絕（系統金鑰已於上方提前放行，不受此限）。
                 if not _within_daily_quota(d.reference, data):
                     print(f"[Auth] api_keys 已達每日配額上限，拒絕（{d.id}）", flush=True)
-                    return False
-                return True
+                    return False, None
+                # 外部金鑰以 key_hash 為呼叫者識別（穩定、不洩漏原始金鑰）。
+                return True, h
     except Exception as e:
         print(f"[Auth] api_keys 查詢失敗: {e}", flush=True)
-    return False
+    return False, None
+
+
+def is_authorized(provided_key: str, system_key: str,
+                  required_permission: str, db) -> bool:
+    """向後相容包裝：僅回傳是否通過（不含呼叫者身分）。"""
+    ok, _ = authorize(provided_key, system_key, required_permission, db)
+    return ok
