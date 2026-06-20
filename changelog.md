@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-21 修正(N+1) + 補強：list_projects 索引查詢 + 測試環境機制（已部署）
+- **N+1**：`list_projects` 非 admin 由全表 `.stream()` 改為 owner 等值查 + `member_emails` array_contains（兩個索引查詢）；admin 全站視角仍全掃（單一管理員）。projects 加 `member_emails` 陣列（= members.keys()），create/add/remove_member 三處同步維護。owner 永遠由 owner== 查、不依賴新欄位 → 零空窗。既有專案以一次性 admin 路由 `/admin/backfill-member-emails`（伺服器端 SA 權限、冪等）補欄位（已跑：5/5）。附錄 C 更新。
+- **測試環境機制**（拆巨檔前的安全網）：`requirements-dev.txt`（pytest）+ `pytest.ini`（pythonpath 指向各服務）+ `tests/conftest.py` + `tests/fakes.py`（FakeFirestore 測試替身，讓 db 相依邏輯可在無真 Firestore 下測）。維持無 pytest 也能 `bash tests/run.sh`。全 42 tests 過（含 N+1 查詢邏輯驗證）。
+- **驗證**：Chrome 全面驗證——專案列表（5 專案）、project_detail（5 分析/資料集/面板/模型選擇器）、analysis（渲染 45344）、dataset（25 項）、admin 控制台，全部取資料正常、零回歸。
+
 ## 2026-06-21 補強：CSP 移除 script-src 'unsafe-inline'（8 頁 inline JS 全外部化，已部署）
 技術債暫緩清單最後一項。先建可重用範式、逐頁遷移 + 逐頁 Chrome MCP 實際驗證，最後才移除 unsafe-inline。
 - **範式**：inline `<script>` → `static/js/*.js` + addEventListener；Jinja 變數走 `data-*` 屬性；
