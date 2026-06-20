@@ -14,6 +14,7 @@ from typing import List, Dict, Any
 
 from llm_client import LLMClient
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
+import json_utils
 
 MAX_INTENT_SUMMARY = 15  # Synthesis 時最多傳入幾篇的 intent 摘要
 
@@ -30,11 +31,8 @@ def _safe_gen(llm: LLMClient, prompt: str, temperature: float,
 
 
 def _clean_json(raw: str) -> str:
-    """去除 markdown fence 並抽取最外層 JSON 物件。"""
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"\s*```\s*$", "", raw, flags=re.MULTILINE).strip()
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    return m.group(0) if m else raw
+    """去除 markdown fence 並抽取最外層 JSON 物件（共用 json_utils）。"""
+    return json_utils.clean_json_str(raw)
 
 
 def label_clusters(clusters_dict: Dict, llm: LLMClient) -> None:

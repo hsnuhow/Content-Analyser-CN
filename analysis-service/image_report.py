@@ -23,6 +23,7 @@ import re
 import socket
 import urllib.parse
 import urllib.request
+import json_utils
 from typing import Callable, Dict, List
 from urllib.parse import urlparse
 
@@ -245,11 +246,9 @@ def _vision_prompt(topic: str) -> str:
 
 
 def _parse_vision_json(text: str) -> Dict:
-    t = re.sub(r"^```(?:json)?\s*", "", (text or "").strip(), flags=re.MULTILINE)
-    t = re.sub(r"\s*```\s*$", "", t, flags=re.MULTILINE).strip()
-    m = re.search(r"\{.*\}", t, re.DOTALL)
+    """清理 + json.loads；失敗回 {"raw": ...} fallback（共用 json_utils）。"""
     try:
-        return json.loads(m.group(0) if m else t)
+        return json.loads(json_utils.clean_json_str(text))
     except Exception:
         return {"raw": (text or "")[:300]}
 

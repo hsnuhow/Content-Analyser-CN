@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Tuple
 
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
+import json_utils
 
 DENOISE_MODEL = "gemini-2.5-flash"   # 定案：2.5-flash + thinking off（下方 conditional）；保時捷 YT 3 篇 3/3 降噪驗證通過
 DENOISE_LOCATION = "us-central1"
@@ -82,10 +83,8 @@ _PROMPT = (
 
 
 def _clean_json(raw: str) -> str:
-    raw = re.sub(r"^```(?:json)?\s*", "", (raw or "").strip(), flags=re.MULTILINE)
-    raw = re.sub(r"\s*```\s*$", "", raw, flags=re.MULTILINE).strip()
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    return m.group(0) if m else raw
+    """去除 markdown fence 並抽取最外層 JSON 物件（共用 json_utils）。"""
+    return json_utils.clean_json_str(raw)
 
 
 def _denoise_one(text: str, project_id: str, log: Callable[[str], None]) -> Tuple[str, Dict, Dict]:

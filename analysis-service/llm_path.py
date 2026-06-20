@@ -18,24 +18,15 @@ from typing import List, Dict, Any, Callable, Optional
 
 from llm_client import LLMClient
 from prompt_safety import INJECTION_GUARD, wrap_untrusted
+import json_utils
 
 INTENT_BATCH_SIZE = 5   # 每批處理幾篇文章
 INTENT_MAX_WORKERS = 4  # 意圖萃取批次的並行上限（避免觸發 LLM rate limit）
 
 
 def _parse_llm_json(raw: str) -> str:
-    """C2: 穩健清理 LLM 回傳，去除 markdown 包裝後抽取 JSON 物件。
-    LLM 有時會在 JSON 前後加說明文字或 ```json``` fence，導致 json.loads 失敗。
-    """
-    # 移除 markdown code fence（含 ```json 與 ``` 開關）
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-    raw = re.sub(r"\s*```\s*$", "", raw, flags=re.MULTILINE)
-    raw = raw.strip()
-    # 若 JSON 物件前後仍有多餘文字，用 regex 抽取最外層 {...}
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return match.group(0)
-    return raw
+    """穩健清理 LLM 回傳並抽取最外層 JSON 物件字串（共用 json_utils）。"""
+    return json_utils.clean_json_str(raw)
 MAX_TEXT_FOR_INTENT = 2000   # 逐篇意圖萃取時，每篇最多取前 N 字（標準）
 MAX_TEXT_FOR_QUAL = 2500     # 跨篇質化分析時，每篇最多取前 N 字（標準）
 MAX_ARTICLES_FOR_QUAL = 30   # 質化分析最多取前 N 篇（標準）
