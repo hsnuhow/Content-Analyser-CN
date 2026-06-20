@@ -907,6 +907,8 @@ users/{email}                     doc ID 即 email（權威來源）
 projects/{project_id}             頂層，多人協作
   title / description / owner: string
   members: map                    {email: "editor"|"viewer"}
+  member_emails: array            成員 email 陣列（= members.keys()，與 members 同步維護）；
+                                  供 list_projects 用 array_contains 索引查詢取代全表掃描（N+1 修正）
   llm_config: map                 {provider(gemini|claude|openai), model, api_key, temperature, thinking,
                                    search_extent, max_output_tokens, top_p, input_scale}（Owner 設定）
   token_usage_total: int          ⭐用戶付 token 累計（各分析完成時 Increment；跟專案走，顯示於專案頁）
