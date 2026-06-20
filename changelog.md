@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-21 重構：抽取共用 json_utils，去除 4 份重複 LLM-JSON 清理（已部署 00053）
+技術債暫緩清單第一項（先補測試再去重）。
+- 新增 `analysis-service/json_utils.py`：`clean_json_str`（去 fence + 抽最外層 {...}，含 None 防護）/ `parse_json_obj`。
+- llm_path / synthesis / denoise `_clean_json`、image_report `_parse_vision_json` 全委派之；函式名與呼叫點不變，行為等價（對 None 更安全）。
+- 先補 `tests/test_json_utils.py`（14 例 characterization）鎖行為再去重；36 tests 全過。僅 analysis-pipeline。
+
 ## 2026-06-20 補強：全系統 code review 後技術債清理 A–D（已部署）
 多代理審查四服務 + 文件後，依序修正並部署（分支 chore/tech-debt-cleanup → main）。
 - **A 安全修正（crawler 00075 / analysis 00052 / search-extent 00007）**：
