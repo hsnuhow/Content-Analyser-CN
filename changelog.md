@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-06-20 新增：Cloudflare 資安防護 + 來源鎖定（方案 B，已部署）
+為正式網域 insightout.annexix.cc 掛上 Cloudflare 防護，並封住 *.run.app 直打繞過。
+- **content-analyser 來源鎖定守衛**：`app/__init__.py` before_request 驗 `X-Origin-Token`（Cloudflare 注入）。
+  分段旗標：未設密鑰→停用；設了但 `ENFORCE_ORIGIN_TOKEN`≠1→軟模式（只記 log）；=1→缺/錯標頭 403。
+  密鑰 `ORIGIN_VERIFY_TOKEN`（Secret Manager，與 Cloudflare Transform Rule 注入值一致）。
+- **Cloudflare（annexix.cc，Free 方案，經 REST API 設定）**：
+  - insightout.annexix.cc 開橘雲代理（proxied=true）→ 自動 DDoS、隱藏來源 IP、邊緣 TLS、免費受管規則。
+  - Transform Rule（http_request_late_transform）：對 `http.host eq insightout.annexix.cc` 注入 `X-Origin-Token`。
+  - SSL 模式 Full（原已是）；Bot Fight Mode 待手動開（臨時 token 無 Bot Management 權限）。
+  - 自訂 WAF 規則（http_request_firewall_custom，附加於既有「非台 IP managed_challenge」之後）：block 常見漏洞/掃描路徑（.php/.env/.git/.sql/.bak/.ini/parameters.yml/phpinfo/phpmyadmin/wp-/.aws/.ssh），邊緣即擋、不耗 Cloud Run。實測 /phpinfo.php /wp-login.php /.env=403、首頁=302。
+- **上線序列（軟→強，可秒退）**：守衛軟模式部署(00067)→ Cloudflare 設定 → 刷新載 token v2(00068)
+  → 驗證注入（cf-probe 無「缺/錯」log、direct-probe 有）→ `ENFORCE_ORIGIN_TOKEN=1`(00069)。
+- **驗證**：run.app 直連=403、insightout 經 CF=302。log 證實掃描器正直打 run.app（/phpinfo.php、/.env.js…），現已被擋。
+- 影響：僅 content-analyser；content-crawler / analysis-pipeline 仍 ingress=all + 各自 X-API-Key，外部 Colab 不受影響。
+
 ## 2026-06-20 修正：報告 §3.2 情感/好感度消失（Cloud NL 逾時被降級）（未部署）
 循環扇最新報告好感度沒出來、編號 3.1→4 中間缺 §3.2。根因：Cloud NL（run_entities_sentiment）
 **逐篇序列**跑（最多 25 篇 × 2 次 API：實體+情感），合併分析篇數多時 >120s NL_DEADLINE → 被降級略過
