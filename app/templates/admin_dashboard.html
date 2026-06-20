@@ -117,7 +117,7 @@
               <div class="form-check form-switch fs-5 d-flex align-items-center gap-2">
                 <input class="form-check-input" type="checkbox" role="switch"
                        {% if tier3_enabled %}checked{% endif %}
-                       onclick="this.form.submit()" style="cursor:pointer">
+                       data-submit-form style="cursor:pointer">
                 <span class="badge bg-{% if tier3_enabled %}success{% else %}secondary{% endif %}">
                   {{ '已開啟' if tier3_enabled else '已關閉' }}
                 </span>
@@ -141,7 +141,7 @@
                 回收 Firestore 空間。不影響專案內已保存的資料集與報告。
               </small>
               <form method="POST" action="{{ url_for('admin_bp.cleanup_orphans') }}" class="d-flex gap-2"
-                    onsubmit="return confirm('確定清除超過指定天數的已結束任務暫存？');">
+                    data-confirm="確定清除超過指定天數的已結束任務暫存？">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="input-group input-group-sm" style="max-width:200px">
                   <span class="input-group-text">保留天數</span>
@@ -190,7 +190,7 @@
             </div>
             <div class="col-md-2">
               <button type="submit" class="btn btn-warning w-100"
-                      onclick="return confirm('確定更新此金鑰？此操作不可還原。')">
+                      data-confirm-click="確定更新此金鑰？此操作不可還原。">
                 更新金鑰
               </button>
             </div>

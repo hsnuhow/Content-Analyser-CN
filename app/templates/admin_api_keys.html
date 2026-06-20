@@ -18,7 +18,7 @@
     <p class="mb-2 small">權限：{{ new_key.permissions | join(', ') }}　|　<strong class="text-danger">請立即複製，此金鑰不會再次顯示。</strong></p>
     <div class="input-group">
       <input type="text" class="form-control font-monospace" value="{{ new_key.raw_key }}" id="newkey" readonly>
-      <button class="btn btn-outline-primary" onclick="navigator.clipboard.writeText(document.getElementById('newkey').value); this.textContent='已複製';">複製</button>
+      <button type="button" class="btn btn-outline-primary" data-copy-target="newkey">複製</button>
     </div>
   </div>
   {% endif %}
@@ -106,7 +106,7 @@ requests.get(f"{CRAWLER}/api/crawl/{job['job_id']}",
                 <td>
                   {% if k.get('is_active') %}
                   <form method="POST" action="{{ url_for('admin_bp.revoke_api_key_route', key_id=k.get('key_id')) }}" class="d-inline"
-                        onsubmit="return confirm('確定撤銷此金鑰？使用此金鑰的工具將立即失效。')">
+                        data-confirm="確定撤銷此金鑰？使用此金鑰的工具將立即失效。">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="btn btn-sm btn-outline-danger">撤銷</button>
                   </form>

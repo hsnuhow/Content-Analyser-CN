@@ -81,7 +81,7 @@
         </form>
         <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ e.slug }}">✏️ 編輯</button>
         <form method="POST" action="{{ url_for('admin_bp.knowledge_delete', slug=e.slug) }}"
-              onsubmit="return confirm('確定刪除專家「{{ e.label }}」？已產生的歷史延伸報告不受影響。');">
+              data-confirm="確定刪除專家「{{ e.label }}」？已產生的歷史延伸報告不受影響。">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button class="btn btn-sm btn-outline-danger" type="submit">🗑</button>
         </form>
@@ -123,7 +123,7 @@
           <li class="list-group-item d-flex justify-content-between align-items-center py-1">
             <span class="small">📄 {{ d.filename }} <span class="text-muted">（{{ d.chars }} 字{% if d.indexed %}，已索引{% endif %}）</span></span>
             <form method="POST" action="{{ url_for('admin_bp.knowledge_doc_delete', slug=e.slug, doc_id=d.id) }}"
-                  onsubmit="return confirm('刪除「{{ d.filename }}」並重建索引？');">
+                  data-confirm="刪除「{{ d.filename }}」並重建索引？">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-sm btn-outline-danger py-0" type="submit">刪除</button>
             </form>
