@@ -70,7 +70,7 @@
 ### 3.1 設計原則
 
 1. **計算與介面分離**：Web UI 只是一個殼，所有計算都在獨立的 Cloud Run 服務中執行
-2. **服務完全獨立**：三個服務之間只透過 HTTP API 溝通，不共用程式碼
+2. **服務完全獨立**：四個服務之間只透過 HTTP API 溝通，不共用程式碼
 3. **資料蒐集不屬於任何服務**：使用者用任何工具蒐集原料，再送入分析引擎
 4. **任何客戶端都能呼叫**：Colab、Claude Cowork、Web UI 使用相同的 API 介面
 
@@ -147,7 +147,7 @@
 
 ---
 
-## 4. 三個服務的詳細定義
+## 4. 四個服務的詳細定義
 
 ### 4.1 content-crawler（爬取引擎）
 
@@ -368,6 +368,28 @@ Cloud Run 規格（預估）：
 
 ---
 
+### 4.4 search-extent（搜尋情報層）
+
+第四個獨立服務，將分析從「已蒐集內容」延伸到「外部真實搜尋情報」，為報告的「用戶搜尋情境」提供
+真實接地（grounding）。由 analysis-pipeline 經 HTTP + `X-API-Key` 呼叫；資源約 1Gi。
+
+| 項目 | 說明 |
+|------|------|
+| **職責** | 關鍵字擴展、內容發現、品牌聲量探勘等外部搜尋情報 |
+| **不做** | 爬取頁面、產出最終報告、認識 OAuth 使用者 |
+| **呼叫方** | analysis-pipeline（主要）、持有金鑰的外部工具 |
+
+**API 端點：**
+- `GET /health` — 健康檢查（無需金鑰）
+- `POST /api/expand` — A 關鍵字延伸（Google Ads Keyword Planner；目前阻塞於 `ADS_DEVELOPER_TOKEN` 核准）
+- `POST /api/discover` — B 內容發現（依主題探勘相關內容；靠 Vertex AI grounding，已上線）
+- `POST /api/brand-presence` — D 品牌聲量探勘（探查品牌在搜尋結果的能見度；靠 Vertex AI grounding，已上線）
+
+> 部署獨立於核心三服務之外，`deploy.sh` 不含本服務；需單獨部署並對 analyser / analysis 注入
+> `SEARCH_EXTENT_SERVICE_URL` 與 `SEARCH_EXTENT_API_KEY`。環境變數見 [CLAUDE.md](CLAUDE.md) 附錄 D。
+
+---
+
 ## 5. 使用者、授權與 Project 權限
 
 ### 5.1 使用對象
@@ -525,7 +547,7 @@ status = requests.get(
 |------|------|------|
 | 平台 | Firebase | 整體系統放在 Firebase 生態系 |
 | 資料庫 | Firestore | 唯一主要資料儲存 |
-| 運算 | Google Cloud Run | 三個服務的容器運行環境 |
+| 運算 | Google Cloud Run | 四個服務的容器運行環境 |
 | AI 輔助 | Vertex AI | 視需求使用，技術棧討論時確認 |
 | 金鑰管理 | Google Secret Manager | 系統層級金鑰 |
 
@@ -615,11 +637,18 @@ Firestore
 │     └── analyses/           分析任務
 ├── analysis_jobs/            analysis-pipeline 自管的非同步任務狀態
 ├── crawl_jobs/               content-crawler 自管的非同步爬取任務狀態
+├── discoveries/             search-extent 內容發現結果（/api/discover）
+├── brand_scans/             search-extent 品牌聲量探勘結果（/api/brand-presence）
+├── system_token_usage/      系統付費的 token 記帳（後台檢視）
 └── api_keys/                 外部工具金鑰（含 hash、permissions）
 ```
 
-> 實作狀態（2026-06-13）：`system`、`users`、`projects`、`datasets`、`analyses`、
-> `analysis_jobs`、`crawl_jobs`、`api_keys` 均已實作。
+> ⚠️ 本概覽為快速索引；**完整、權威的 Firestore schema 以 [CLAUDE.md](CLAUDE.md) 附錄 C 為準**
+> （含各欄位、子集合與服務自管 collection 的完整定義）。
+>
+> 實作狀態（2026-06-20）：`system`、`users`、`projects`、`datasets`、`analyses`、
+> `analysis_jobs`、`crawl_jobs`、`api_keys` 均已實作；search-extent 的 `discoveries`、
+> `brand_scans` 與 token 記帳的 `system_token_usage` 隨對應功能上線。
 > `users/.../usage_log`、`analyses/.../inputs` 為未來功能，尚未實作。
 
 ---

@@ -30,6 +30,8 @@ set -e
 #   GOOGLE_CLIENT_ID  - Google OAuth Client ID
 #   GOOGLE_CLIENT_SECRET - Google OAuth Client Secret
 #   FLASK_SECRET_KEY  - Flask Session 加密金鑰
+#   ORIGIN_VERIFY_TOKEN - content-analyser Cloudflare 來源鎖定守衛密鑰
+#                     （與 Cloudflare Transform Rule 注入的 X-Origin-Token 一致；缺則守衛靜默停用）
 #   PROXY_HOST / PROXY_PORT / PROXY_USER / PROXY_PASS / PROXY_PROVIDER
 #                     - content-crawler Tier 3 住宅代理憑證（Decodo），由後台或維運者建立
 #

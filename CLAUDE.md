@@ -622,7 +622,7 @@ gcloud secrets versions access ...
 |------|------|
 | 主程式不 import crawler.py | 爬蟲是獨立服務，主程式不應依賴其內部模組 |
 | 主程式不安裝 Chrome / Selenium | 爬蟲容器才裝，主程式保持輕量 |
-| 爬蟲服務不存取 Firestore | 只做爬取，回傳結果，不持久化 |
+| 爬蟲服務只自管 job/learning 相關 collection（`crawl_jobs` / `learned_selectors` / `selector_candidates` / `*_jobs` / `crawl_telemetry` 等），不碰 content-analyser 的 `users` / `projects` | 爬蟲非同步任務狀態與選擇器學習需自管持久化；但不得跨界存取主程式的使用者/專案資料 |
 | 爬蟲服務不做使用者驗證 | 只驗證 X-API-Key，不知道 OAuth 使用者 |
 
 ### 9.3 安全編碼
@@ -1020,6 +1020,8 @@ embeddings/{key}                  embedding 內容快取（key=sha256(model:dim:
 | `ANALYSIS_SERVICE_URL` | deploy.sh 注入 | 分析服務 URL |
 | `ANALYSIS_API_KEY` | Secret Manager | 呼叫分析金鑰 |
 | `GENAI_API_KEY` | Secret Manager | 爬蟲 selector 輔助 |
+| `ORIGIN_VERIFY_TOKEN` | Secret Manager | Cloudflare 來源鎖定守衛密鑰（與 Transform Rule 注入的 X-Origin-Token 一致；缺則守衛靜默停用）|
+| `ENFORCE_ORIGIN_TOKEN` | Cloud Run env | `1` = 強制阻擋缺/錯 X-Origin-Token（403）；軟模式（其餘值）只記 log 不擋 |
 | `FLASK_DEBUG` | 本地 `.env` | `1` = Dev 自動登入 |
 
 ## content-crawler
@@ -1074,7 +1076,7 @@ echo -n "value" | gcloud secrets versions add NAME --data-file=- # 更新
 gcloud secrets list --format="table(name)"        # 確認（不讀值）
 ```
 
-必要 secrets：`FLASK_SECRET_KEY`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`CRAWLER_API_KEY`、`ANALYSIS_API_KEY`、`GENAI_API_KEY`
+必要 secrets：`FLASK_SECRET_KEY`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`CRAWLER_API_KEY`、`ANALYSIS_API_KEY`、`GENAI_API_KEY`、`ORIGIN_VERIFY_TOKEN`
 search-extent secrets：`SEARCH_EXTENT_API_KEY`、`ADS_DEVELOPER_TOKEN`、`ADS_CLIENT_ID`、`ADS_CLIENT_SECRET`、`ADS_REFRESH_TOKEN`、`ADS_LOGIN_CUSTOMER_ID`
 
 ---

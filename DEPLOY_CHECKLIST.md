@@ -5,8 +5,10 @@
 >
 > ⚠️ **與現況的差異（本檔成文時為三服務，現為四服務）**：
 > - 現有第四服務 **search-extent**（§7 真實接地），本清單未涵蓋，需單獨部署（阻塞於 Google Ads dev token）。
-> - Secret 除下列 6 個外，另有 **`PROXY_HOST/PORT/USER/PASS/PROVIDER`**（Tier 3 代理，可由後台建立）
->   與 search-extent 的 **`SEARCH_EXTENT_API_KEY` / `ADS_*`**。完整清單見 [MAINTENANCE.md](MAINTENANCE.md) §3。
+> - Secret 除下列核心 secrets 外，content-analyser 另需 **`ORIGIN_VERIFY_TOKEN`**（Cloudflare 來源
+>   鎖定守衛密鑰，缺則守衛靜默停用）；content-crawler 另有 **`PROXY_HOST/PORT/USER/PASS/PROVIDER`**
+>   （Tier 3 代理，可由後台建立）與 search-extent 的 **`SEARCH_EXTENT_API_KEY` / `ADS_*`**。
+>   完整清單見 [MAINTENANCE.md](MAINTENANCE.md) §3。
 
 **產品：** InsightOut（insightout.annexix.cc）  
 **GCP Project：** content-analyser-cn  
@@ -44,7 +46,7 @@
 | 2 | 啟用 7 個 GCP API | Cloud Console | 必要 |
 | 3 | Firebase 專案 + Firestore | Firebase Console | 必要 |
 | 4 | Google OAuth 憑證 | Cloud Console | 必要 |
-| 5 | 6 個 Secret Manager 金鑰 | 自行產生 | 必要 |
+| 5 | 7 個 Secret Manager 金鑰 | 自行產生 | 必要 |
 | 6 | 用戶的 Gemini / Claude Key | 用戶自備 | 用戶自理 |
 | 7 | IAM 權限（Vertex AI）| Cloud Console | 必要 |
 
@@ -151,7 +153,7 @@ openssl rand -hex 32
 # → 記下這個值，等下用
 ```
 
-### 5.2 建立全部 6 個 secrets
+### 5.2 建立全部 7 個 secrets
 
 ```bash
 # 1. Flask Session 加密金鑰
@@ -177,6 +179,12 @@ echo -n "你的-client-secret" | \
 # 6. 爬蟲 selector 輔助用的 Gemini Key（你自己的 Gemini API Key）
 echo -n "你的-gemini-key" | \
   gcloud secrets create GENAI_API_KEY --data-file=-
+
+# 7. Cloudflare 來源鎖定守衛密鑰（content-analyser）
+#    必須與 Cloudflare Transform Rule 注入的 X-Origin-Token 同值；
+#    缺此 secret 時守衛靜默停用（不阻擋）。
+echo -n "$(openssl rand -hex 32)" | \
+  gcloud secrets create ORIGIN_VERIFY_TOKEN --data-file=-
 ```
 
 ### 5.3 確認全部建立完成
@@ -185,7 +193,7 @@ echo -n "你的-gemini-key" | \
 gcloud secrets list --format="table(name)"
 ```
 
-預期看到 6 個：
+預期看到 7 個：
 ```
 FLASK_SECRET_KEY
 CRAWLER_API_KEY
@@ -193,6 +201,7 @@ ANALYSIS_API_KEY
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GENAI_API_KEY
+ORIGIN_VERIFY_TOKEN
 ```
 
 ---
