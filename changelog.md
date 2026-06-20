@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-06-21 補強：CSP 移除 script-src 'unsafe-inline'（8 頁 inline JS 全外部化，已部署）
+技術債暫緩清單最後一項。先建可重用範式、逐頁遷移 + 逐頁 Chrome MCP 實際驗證，最後才移除 unsafe-inline。
+- **範式**：inline `<script>` → `static/js/*.js` + addEventListener；Jinja 變數走 `data-*` 屬性；
+  Markdown 走 `<script type="application/json">` 資料島；簡單 confirm/submit/copy 走 app.js 全域 helper
+  （`data-confirm` / `data-confirm-click` / `data-submit-form` / `data-copy-target`，事件委派、只對帶屬性元素生效）。
+- **遷移 8 頁**：login、admin_terms、admin_selector_candidates、admin_api_keys/users/knowledge/dashboard（app.js helper）、
+  derived_report、analysis_detail、dataset_detail、project_detail。新增 7 個 per-page js + app.js helper。
+- **CSP**：`script-src` 由 `'self' 'unsafe-inline' cdn.jsdelivr.net` → `'self' cdn.jsdelivr.net`（移除 unsafe-inline）。
+  `style-src` 仍保留 unsafe-inline（inline 樣式尚多、XSS 風險低，後續處理）。
+- **驗證**：每頁部署後 Chrome MCP 實測（互動 + console），最後嚴格 CSP 下確認 project_detail（模型選擇器/slider/按鈕）、
+  analysis_detail（markdown 45344 字渲染）全正常 = 無漏網 inline。擴充注入的 inline script 跑在 isolated world、不受頁面 CSP 管。
+- 影響：僅 content-analyser。XSS 第二道防線補滿（DOMPurify 被繞過時，注入的 inline script 仍會被 CSP 拒絕執行）。
+
 ## 2026-06-21 重構：抽取共用 json_utils，去除 4 份重複 LLM-JSON 清理（已部署 00053）
 技術債暫緩清單第一項（先補測試再去重）。
 - 新增 `analysis-service/json_utils.py`：`clean_json_str`（去 fence + 抽最外層 {...}，含 None 防護）/ `parse_json_obj`。
