@@ -33,10 +33,8 @@
           integrity="sha384-9Md4MlJk24bo2Ifubp0FbKhuES4/iAwyTGMeWpBG4RoHGTKygpEGEpOYhEQxbfa9" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.10/dist/purify.min.js"
           integrity="sha384-eguRoJERj8ghOpzO//Rl7+ScQsQIR1cH+ajll7+fG+IpbNPlkZsQn9h8ccr+wPXx" crossorigin="anonymous"></script>
-  <script>
-    const md = {{ markdown | tojson }};
-    document.getElementById('markdown-output').innerHTML = DOMPurify.sanitize(marked.parse(md));
-  </script>
+  <script type="application/json" id="derived-md">{{ markdown | tojson }}</script>
+  <script src="{{ url_for('static', filename='js/derived_report.js') }}"></script>
   <style>
     #markdown-output h1 { font-size: 1.6rem; margin-top: 1.5rem; }
     #markdown-output h2 { font-size: 1.3rem; margin-top: 1.5rem; border-bottom: 1px solid #dee2e6; padding-bottom: .3rem; }
