@@ -1,0 +1,4 @@
+# 開發/測試用依賴（正式映像不含；本地或 CI 安裝）。
+# 用法：python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt
+pytest==8.3.4
+pytest-mock==3.14.0
