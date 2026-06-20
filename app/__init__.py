@@ -42,6 +42,14 @@ def create_app():
     # 縮短「admin 撤銷後既有 session 仍有效」的視窗（避免無到期時間的永久 cookie）。
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
 
+    # 來源鎖定（方案 B）：只接受經 Cloudflare（注入 X-Origin-Token 標頭）的請求，擋
+    # 「直接打 *.run.app 公開網址」繞過 Cloudflare WAF。密鑰由 Secret Manager 注入
+    # （ORIGIN_VERIFY_TOKEN），須與 Cloudflare Transform Rule 注入的值一致。
+    # 分段上線：ENFORCE_ORIGIN_TOKEN=1 才阻擋(403)；其餘值（含未設）只記 log 不阻擋，
+    # 避免 Cloudflare 尚未設好時把自己鎖在門外。未設密鑰（本地開發）→ 守衛停用。
+    origin_token = os.environ.get('ORIGIN_VERIFY_TOKEN', '')
+    enforce_origin = os.environ.get('ENFORCE_ORIGIN_TOKEN') == '1'
+
     # [Fix] Session Cookie Configuration for Preview/Dev
     # In production (Cloud Run), we want Secure cookies.
     # In development (Preview), we need to relax this to allow cookies over HTTP or complex proxies.
@@ -74,6 +82,23 @@ def create_app():
         server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
         client_kwargs={'scope': 'openid email profile'}
     )
+
+    # 來源鎖定守衛（方案 B，見上方設定）：註冊在最前面，先於 session 與路由處理。
+    # health 探活與 OAuth callback 不豁免——上線時 Cloudflare 對整個網域注入標頭即可；
+    # Cloud Run 預設用 TCP 啟動探針（非 HTTP），不受影響。enforce 前會先看 log 驗證。
+    @app.before_request
+    def _verify_origin_token():
+        if not origin_token:
+            return  # 未設密鑰 → 守衛停用（本地開發 / 尚未導入）
+        import hmac
+        from flask import request, abort
+        provided = request.headers.get('X-Origin-Token', '')
+        if provided and hmac.compare_digest(provided, origin_token):
+            return  # 合法來源（經 Cloudflare 注入標頭）
+        if enforce_origin:
+            abort(403)  # 直打 run.app 或缺/錯標頭 → 拒絕
+        print(f"[OriginGuard] 缺/錯 X-Origin-Token（log-only，未阻擋）path={request.path}",
+              flush=True)
 
     # 每次請求標記 session 為 permanent → 套用 PERMANENT_SESSION_LIFETIME 並滑動續期
     # （閒置逾 12 小時自動失效；配合白名單 TTL 回查使撤銷及時生效）。
