@@ -240,30 +240,47 @@ def term_filters_suggest_all():
     """全庫學習：聚合『所有專案』的爬蟲文本，一次找候選垃圾詞（優化引擎用）。
     比單一專案更準（跨來源歧異有更多論壇/影音樣本）。文本量大時取樣上限 MAX_DOCS。"""
     MAX_DOCS = 400
+    # 效能：此處三層巢狀（每 project → 每 dataset → _load_dataset_items 各一次查詢），
+    # dataset 總數無上限時 Firestore 讀取會爆量。除了既有 MAX_DOCS（文本筆數上限），
+    # 另加 MAX_SCAN_DATASETS（掃描的 dataset 數上限）作雙重保護；達上限即停並標明為部分樣本。
+    MAX_SCAN_DATASETS = 200
     from .project_routes import _load_dataset_items
     contents = []
+    scanned_datasets = 0
+    truncated = False
     try:
         for proj in db.collection('projects').stream():
             pid = proj.id
             for ds in (db.collection('projects').document(pid)
                        .collection('datasets').stream()):
+                if scanned_datasets >= MAX_SCAN_DATASETS:
+                    truncated = True
+                    raise StopIteration
+                scanned_datasets += 1
                 for it in _load_dataset_items(pid, ds.id):
                     txt = it.get('content') or it.get('text')
                     if txt and it.get('status', 'success') != 'failed':
                         contents.append({'url': it.get('url', ''),
                                          'title': it.get('title', ''), 'text': txt})
                         if len(contents) >= MAX_DOCS:
+                            truncated = True
                             raise StopIteration
     except StopIteration:
         pass
     except Exception as e:
         return jsonify({'error': f'讀取全庫資料失敗：{e}'}), 500
+    if truncated:
+        print(f"[term_suggest_all] 已達掃描上限（datasets={scanned_datasets}, "
+              f"docs={len(contents)}），結果為部分樣本", flush=True)
     if not contents:
         return jsonify({'error': '全庫沒有可分析的爬蟲文本'}), 400
     from .analysis_client import suggest_filters as _sf
     res = _sf(contents, max_candidates=80, timeout=180)
     if isinstance(res, dict):
-        res['scope_label'] = f'全庫（{len(contents)} 篇）'
+        label = f'全庫（{len(contents)} 篇）'
+        if truncated:
+            label += '・部分樣本（已達掃描上限）'
+        res['scope_label'] = label
     return jsonify(res)
 
 
@@ -499,6 +516,10 @@ def _aggregate_system_usage():
 def admin_usage():
     """使用量總覽：彙整各用戶 usage_log，依 action 統計次數與內容量。
     另含系統付 token 記帳（system_token_usage：降噪/embedding 等系統成本）。"""
+    # 效能：usage_log 子集合會隨時間無限增長，原本無上限 stream() 整個子集合，
+    # 用戶量×事件量大時 Firestore 讀取與記憶體都會爆量。改為每用戶只取最近 N 筆
+    # （依 'at' SERVER_TIMESTAMP 由新到舊），彙總改為「近 N 筆樣本」。
+    MAX_LOGS_PER_USER = 500
     summary = []
     recent = []
     try:
@@ -510,7 +531,9 @@ def admin_usage():
             total_count = 0
             try:
                 logs = (db.collection('users').document(email)
-                        .collection('usage_log').stream())
+                        .collection('usage_log')
+                        .order_by('at', direction=firestore.Query.DESCENDING)
+                        .limit(MAX_LOGS_PER_USER).stream())
             except Exception:
                 logs = []
             n_events = 0

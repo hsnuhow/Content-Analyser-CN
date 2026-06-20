@@ -17,7 +17,6 @@ Phase 3 將重建：
 """
 import os
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
-from firebase_admin import firestore
 from .services import db, get_admin_email, ensure_user, update_last_login, get_user
 from .auth_guards import login_required, is_dev_env
 from . import oauth
@@ -56,35 +55,17 @@ def pending():
     return render_template('pending.html', user=user)
 
 
-@bp.route('/profile', methods=['GET', 'POST'])
+@bp.route('/profile', methods=['GET'])
 @login_required
 def profile():
-    user_email = session['user']['email']
-    user_ref = db.collection('users').document(user_email)
+    """個人設定頁。
 
-    if request.method == 'POST':
-        # Phase 0：保留 API Key 儲存邏輯，Phase 3 將擴充為完整 LLM 設定
-        api_key = request.form.get('gemini_api_key')
-        try:
-            user_ref.set({
-                'gemini_api_key': api_key,
-                'updated_at': firestore.SERVER_TIMESTAMP
-            }, merge=True)
-            flash('API Key 已更新。', 'success')
-        except Exception as e:
-            print(f"[Profile] Failed to update key: {e}")
-            flash('更新失敗，請稍後再試。', 'danger')
-        return redirect(url_for('main_bp.profile'))
-
-    current_key = ''
-    try:
-        doc = user_ref.get()
-        if doc.exists:
-            current_key = doc.to_dict().get('gemini_api_key', '')
-    except Exception as e:
-        print(f"[Profile] Failed to fetch key: {e}")
-
-    return render_template('profile.html', current_key=current_key)
+    安全（M-…）：原本在此寫入並明文回填 users/{email}.gemini_api_key，
+    但實際分析/爬蟲所用金鑰一律取自專案層 llm_config.api_key
+    （見 project_routes.py），此欄為 Phase 0 殘留、無任何讀取點。
+    已移除寫入與明文回填，避免把使用者金鑰以明文存進 Firestore 並輸出到 HTML。
+    """
+    return render_template('profile.html')
 
 
 @bp.route('/auth')
