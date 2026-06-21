@@ -742,32 +742,43 @@ CLIENT：Web UI / Google Colab / Claude Cowork
 ```
 Content-Analyser-CN/
 ├── main.py / requirements.txt / Dockerfile     主程式（無 Chrome）
-├── deploy.sh                                    部署腳本（crawler/analysis/analyser；search-extent 另行手動）
+├── deploy.sh / rollback.sh / rotate-key.sh      部署 / 流量回滾 / 金鑰輪換
 ├── setup_admin.sh.example                       管理員初始化範本
 ├── CLAUDE.md / product_guideline.md / development_plan.md / changelog.md
+├── DEVELOPMENT.md / MAINTENANCE.md              開發/維護支柱 hub（索引各子文件）
+├── docs/ssrf-posture.md                         SSRF 防護決策紀錄
+├── tests/                          測試（bash tests/run.sh 免 pytest；FakeFirestore 替身）
 ├── app/                            content-analyser（控制平面）
-│   ├── __init__.py                 App Factory + OAuth + Blueprint 註冊
-│   ├── routes.py                   主路由 + 白名單流程（/pending）
-│   ├── project_routes.py           Project CRUD + 分析提交/查看/下載
-│   ├── admin_routes.py             /admin：用戶管理、服務監控、金鑰
-│   ├── services.py                 Firebase / Secret / 用戶管理函式
-│   ├── crawler_client.py           爬蟲服務 health check 客戶端
-│   ├── analysis_client.py          分析服務 HTTP 客戶端
-│   ├── worker.py                   （Phase 0 已清空，預留）
+│   ├── __init__.py                 App Factory + OAuth + Blueprint 註冊 + 安全標頭/來源鎖定
+│   ├── routes.py / admin_routes.py 主路由+白名單 / /admin（用戶·監控·金鑰·字詞·知識庫）
+│   ├── project_routes/             ⭐ Project/分析路由 package（2366 行單檔已拆）
+│   │   ├── __init__.py             核心：bp + 共用 helper + decorator + 子模組註冊
+│   │   ├── projects.py / analysis.py / datasets.py / discovery.py   四領域路由
+│   ├── 業務邏輯模組（route 變薄後抽出）：url_utils / datasets_store / dataset_export /
+│   │   doc_extract / analysis_store / dataset_sync / llm_models / project_lifecycle
+│   ├── services.py / auth_guards.py / pricing.py / kb_store.py
+│   ├── crawler_client.py / analysis_client.py / search_extent_client.py   三服務 HTTP 客戶端
 │   ├── templates/                  Jinja2 模板
-│   └── static/                     CSS / JS
-├── crawler-service/                content-crawler（獨立）
-│   ├── app.py / crawler.py / Dockerfile / requirements.txt / README.md
-└── analysis-service/               analysis-pipeline（獨立）
-    ├── app.py                      API 入口（非同步 job）
-    ├── pipeline.py                 主協調器（降噪前處理 → 雙路平行 → Synthesis）
-    ├── denoise.py                  逐字稿降噪前處理（口語/社群來源；系統 Vertex flash-lite，A 降噪+B 訊號）
-    ├── nlp_path.py                 Path 1：TF-IDF + Vertex AI 分群
-    ├── llm_path.py                 Path 2：搜尋意圖 + 質化分析
-    ├── synthesis.py                Synthesis LLM
-    ├── report.py                   Markdown 報告組裝
-    ├── llm_client.py               Gemini / Claude 統一介面
-    └── Dockerfile / requirements.txt
+│   └── static/                     CSS / JS（CSP：inline JS 已全外部化）
+├── crawler-service/                content-crawler（獨立，4Gi Chrome）
+│   ├── app.py                      API 入口（/api/scrape·crawl/batch·crawl/run worker…）
+│   ├── crawler.py                  HeadlessCrawler（抽取核心）
+│   ├── page_classify.py / text_clean.py   純函式啟發式（錯誤/封鎖頁判定·文字清理，已抽出+測試）
+│   ├── net_guard.py                SSRF 守門（is_safe_url 逐跳 + is_safe_ip）
+│   ├── crawl_job.py / task_queue.py 佇列 worker（Cloud Tasks，concurrency=1 防 OOM）
+│   ├── tiered_fallback.py / image_extract.py / research.py / site_learning.py
+│   └── Dockerfile / requirements.txt / CRAWLER_STRATEGY.md
+├── analysis-service/               analysis-pipeline（獨立，2Gi）
+│   ├── app.py                      API 入口（非同步 job）
+│   ├── pipeline.py                 主協調器（降噪前處理 → 雙路平行 → Synthesis）
+│   ├── denoise.py                  逐字稿降噪前處理（YT/FB；系統 Vertex 2.5-flash 無 thinking）
+│   ├── nlp_path.py / text_processing.py   Path 1：TF-IDF + Vertex 分群（文字層已抽 text_processing）
+│   ├── llm_path.py                 Path 2：搜尋意圖 + 質化分析
+│   ├── synthesis.py / report.py / llm_client.py / audience_reports.py / kb_index.py
+│   ├── token_usage.py / json_utils.py    Token 記帳 / JSON 清理（共用）
+│   └── Dockerfile / requirements.txt
+└── search-extent/                  search-extent（獨立，搜尋情報層）
+    └── app.py / README.md          /api/expand·discover·brand-presence（Vertex grounding）
 ```
 
 ## 角色與權限

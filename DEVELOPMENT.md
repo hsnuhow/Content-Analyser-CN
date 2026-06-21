@@ -39,9 +39,11 @@
 | [OPTIMIZATION.md](OPTIMIZATION.md) | 效能與技術債 backlog（每項：問題/影響/建議/優先級）。處理完移到 changelog 並移除 | 發現技術債、完成最佳化時 |
 | [SECURITY_INCIDENTS.md](SECURITY_INCIDENTS.md) | 安全事件記錄（prompt injection 等）+ 本平台高注入風險面與防範 | 遇到安全事件、或調整安全防範策略時 |
 | [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) | 前端現況、已知 bug、UIUX 待改、後端對接點（前端重設計交接用） | 前端交付/改版、頁面或對接點變動時 |
+| [tests/README.md](tests/README.md) | 測試環境指南：`bash tests/run.sh`（無 pytest 可直跑）+ pytest 相容、FakeFirestore 替身 | 新增測試、改測試機制時 |
+| [docs/ssrf-posture.md](docs/ssrf-posture.md) | SSRF 防護現況與決策紀錄（為何 metadata 不在網路層封、內網風險評估、回頭重評觸發條件） | SSRF 相關變動、架構新增內網服務時 |
 | [changelog.md](changelog.md) | 變更/部署歷史（每次修改與部署的完整記錄） | **每次修改/部署後**（強制）|
 
-> 安全事件與審查的修正彼此呼應（如 SSRF / LLM JSON 解析 / XSS）；做安全相關開發時兩份對照看。
+> 安全事件與審查的修正彼此呼應（如 SSRF / LLM JSON 解析 / XSS）；做安全相關開發時兩份對照看（[SECURITY_INCIDENTS.md](SECURITY_INCIDENTS.md) + [docs/ssrf-posture.md](docs/ssrf-posture.md)）。
 
 ---
 

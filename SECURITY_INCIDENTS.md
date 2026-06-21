@@ -90,3 +90,26 @@ InsightOut 的核心流程本身就是 prompt injection 的高風險面，務必
 - 守衛誤擋時：`gcloud run services update content-analyser --region asia-east1 --set-env-vars ENFORCE_ORIGIN_TOKEN=0`
   → 切回軟模式（只記 log 不擋），流量立即恢復；無須改程式碼或重 build。
 - 完全停用守衛：移除 `ORIGIN_VERIFY_TOKEN` 注入即靜默停用。
+
+---
+
+## 防護 #2：content-crawler 漏洞審查 + 三項修補（2026-06-21）
+
+crawler 是風險最高的服務（抓**任意外部 URL** + 跑 Chrome + 執行 JS + LLM 產生選擇器）。多代理徹底審查找到 1 High + 2 Medium + 2 Low，已修可利用三項，每項實跑爬蟲驗證、部署、push。
+
+### 🟠 High — SSRF 經 Chrome `driver.get` 繞過 net_guard
+- **情境**：`net_guard.safe_urlopen` 只擋 urllib 路徑；Chrome 自行解析 DNS + 自動跟隨 redirect，可被 **DNS rebinding**（TTL=0 翻 `169.254.169.254`）或 **redirect→內網**繞過，讀 GCP metadata（SA token）。涵蓋 scrape / extract-images / research 三端點（皆走 `_open`）。
+- **修法（app 層縱深）**：`net_guard.is_safe_ip(ip)`（重用 v4/v6 內網判定、fail-open）+ `_init_driver` 開 performance log + `_open` 後 `_assert_safe_remote_ip` 取主文件實際 `remoteIPAddress` 再驗，命中內網拋 `UnsupportedSiteError` 丟棄。
+- **為何不在網路層根治**：metadata 是 app 自己取 SA token 所需、且 link-local 不經 egress → 封不得。詳見 [docs/ssrf-posture.md](docs/ssrf-posture.md)。
+
+### 🟡 Medium — JSON-LD 抽取 regex ReDoS
+- `_extract_from_json_ld` 的 `(?:[^"\\]|\\.|\n)*` 歧義量詞（`|\n` 在 `re.DOTALL` 下與 `[^"\\]` 重疊），輸入是攻擊者可控整頁 HTML → 病態回溯風險。修：移除冗餘 `|\n`（行為等價）。
+
+### 🟡 Medium — 使用者金鑰明文落 Cloud Tasks 佇列
+- `/api/crawl/batch` 把 gemini_api_key 放進 task body → 明文持久化於佇列。修：改存 access-controlled 的 `crawl_jobs/{job_id}.gemini_api_key`（僅使用者金鑰），worker 讀回；系統金鑰只在 worker 從 env/Secret 解析、永不進佇列。
+
+### 🔵 Low（未處理，影響有限）
+- error 訊息夾帶完整 URL / 內部例外；背景 fallback（`CRAWLER_USE_QUEUE≠1` 時）無並行上限（已遷佇列，prod 走佇列）。
+
+### ✅ 已做對的防護（審查確認）
+urllib 逐跳 SSRF 重驗、API key `hmac.compare_digest`、LLM 選擇器只進 BeautifulSoup 不進 JS（無注入）、抓取讀取上限、proxy 帳密 `json.dumps` 編碼、金鑰不進 log。

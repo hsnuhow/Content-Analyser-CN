@@ -372,4 +372,4 @@ agent 自動化留待此 backlog。相關檔：`crawler-service/research.py`、`
 - 後台：`/admin/usage` 擴充——依服務/模型/用戶/專案彙總 token 與估算金額（系統付 vs 用戶付分開）。
 - 注意：分析/降噪在 analysis-pipeline，需把 token 數隨 job 狀態回傳或自行寫 Firestore；
   content-analyser 端彙整。先從「每次呼叫 log usage_metadata」起步，再做持久化與後台彙總。
-**狀態**：待開發（使用者 2026-06-17 要求列入；降噪當時已先口頭估算 ~6–8k tokens/篇）。
+**狀態**：✅ **已完成並上線、2026-06-21 行為驗證通過**。實作：`analysis-service/token_usage.py`（norm_usage/aggregate/write_system_usage）；用戶付→`analyses/{aid}.token_usage`（顯示於分析頁）、系統付→`system_token_usage`（顯示於 `/admin/usage`）；單價表抽成 `app/pricing.py`。驗證：後台 16 筆系統付 job（$0.20，by_category 正確）+ 專案頁逐分析用戶付明細（$0.0342），寫入/分類/估價/歸屬全對。Phase 2B（爬蟲選擇器計帳）亦已補。
