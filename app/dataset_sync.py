@@ -148,6 +148,30 @@ def _sync_crawling_dataset(pid: str, did: str, dataset: dict = None,
             update['recrawl_urls'] = firestore.DELETE_FIELD
         if dataset.get('auto_round'):
             update['auto_round'] = firestore.DELETE_FIELD
+
+        # ── P1：爬完自動觸發選擇器研究（抽取品質差的尾巴：失敗 + 掉到整頁 body）──
+        #   把「用戶手動點研究」改為「爬完自動對失敗尾巴跑」。每個 dataset 只觸發一次。
+        #   只有 editor+（allow_spawn）能觸發：有副作用、耗系統 Gemini token + Chrome。
+        #   failed 由 items 的 status 取（完整）；body_fallback 由本次 job results 的 resolved_by 取
+        #   （resolved_by 不寫進 dataset items，故讀 raw results）。research 端另有 MAX_DOMAINS=10 上限。
+        if allow_spawn and not dataset.get('_auto_research_done'):
+            research_urls = [it.get('url') for it in items
+                             if it.get('status') == 'failed' and it.get('url')]
+            research_urls += [r.get('url') for r in results
+                              if r.get('url') and r.get('resolved_by') == 'body_fallback']
+            research_urls = list(dict.fromkeys(u for u in research_urls if u))
+            if research_urls:
+                try:
+                    from .crawler_client import submit_research
+                    rres = submit_research(research_urls[:50])
+                    if isinstance(rres, dict) and rres.get('job_id'):
+                        update['_auto_research_done'] = True
+                        update['_auto_research_job'] = rres['job_id']
+                        update['_auto_research_n'] = len(research_urls)
+                        print(f"[sync] 自動研究觸發：{len(research_urls)} 個失敗尾巴 URL "
+                              f"→ research job {rres['job_id']}", flush=True)
+                except Exception as e:
+                    print(f"[sync] 自動研究觸發略過：{e}", flush=True)
     elif jstatus == 'failed':
         update['status'] = 'failed'
         update['log'] = job.get('log', '爬取失敗')
