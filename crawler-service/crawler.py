@@ -31,6 +31,7 @@ import dom_score
 import dom_parse
 from site_templates import SITE_TEMPLATES
 import dom_extract
+import url_drift
 
 from bs4 import BeautifulSoup
 # 統一使用 undetected-chromedriver（對齊 Colab，最佳反偵測）
@@ -673,17 +674,14 @@ class HeadlessCrawler:
         return text_clean.trim_trailing_boilerplate(content, min_keep, self._log)
 
     def _reg_host(self, h: str) -> str:
-        """取可註冊網域（末兩段），用於跨站漂移比對。"""
-        h = (h or "").lower().split(':')[0]
-        parts = h.split('.')
-        return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+        # 可註冊網域已抽至 url_drift.reg_host（純函式）。
+        return url_drift.reg_host(h)
 
     def _page_cross_domain_drift(self, url: str) -> bool:
-        """渲染後當前頁是否跨站漂移到與目標 url 不同的可註冊網域（cloaking 信號）。"""
+        """渲染後當前頁是否被自動轉移到非原文目標（cloaking/牆/首頁）。供 Phase 5 不學轉移頁的選擇器。"""
         try:
-            from urllib.parse import urlparse
             cur = self.driver.current_url if self.driver else url
-            return self._reg_host(urlparse(cur).hostname or "") != self._reg_host(urlparse(url).hostname or "")
+            return url_drift.detect_auto_transfer(url, cur)[0]
         except Exception:
             return False
 
@@ -1326,18 +1324,18 @@ class HeadlessCrawler:
             # 裁掉尾部樣板（贊助／APP／版權），所有萃取路徑統一套用
             content = self._trim_trailing_boilerplate(content)
 
-            # 反爬偵測：cloaking 跨站漂移 / 封鎖頁 → 標記『需手動爬取』，不把誤導/封鎖內容當文章污染分析。
-            #（① 住宅代理破解見 tiered_fallback；開關 tier3_enabled 開啟後才於升級階段自動重抓。）
-            drift = ((url_changed_during_scroll or final_url != url)
-                     and self._reg_host(urlparse(final_url).hostname or "")
-                         != self._reg_host(urlparse(url).hostname or ""))
-            if drift or looks_like_block_page(content, title):
-                reason = (f"內容飄移到不同網域（{urlparse(final_url).hostname}），疑似 cloaking 反爬"
-                          if drift else "疑似反爬封鎖／驗證頁")
+            # 反爬/自動轉移偵測：頁面被導離原文（跨站 cloaking / 登入·同意牆 / 導回首頁 / 錯誤頁）
+            # 或封鎖頁 → 標『需手動爬取』，不把誤導/封鎖內容當文章污染分析。偵測較舊版廣（見 url_drift），
+            # 但保守避開合法 redirect（http→https / 尾斜線 / m. 行動版 / locale）。final_url 一併回傳供前端顯示轉去哪。
+            #（住宅代理破解見 tiered_fallback；開關 tier3_enabled 開啟後才於升級階段自動重抓。）
+            transferred, t_reason = (url_drift.detect_auto_transfer(url, final_url)
+                                     if (url_changed_during_scroll or final_url != url) else (False, ""))
+            if transferred or looks_like_block_page(content, title):
+                reason = t_reason or "疑似反爬封鎖／驗證頁"
                 self._log(f"[反爬] {reason} → 標記需手動爬取")
                 return {"status": "skipped", "url": url, "title": title,
                         "error": f"{reason}，需手動爬取（建議用手動匯入貼上真人版內容）",
-                        "cloaked": True, "needs_manual": True}
+                        "cloaked": True, "needs_manual": True, "final_url": final_url}
 
             return {"status": "success", "url": url, "title": title, "content": content, "length": len(content)}
 
