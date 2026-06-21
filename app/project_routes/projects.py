@@ -198,9 +198,7 @@ def update_settings(pid, project, role):
     return redirect(url_for('project_bp.project_detail', pid=pid))
 
 
-# LLM 供應商模型查詢已抽出（見 llm_models.py）。
-from ..llm_models import _fetch_provider_models  # noqa: F401
-
+# LLM 供應商模型查詢實作見 llm_models.py（已於檔案頂部 import _fetch_provider_models）。
 @bp.route('/<pid>/models')
 @project_access_required(min_role='editor')
 def list_models(pid, project, role):
@@ -319,9 +317,8 @@ def archive_project(pid, project, role):
     return redirect(url_for('project_bp.project_detail', pid=pid))
 
 
-# 專案生命週期層已抽出（見 project_lifecycle.py）。
-from ..project_lifecycle import _project_active_jobs, _cascade_delete_project  # noqa: F401
-
+# 專案生命週期（_project_active_jobs / _cascade_delete_project）實作見 project_lifecycle.py
+# （已於檔案頂部 import）。
 @bp.route('/<pid>/delete', methods=['POST'])
 @project_access_required(min_role='owner')
 def delete_project(pid, project, role):

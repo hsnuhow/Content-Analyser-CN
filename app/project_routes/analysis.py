@@ -114,9 +114,7 @@ def submit_analysis_route(pid, project, role):
                             pid=pid, aid=analysis_ref.id))
 
 
-# 分析狀態對帳層已抽出（見 analysis_store.py）。
-from ..analysis_store import _analysis_ref, _reconcile_analysis, _reconcile_derive, _derived_label  # noqa: F401
-
+# 分析狀態對帳（_reconcile_analysis 等）實作見 analysis_store.py（已於檔案頂部 import）。
 @bp.route('/<pid>/analyses/<aid>')
 @project_access_required(min_role='viewer')
 def analysis_detail(pid, aid, project, role):
@@ -535,11 +533,3 @@ def analyse_combined(pid, project, role):
     log_usage('analyse', detail=report_title, count=len(contents), project_id=pid)
     flash(f'已合併 {len(used_names)} 個資料集提交分析（{len(contents)} 篇）。', 'success')
     return redirect(url_for('project_bp.analysis_detail', pid=pid, aid=analysis_ref.id))
-
-
-# ──────────────────────────────────────────────────────────────────────
-# 資料集下載（原始爬取內文）：Markdown / JSON
-# ──────────────────────────────────────────────────────────────────────
-
-# 資料集匯出層已抽出（見 dataset_export.py）。
-from ..dataset_export import _dataset_to_markdown, _dataset_to_json  # noqa: F401
