@@ -366,3 +366,39 @@ SITE_TEMPLATES = {
         ]
     },
 }
+
+
+# ── 後台外部化（資料/邏輯分離）──────────────────────────────────────────
+# 站台模板是「單一網站專屬資料」→ 搬到 Firestore 讓 admin 增/改/刪、不必改碼部署。
+# 內建 SITE_TEMPLATES 留作 floor（安全基線，Firestore 空/掛時仍可運作），與 get_ad_blocklist /
+# get_term_filters 同範式。
+import time
+
+_SITE_TEMPLATES_CACHE = {"val": None, "ts": 0.0}
+
+
+def get_site_templates():
+    """生效模板 = 內建 SITE_TEMPLATES（floor，安全基線）+ Firestore `crawler_config/site_templates`
+    的 `templates` map（admin 可增/改/刪，以模板名為 key 覆寫/新增）。60s 行程快取；
+    Firestore 讀失敗則回退只用內建。回傳 {name: {indicators, selectors}}。"""
+    now = time.time()
+    c = _SITE_TEMPLATES_CACHE
+    if c["val"] is not None and now - c["ts"] < 60:
+        return c["val"]
+    merged = {k: dict(v) for k, v in SITE_TEMPLATES.items()}   # floor 深複本
+    try:
+        from firebase_admin import firestore
+        doc = firestore.client().collection("crawler_config").document("site_templates").get()
+        if doc.exists:
+            extra = (doc.to_dict() or {}).get("templates")
+            if isinstance(extra, dict):
+                for name, tmpl in extra.items():
+                    if (isinstance(tmpl, dict) and isinstance(tmpl.get("indicators"), list)
+                            and isinstance(tmpl.get("selectors"), list)
+                            and tmpl["indicators"] and tmpl["selectors"]):
+                        merged[str(name)] = {"indicators": [str(i) for i in tmpl["indicators"]],
+                                             "selectors": [str(s) for s in tmpl["selectors"]]}
+    except Exception:
+        pass
+    c["val"], c["ts"] = merged, now
+    return merged

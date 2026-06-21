@@ -29,7 +29,7 @@ from page_classify import (looks_like_browser_error_page,
 import text_clean
 import dom_score
 import dom_parse
-from site_templates import SITE_TEMPLATES
+from site_templates import get_site_templates
 import dom_extract
 import url_drift
 
@@ -1057,7 +1057,7 @@ class HeadlessCrawler:
         與 infinity feed，對固定容器無益且耗記憶體）→ 淺滾即可。
         """
         url_lower = url.lower()
-        for tmpl in SITE_TEMPLATES.values():
+        for tmpl in get_site_templates().values():
             for ind in tmpl.get('indicators', []):
                 if ind in url_lower:
                     return True

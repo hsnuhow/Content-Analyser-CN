@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 import dom_score
 import dom_parse
 import text_clean
-from site_templates import SITE_TEMPLATES
+from site_templates import get_site_templates
 
 HEURISTIC_CONF_THRESHOLD = 0.55
 MIN_LEARNED_CHARS = 300      # 已學/快取選擇器採用前最低字數（防誤學寬選擇器污染）
@@ -129,7 +129,8 @@ def extract_main_text(html, url, *, domain_cache, genai_api_key,
     #    避免 'news' 通用模板搶先命中 cna.com.tw/news/... 而蓋掉專屬 cna 模板。
     url_lower = url.lower()
     matched_templates = []
-    for tmpl_name, tmpl in SITE_TEMPLATES.items():
+    _site_templates = get_site_templates()   # 後台外部化：floor + Firestore（admin 可編），60s 快取
+    for tmpl_name, tmpl in _site_templates.items():
         best_ind = None
         for ind in tmpl['indicators']:
             if ind in url_lower:
@@ -291,7 +292,7 @@ def extract_main_text(html, url, *, domain_cache, genai_api_key,
             _log(f"  → Added {count} candidates from: {source}")
 
     if template_matched:
-        tmpl = SITE_TEMPLATES[template_matched]
+        tmpl = _site_templates.get(template_matched) or {"selectors": []}
         for sel in tmpl['selectors']:
             _add_candidate(soup.select(sel), f"Template '{template_matched}': {sel}")
 
