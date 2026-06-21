@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-21 重構：crawler DOM 節點評分抽出 dom_score.py（真實 Porsche before/after 實測零回歸）
+先前評估 DOM 評分群「簡單頁無法驗抽取品質」而暫緩；本次用**真實文章 before/after 對照**解掉驗證難題後執行。
+- **抽出**：`_calculate_node_score/_visual_weight/_dom_depth/_paragraph_quality/_chinese_ratio/_confidence/_looks_like_listing_block/_looks_like_cookie_banner/_css_path/_get_element_depth` → `dom_score.py` 純函式（無 driver/state，self._log 經 log_fn）。4 個只被 node_score 呼叫的子評分完全移走、6 個外部有呼叫的留薄方法委派 → **`_extract_main_text` 協調（模板選擇/resolved_by/階段順序）零改動**。邏輯逐字複製。
+- **AST 研究先行**：證實 crawler-service 模組層 + class 內 48 方法呼叫圖**皆為 DAG、無循環依賴**；問題是 God Object（高耦合），非循環。評分群 10 方法 8 個零 self 依賴 → 最乾淨可抽。
+- **驗證（rollback 先建：snapshot-20260621-pre-crawler-dom-refactor / rev 00080）**：Porsche 11 模板站建 scratch dataset，before(00080)→重構→after(00081) 同 URL 對照。**11/11 內容長度逐站完全相同**；**7/7 模板選擇器命中一致**（ettoday/gq_tw/harpersbazaar_tw/ltn/tvbscars/udn/vogue_tw）；structured 2=2；heuristic kingautos 887=887 byte 相同（評分數學保留鐵證；udn 404 頁 0.5 分差為動態頁變異、選同節點）。dom_score 9 測。
+- 仍暫緩：`_extract_main_text` 主協調瘦身、`_build_dom_summary`/`_ask_gemini_selector`（選擇器學習）。
+
 ## 2026-06-21 重構：crawler.py 部分模組化（page_classify + text_clean，刻意收手）
 crawler.py（2569 單一大 class HeadlessCrawler）抽出兩個純函式模組，每刀部署後實跑爬蟲驗證（成功 1/略過 0/失敗 0）、pyflakes 把關、characterization 測試：
 - `page_classify.py`：`_looks_like_browser_error/http_error/block_page` + 三組 marker 常數（純 bool 分類、無 driver/_log），6 處呼叫點改用 module 函式，9 測。
