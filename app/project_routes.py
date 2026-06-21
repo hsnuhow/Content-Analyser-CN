@@ -1234,27 +1234,8 @@ def start_crawl(pid, did, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
-def _extract_doc_text(filename: str, blob: bytes):
-    """上傳檔 → 純文字。支援 .txt/.md/.docx；.doc 不支援。回 (text, error)。"""
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-    if ext in ('txt', 'md', 'markdown', 'text', ''):
-        return blob.decode('utf-8', 'ignore'), None
-    if ext == 'docx':
-        try:
-            import io
-            from docx import Document
-            doc = Document(io.BytesIO(blob))
-            parts = [p.text for p in doc.paragraphs]
-            for tbl in doc.tables:               # 表格文字也納入
-                for row in tbl.rows:
-                    parts.append(' '.join(c.text for c in row.cells))
-            return '\n'.join(parts), None
-        except Exception as e:
-            return None, f'.docx 解析失敗（{filename}）：{e}'
-    if ext == 'doc':
-        return None, f'「{filename}」是舊版 .doc，請在 Word 另存為 .docx 或 .txt 再上傳。'
-    return None, f'不支援的檔案型別「{filename}」（支援 .txt / .md / .docx）。'
-
+# 上傳檔文字抽取已抽出（見 doc_extract.py）。
+from .doc_extract import _extract_doc_text  # noqa: F401
 
 @bp.route('/<pid>/datasets/manual', methods=['POST'])
 @project_access_required(min_role='editor')
