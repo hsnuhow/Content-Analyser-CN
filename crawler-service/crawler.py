@@ -818,7 +818,7 @@ class HeadlessCrawler:
 
             # 格式1：["p","..."] / ["blockquote","..."] / ["h1~h6","..."]
             # re.DOTALL 讓 [^"\\] 能匹配包含換行的段落（修正多行段落漏抓）
-            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.|\n)*)"\]', re.DOTALL)
+            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]', re.DOTALL)
             for m in pat1.finditer(html):
                 raw = m.group(2)
                 try:
@@ -830,7 +830,7 @@ class HeadlessCrawler:
             # 格式2：["$","p","key",{"children":"..."}] (React RSC)
             # children 可為字串或陣列，re.DOTALL 同上修正多行漏抓
             pat2 = re.compile(
-                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.|\n)*)"\}',
+                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.)*)"\}',
                 re.DOTALL
             )
             for m in pat2.finditer(html):
