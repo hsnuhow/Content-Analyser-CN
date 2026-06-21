@@ -728,12 +728,17 @@ def research_url():
 @bp.route('/research-url/status')
 @admin_required
 def research_url_status():
-    """輪詢主動研究結果（JSON）。"""
+    """輪詢主動研究結果（JSON）。研究到終態（completed/failed）後清掉 session 的 _research_job，
+    避免下次載入頁面仍輪詢到舊的已完成 job → 前端無限重整、無法按按鈕。"""
+    from_session = not request.args.get('job')
     job_id = request.args.get('job') or session.get('_research_job')
     if not job_id:
         return jsonify({'status': 'none'}), 200
     job = get_research_status(job_id)
-    return jsonify({'status': job.get('status', 'unknown'),
+    status = job.get('status', 'unknown')
+    if from_session and status in ('completed', 'failed'):
+        session.pop('_research_job', None)   # 終態後不再黏住，下次載入回 none
+    return jsonify({'status': status,
                     'log': job.get('log', ''), 'result': job.get('result', {})}), 200
 
 
