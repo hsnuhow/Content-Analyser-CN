@@ -24,7 +24,10 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 from crawler import HeadlessCrawler
-from site_learning import detect_cms, save_selector_candidate
+from site_learning import (detect_cms, save_selector_candidate,
+                           normalize_selector, _is_valid_selector)
+from page_classify import (looks_like_browser_error_page, looks_like_http_error_page,
+                           looks_like_block_page)
 
 MAX_STEPS = 6            # 每網域最多問模型幾次（提出→實測→修正的回合數）
 PER_DOMAIN_BUDGET = 120  # 每網域研究時間上限（秒）
@@ -128,25 +131,33 @@ def _eval_selector(crawler: HeadlessCrawler, soup: BeautifulSoup, selector: str)
     try:
         node = soup.select_one(selector)
     except Exception:
-        return {"matched": False, "chars": 0, "is_listing": False, "is_cookie": False, "preview": ""}
+        return {"matched": False, "chars": 0, "is_listing": False, "is_cookie": False,
+                "is_error": False, "preview": ""}
     if not node:
-        return {"matched": False, "chars": 0, "is_listing": False, "is_cookie": False, "preview": ""}
+        return {"matched": False, "chars": 0, "is_listing": False, "is_cookie": False,
+                "is_error": False, "preview": ""}
     text = crawler._clean_text(node.get_text("\n", strip=True))
     return {
         "matched": True,
         "chars": len(text),
         "is_listing": bool(crawler._looks_like_listing_block(node)),
         "is_cookie": bool(crawler._looks_like_cookie_banner(text, node)),
+        # 抽到的是否為瀏覽器錯誤頁 / 反爬挑戰頁殘片（被擋站常見：抓到 Cloudflare 挑戰頁的少量字，
+        # 字數剛好過門檻卻不是真內文）→ 不可收為候選。
+        "is_error": bool(looks_like_browser_error_page(text) or looks_like_block_page(text)),
         "preview": text[:160],
     }
 
 
 def _classify_failure(crawler: HeadlessCrawler, html: str, best_chars: int,
-                      best_is_listing: bool) -> str:
+                      best_is_listing: bool, best_is_error: bool = False) -> str:
     """怎麼試都找不到有效選擇器時，分類失敗原因（給維運判斷下一步）。"""
     text_len = len(re.sub(r"<[^>]+>", " ", html or ""))
-    if crawler._looks_like_http_error_page(html[:2000]):
-        return "blocked_or_error：頁面回 403/錯誤頁（網站封鎖爬蟲）→ 建議啟用 Tier 3 住宅代理重試"
+    # best_is_error：抽取階段在「抽出內容」上偵測到的錯誤/挑戰頁（比對 raw HTML 可靠，
+    # 因 looks_like_*_page 對長 raw HTML 有長度上限）；輔以 http_error 標記比對。
+    if best_is_error or looks_like_http_error_page((html or "")[:2000]):
+        return ("blocked_or_error：頁面回 403/反爬挑戰頁/錯誤頁（網站封鎖爬蟲）"
+                "→ 建議啟用 Tier 3 住宅代理重試，或用 Cowork 真實瀏覽器手動蒐集")
     if text_len < 800:
         return "js_empty：渲染後內容極少（SPA/需登入/嚴重反爬）→ 需更強渲染或 Tier 2/3"
     if best_is_listing:
@@ -176,7 +187,7 @@ def research_domain(domain: str, sample_urls: List[str],
 
         tried: List[Dict] = []
         chosen = None
-        best_chars, best_listing = 0, False
+        best_chars, best_listing, best_error = 0, False, False
         for step in range(MAX_STEPS):
             if time.time() > deadline:
                 log(f"[Research] {domain} 達時間上限，停止")
@@ -191,16 +202,24 @@ def research_domain(domain: str, sample_urls: List[str],
                 f"{'（列表）' if ev['is_listing'] else ''}{'（cookie）' if ev['is_cookie'] else ''}")
             if ev["matched"] and ev["chars"] > best_chars:
                 best_chars, best_listing = ev["chars"], ev["is_listing"]
-            # 接受條件：非 cookie，且（內文很多→即使含相關連結也算文章 ‖ 內文足量且非列表）。
-            # 放寬 is_listing 硬拒：真文章容器常含「延伸閱讀」等連結，會誤判列表。
-            if ev["matched"] and not ev["is_cookie"] and (
+            if ev.get("is_error"):       # 任一步抓到錯誤/挑戰頁 → 標記（供失敗診斷判 blocked）
+                best_error = True
+            # 接受條件（候選階段就把關，避免吐弱候選浪費 admin 審查）：非 cookie、
+            #   **非錯誤/挑戰頁殘片**（被擋站會抓到 Cloudflare 挑戰頁少量字）、
+            #   **選擇器可泛化**（非 main/body/article 等過寬、非原子類/數字 id；learned 階段本來也會拒），
+            #   且（內文很多→即使含相關連結也算文章 ‖ 內文足量且非列表）。
+            #   放寬 is_listing 硬拒：真文章容器常含「延伸閱讀」等連結，會誤判列表。
+            sel_generalizable = bool(_is_valid_selector(normalize_selector(sel)))
+            if (ev["matched"] and not ev["is_cookie"] and not ev["is_error"]
+                    and sel_generalizable and (
                     ev["chars"] >= 1000 or
-                    (ev["chars"] >= MIN_GOOD_CHARS and not ev["is_listing"])):
+                    (ev["chars"] >= MIN_GOOD_CHARS and not ev["is_listing"]))):
                 chosen = sel
                 break
 
         if not chosen:
-            result["diagnosis"] = _classify_failure(crawler, html1, best_chars, best_listing)
+            result["diagnosis"] = _classify_failure(crawler, html1, best_chars,
+                                                     best_listing, best_error)
             log(f"[Research] {domain} 未找到有效選擇器 → {result['diagnosis']}")
             return result
 
