@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-21 重構：crawler.py 抽取層三層化完成（2569→1423 行，-45%，每刀 Porsche before/after 零回歸）
+延續 dom_score（評分）後，完成 God Object 分解。**crawler.py 由 2569 → 1423 行（-45%）**，抽取層三層分離、依賴單向無循環：
+- **Layer 1 純函式（leaf，可單元測試）**：`page_classify`(錯誤/封鎖頁,73) / `text_clean`(清文字,60) / `dom_score`(DOM評分+dom_summary,229) / `dom_parse`(JSON-LD/RSC/meta/列表頁/CMP,191) / `site_templates`(362行站台模板資料,364)。
+- **Layer 2 協調**：`dom_extract`(393)——`_extract_main_text` 348 行五階協調（已學/快取→模板→結構化→啟發式評分→LLM）抽出；driver/LLM 經 callback 注入（ask_gemini_fn/cross_domain_drift_fn）、domain_cache 傳參、resolved_by 回傳。
+- **Layer 3 driver**：`crawler.py`(1423)——只剩 Chrome 生命週期/導航/滾動/scrape 主流程/特殊來源。
+- **依賴方向**：crawler → dom_extract → {dom_score,dom_parse,text_clean,site_templates,site_learning}（皆 leaf）。AST 證實全程 DAG、無循環依賴（原問題是 God Object 高耦合，非循環）。
+- **驗證方法論**：rollback 先建 + Porsche 11 模板站 before/after 實測（盯 resolved_by 模板選對 + 內容長度）。各刀：dom_score 11/11 長度同+7/7 模板；dom_parse 10/11+JSON-LD 解析器運作；site_templates git diff 證逐字相同；dom_extract 9/11（2 為動態頁）+8 模板+structured 2=2+heuristic byte 同。純資料/邏輯搬移用 git diff 證逐字（比爬取強）；協調移走用 before/after + pyflakes 無 undefined（替換完整）+ 8 解出點 resolved 手動複查。新增測試：dom_score 9 + dom_parse 9 例。
+
 ## 2026-06-21 重構：crawler DOM 節點評分抽出 dom_score.py（真實 Porsche before/after 實測零回歸）
 先前評估 DOM 評分群「簡單頁無法驗抽取品質」而暫緩；本次用**真實文章 before/after 對照**解掉驗證難題後執行。
 - **抽出**：`_calculate_node_score/_visual_weight/_dom_depth/_paragraph_quality/_chinese_ratio/_confidence/_looks_like_listing_block/_looks_like_cookie_banner/_css_path/_get_element_depth` → `dom_score.py` 純函式（無 driver/state，self._log 經 log_fn）。4 個只被 node_score 呼叫的子評分完全移走、6 個外部有呼叫的留薄方法委派 → **`_extract_main_text` 協調（模板選擇/resolved_by/階段順序）零改動**。邏輯逐字複製。
