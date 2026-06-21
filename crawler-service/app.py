@@ -248,7 +248,11 @@ def crawl_batch():
         }), 400
 
     use_gemini = bool(data.get("use_gemini", False))
-    gemini_api_key = data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
+    # 金鑰不入列（Cloud Tasks body 明文持久化於佇列）：使用者自帶金鑰存進 access-controlled
+    # 的 job doc，worker 讀回；系統金鑰（GENAI_API_KEY）只在 worker 端從 env/Secret 解析，
+    # 永不進佇列 body。fallback 背景執行緒走 in-process 記憶體（不持久化），用解析後的值即可。
+    user_gemini_key = data.get("gemini_api_key") or ""
+    gemini_api_key = user_gemini_key or os.environ.get("GENAI_API_KEY")
     force_listing = bool(data.get("force_listing", False))   # 強制爬取列表/商品頁（不略過）
     urls = safe_urls
 
@@ -271,16 +275,19 @@ def crawl_batch():
         "created_at": firestore.SERVER_TIMESTAMP,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "completed_at": None,
+        # 使用者自帶金鑰存於此（access-controlled）；worker 讀回，不放入 Cloud Tasks body。
+        "gemini_api_key": user_gemini_key,
     })
 
     if use_queue:
         # 並行安全：切塊入列 Cloud Tasks，每塊由 /api/crawl/run 同步處理（concurrency=1）。
+        # 注意：body 不含 gemini_api_key（金鑰由 worker 從 job doc / env 取，避免明文入佇列）。
         enq_ok = 0
         for ci, offset, chunk in chunks:
             if task_queue.enqueue("/api/crawl/run", {
                 "job_id": job_id, "urls": chunk, "chunk_index": ci,
                 "n_chunks": len(chunks), "offset": offset,
-                "use_gemini": use_gemini, "gemini_api_key": gemini_api_key,
+                "use_gemini": use_gemini,
                 "force_listing": force_listing,
             }):
                 enq_ok += 1
@@ -314,6 +321,11 @@ def crawl_run():
     chunk = data.get("urls") or []
     if not job_id or not isinstance(chunk, list):
         return jsonify({"status": "failed", "error": "缺少 job_id 或 urls"}), 400
+    # 金鑰不在 body：使用者金鑰從 access-controlled 的 job doc 讀回；無則回退系統
+    # GENAI_API_KEY（env/Secret Manager，永不入佇列）。
+    _jdoc = db.collection(JOBS_COLLECTION).document(job_id).get()
+    _jd = _jdoc.to_dict() if _jdoc.exists else {}
+    gemini_api_key = _jd.get("gemini_api_key") or os.environ.get("GENAI_API_KEY")
     from crawl_job import run_crawl_chunk
     try:
         run_crawl_chunk(
@@ -321,7 +333,7 @@ def crawl_run():
             int(data.get("chunk_index", 0)), int(data.get("n_chunks", 1)),
             int(data.get("offset", 0)),
             bool(data.get("use_gemini", False)),
-            data.get("gemini_api_key") or os.environ.get("GENAI_API_KEY"),
+            gemini_api_key,
             db,
             bool(data.get("force_listing", False)),
         )
