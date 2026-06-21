@@ -11,6 +11,7 @@ Blueprint：admin_bp（prefix /admin）
   /admin/update_secrets → 更新 Secret Manager 中的 secrets（原有功能保留）
 """
 import os
+import json
 from functools import wraps
 from flask import (Blueprint, render_template, session, redirect,
                    url_for, request, flash, jsonify)
@@ -207,6 +208,47 @@ def term_filters_save():
     except Exception as e:
         flash(f'儲存失敗：{e}', 'danger')
     return redirect(url_for('admin_bp.term_filters'))
+
+
+# ── 站台模板（單一網站專屬資料，外部化到 Firestore；crawler get_site_templates 讀 floor + 此處）──
+@bp.route('/site-templates')
+@admin_required
+def site_templates_admin():
+    """站台抽取模板編輯。資料存 crawler_config/site_templates.templates；爬蟲讀「內建 floor +
+    此 Firestore」合併，故 admin 可增/改/刪站台模板、不必改碼部署。"""
+    try:
+        doc = db.collection('crawler_config').document('site_templates').get()
+        templates = (doc.to_dict() or {}).get('templates', {}) if doc.exists else {}
+    except Exception:
+        templates = {}
+    return render_template(
+        'admin_site_templates.html', user=session.get('user'),
+        templates_json=json.dumps(templates, ensure_ascii=False, indent=2),
+        n_templates=len(templates or {}))
+
+
+@bp.route('/site-templates/save', methods=['POST'])
+@admin_required
+def site_templates_save():
+    raw = (request.form.get('templates_json', '') or '').strip()
+    try:
+        templates = json.loads(raw) if raw else {}
+        if not isinstance(templates, dict):
+            raise ValueError('最外層必須是 {模板名: {indicators:[...], selectors:[...]}} 物件')
+        clean = {}
+        for name, t in templates.items():
+            if not (isinstance(t, dict) and isinstance(t.get('indicators'), list)
+                    and isinstance(t.get('selectors'), list)
+                    and t['indicators'] and t['selectors']):
+                raise ValueError(f"模板「{name}」格式錯：須含非空的 indicators 與 selectors 陣列")
+            clean[str(name)] = {'indicators': [str(i) for i in t['indicators']],
+                                'selectors': [str(s) for s in t['selectors']]}
+        db.collection('crawler_config').document('site_templates').set(
+            {'templates': clean}, merge=True)
+        flash(f'已儲存 {len(clean)} 個站台模板（爬蟲最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'儲存失敗（JSON 格式或結構錯）：{e}', 'danger')
+    return redirect(url_for('admin_bp.site_templates_admin'))
 
 
 @bp.route('/terms/suggest')
