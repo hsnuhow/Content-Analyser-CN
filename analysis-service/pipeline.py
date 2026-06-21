@@ -154,7 +154,9 @@ def run_analysis(job_id: str, report_title: str,
                     continue
                 ideas = res.get("ideas", []) or []
                 if ideas:
-                    search_extent_results[g["cluster_id"]] = {
+                    # 用 .get 與上方 line 153 一致：cluster_id 理應恆存在，但直接索引
+                    # 一旦缺鍵會 KeyError → 整個 _run_search_extent 進 except 被靜默略過。
+                    search_extent_results[g.get("cluster_id", 0)] = {
                         "label": g.get("label", ""),
                         "seeds": seeds,
                         "ideas": ideas[:30],

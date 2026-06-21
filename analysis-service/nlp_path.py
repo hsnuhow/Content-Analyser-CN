@@ -471,8 +471,14 @@ def run_association(tfidf: Dict, contents: List[Dict]) -> Dict[str, Any]:
     rules = []
     for (a, b), c in freq_pairs:
         for x, y in ((a, b), (b, a)):
-            conf = c / one[x]
-            lift = conf / (one[y] / n)
+            # 防禦性：x/y 為共現對端點，理應在 one 且計數 ≥ min_count（>0），
+            # 故目前不會除零；但這是隱性不變式，明確 guard 一下，日後 vocab/籃子
+            # 構造改動也不會讓關聯規則路徑整個 ZeroDivisionError 掛掉。
+            denom_x, denom_y = one.get(x, 0), one.get(y, 0)
+            if not denom_x or not denom_y:
+                continue
+            conf = c / denom_x
+            lift = conf / (denom_y / n)
             if conf >= ASSOC_MIN_CONF and lift > 1.0:
                 rules.append({"antecedent": x, "consequent": y,
                               "support": round(c / n, 3), "confidence": round(conf, 3),

@@ -27,10 +27,13 @@ from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirec
 
 from bs4 import BeautifulSoup
 
-from crawler import (
-    DEFAULT_UA, ZH_ACCEPT_LANGUAGE,
-    MAIN_CONTENT_SELECTORS, SITE_TEMPLATES, get_ad_blocklist,
-)
+# 注意：SITE_TEMPLATES / MAIN_CONTENT_SELECTORS 已隨重構搬離 crawler（站台模板外部化 +
+# 抽取層三層化），不可再從 crawler import（會 ImportError）。改從正確來源取：
+#   - get_site_templates()：site_templates 的 floor + Firestore（admin 可編），與 crawler 一致；
+#   - MAIN_CONTENT_SELECTORS：dom_extract 的通用啟發式選擇器清單。
+from crawler import DEFAULT_UA, ZH_ACCEPT_LANGUAGE, get_ad_blocklist
+from dom_extract import MAIN_CONTENT_SELECTORS
+from site_templates import get_site_templates
 
 JOBS_COLLECTION = "image_extract_jobs"
 
@@ -165,7 +168,9 @@ def _resolve_container(soup: BeautifulSoup, url: str,
     # 2) 站台模板（與 crawler._extract_main_text 同樣的具體度排序）
     url_lower = url.lower()
     matched = []
-    for name, tmpl in SITE_TEMPLATES.items():
+    # 用 get_site_templates()（floor + Firestore，admin 可編）而非靜態 dict，
+    # 讓影像擷取的容器定位也吃得到後台編輯的站台模板，與正文爬取一致。
+    for name, tmpl in get_site_templates().items():
         best = None
         for ind in tmpl["indicators"]:
             if ind in url_lower and (best is None or len(ind) > len(best)):

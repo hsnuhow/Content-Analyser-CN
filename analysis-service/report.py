@@ -143,7 +143,7 @@ def _section_clusters(clusters: Dict) -> str:
     for g in groups:
         articles = g.get("articles", [])
         label = g.get("label", "")
-        heading = f"### 主題群 {g['cluster_id'] + 1}"
+        heading = f"### 主題群 {g.get('cluster_id', 0) + 1}"
         if label:
             heading += f"：{label}"
         heading += f"（{len(articles)} 篇）"
