@@ -29,8 +29,9 @@ def _slug(s: str) -> str:
     return re.sub(r'[^a-z0-9]', '', (s or '').lower())
 
 
-def _ground_brand(token, project, topic, brand, tries=1):
-    """單一品牌錨定 grounding。回 (text, chunks[(title,uri)], usage)。"""
+def _ground_brand(token, project, topic, brand):
+    """單一品牌錨定 grounding。回 (text, chunks[(title,uri)], usage)。逾時/失敗即放棄該品牌
+    （由其他平行品牌補足結果），刻意不重試——避免破 Cloudflare 代理上限。"""
     prompt = (
         f"你在評估台灣市場的『內容聲量』。主題：「{topic}」，品牌：「{brand}」。\n"
         f"問題：針對這個主題，有沒有『第三方』（媒體 / 論壇 / 部落格 / YouTube，"
@@ -46,30 +47,26 @@ def _ground_brand(token, project, topic, brand, tries=1):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "tools": [{"googleSearch": {}}],
             "generationConfig": {"temperature": 0.2}}
-    last = None
-    for _ in range(tries):
-        try:
-            req = urllib.request.Request(
-                url, data=json.dumps(body).encode(),
-                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=70) as r:
-                d = json.load(r)
-            cand = (d.get("candidates") or [{}])[0]
-            text = "".join(p.get("text", "")
-                           for p in cand.get("content", {}).get("parts", []))
-            gm = cand.get("groundingMetadata", {})
-            chunks = [(c.get("web", {}).get("title", ""), c.get("web", {}).get("uri", ""))
-                      for c in gm.get("groundingChunks", [])]
-            um = d.get("usageMetadata", {}) or {}
-            usage = {"prompt": int(um.get("promptTokenCount", 0) or 0),
-                     "output": int(um.get("candidatesTokenCount", 0) or 0),
-                     "total": int(um.get("totalTokenCount", 0) or 0)}
-            return text, chunks, usage
-        except Exception as e:
-            last = e
-            continue
-    print(f"[brand_presence] grounding 失敗（{brand}）：{last}", flush=True)
-    return "", [], {"prompt": 0, "output": 0, "total": 0}
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode(),
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=70) as r:
+            d = json.load(r)
+        cand = (d.get("candidates") or [{}])[0]
+        text = "".join(p.get("text", "")
+                       for p in cand.get("content", {}).get("parts", []))
+        gm = cand.get("groundingMetadata", {})
+        chunks = [(c.get("web", {}).get("title", ""), c.get("web", {}).get("uri", ""))
+                  for c in gm.get("groundingChunks", [])]
+        um = d.get("usageMetadata", {}) or {}
+        usage = {"prompt": int(um.get("promptTokenCount", 0) or 0),
+                 "output": int(um.get("candidatesTokenCount", 0) or 0),
+                 "total": int(um.get("totalTokenCount", 0) or 0)}
+        return text, chunks, usage
+    except Exception as e:
+        print(f"[brand_presence] grounding 失敗（{brand}）：{e}", flush=True)
+        return "", [], {"prompt": 0, "output": 0, "total": 0}
 
 
 def _verdict(text: str) -> str:
@@ -88,7 +85,10 @@ def _assess_one(token, project, topic, brand):
     slug = _slug(brand)
     srcs, seen, earned, official = [], set(), 0, False
     if chunks:
-        with ThreadPoolExecutor(max_workers=8) as ex:
+        # 內層池上限綁定實際 chunk 數：本函式本身已在外層「每品牌一條」的池裡跑
+        #（brand_presence 對品牌開 min(8, len(brands)) 池），內層再固定開 8 會造成
+        # 巢狀執行緒爆量（最壞 8×8）。綁 len(chunks) 後，chunk 少時不浪費執行緒。
+        with ThreadPoolExecutor(max_workers=min(8, len(chunks))) as ex:
             reals = list(ex.map(lambda kv: _d._resolve(kv[1]), chunks))
     else:
         reals = []

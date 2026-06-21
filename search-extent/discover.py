@@ -104,10 +104,10 @@ _DEFAULT_ANGLES = [
 _MODEL = "gemini-2.5-flash"
 
 
-def _ground(token, project, prompt, tries=1):
+def _ground(token, project, prompt):
     """單次 grounding 呼叫，回 (chunks:[(title,uri)], usage:{prompt,output,total})。
-    tries=1 + 45s 上限：多角度會平行跑，單一角度逾時就放棄該角度（其他角度仍有結果），
-    避免同步請求破 Cloudflare ~100s 代理上限（TypeError: Load failed 根因）。"""
+    45s 上限：多角度會平行跑，單一角度逾時/失敗即放棄該角度（其他角度仍有結果），
+    避免同步請求破 Cloudflare ~100s 代理上限（TypeError: Load failed 根因）。**刻意不重試。**"""
     url = (f"https://aiplatform.googleapis.com/v1/projects/{project}"
            f"/locations/global/publishers/google/models/{_MODEL}:generateContent")
     body = {
@@ -115,29 +115,25 @@ def _ground(token, project, prompt, tries=1):
         "tools": [{"googleSearch": {}}],
         "generationConfig": {"temperature": 0.3},
     }
-    last = None
-    for _ in range(tries):
-        try:
-            req = urllib.request.Request(
-                url, data=json.dumps(body).encode(),
-                headers={"Authorization": "Bearer " + token,
-                         "Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=45) as r:
-                d = json.load(r)
-            cand = (d.get("candidates") or [{}])[0]
-            gm = cand.get("groundingMetadata", {})
-            chunks = [(c.get("web", {}).get("title", ""), c.get("web", {}).get("uri", ""))
-                      for c in gm.get("groundingChunks", [])]
-            um = d.get("usageMetadata", {}) or {}
-            usage = {"prompt": int(um.get("promptTokenCount", 0) or 0),
-                     "output": int(um.get("candidatesTokenCount", 0) or 0),
-                     "total": int(um.get("totalTokenCount", 0) or 0)}
-            return chunks, usage
-        except Exception as e:
-            last = e
-            continue
-    print(f"[discover] grounding 失敗：{last}", flush=True)
-    return [], {"prompt": 0, "output": 0, "total": 0}
+    try:
+        req = urllib.request.Request(
+            url, data=json.dumps(body).encode(),
+            headers={"Authorization": "Bearer " + token,
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as r:
+            d = json.load(r)
+        cand = (d.get("candidates") or [{}])[0]
+        gm = cand.get("groundingMetadata", {})
+        chunks = [(c.get("web", {}).get("title", ""), c.get("web", {}).get("uri", ""))
+                  for c in gm.get("groundingChunks", [])]
+        um = d.get("usageMetadata", {}) or {}
+        usage = {"prompt": int(um.get("promptTokenCount", 0) or 0),
+                 "output": int(um.get("candidatesTokenCount", 0) or 0),
+                 "total": int(um.get("totalTokenCount", 0) or 0)}
+        return chunks, usage
+    except Exception as e:
+        print(f"[discover] grounding 失敗：{e}", flush=True)
+        return [], {"prompt": 0, "output": 0, "total": 0}
 
 
 def _is_safe_url(u: str) -> bool:

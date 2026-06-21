@@ -4,7 +4,7 @@ from flask import Flask, request
 from authlib.integrations.flask_client import OAuth
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
-from . import services # Initialize Firebase
+from . import services  # noqa: F401  ⚠️ side-effect import：載入 services 即初始化 Firebase（module-level initialize_app + db）。看似未使用，勿刪。
 
 oauth = OAuth()
 csrf = CSRFProtect()

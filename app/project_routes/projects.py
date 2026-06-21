@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """專案領域路由：列表/建立/詳情/設定（LLM 模型）/成員/編輯/封存/刪除。
 註冊在 project_bp（package __init__ 於底部 import 本模組以套用 @bp.route）。"""
-import json
 import re
 from flask import request, jsonify, flash, redirect, url_for, render_template, abort
 from firebase_admin import firestore
 
 from . import (bp, project_access_required, current_user_email, is_admin,
-               get_project, get_user_role, log_usage)
-from ..services import db, get_admin_email
+               log_usage)
+from ..services import db
 from ..auth_guards import login_required
 from ..dataset_sync import _sync_crawling_dataset
 from ..llm_models import _fetch_provider_models

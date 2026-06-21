@@ -8,17 +8,16 @@ from flask import (request, jsonify, flash, redirect, url_for, send_file, abort,
                    render_template)
 from firebase_admin import firestore
 
-from . import bp, project_access_required, current_user_email, get_project, log_usage
+from . import bp, project_access_required, current_user_email, log_usage
 from ..services import db
-from ..crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
+from ..crawler_client import (submit_crawl_batch, cancel_crawl,
                               submit_research, get_research_status,
                               submit_extract_images, get_extract_images_status)
-from ..analysis_client import submit_analysis, submit_image_analysis, submit_combined
-from .. import kb_store
+from ..analysis_client import submit_analysis, submit_image_analysis
 from ..url_utils import parse_url_list, _url_key
 from ..doc_extract import _extract_doc_text
 from ..datasets_store import (_items_ref, _load_dataset_items, _save_dataset_items,
-                              _delete_dataset_items, _append_urls_to_draft, _replace_items_by_url)
+                              _delete_dataset_items)
 from ..dataset_sync import _sync_crawling_dataset
 from ..dataset_export import _dataset_to_markdown, _dataset_to_json
 

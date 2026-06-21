@@ -8,9 +8,9 @@ from flask import (request, jsonify, flash, redirect, url_for, send_file, abort,
                    render_template)
 from firebase_admin import firestore
 
-from . import bp, project_access_required, current_user_email, get_project, log_usage
+from . import bp, project_access_required, current_user_email, log_usage
 from ..services import db
-from ..analysis_client import (submit_analysis, submit_image_analysis, submit_combined,
+from ..analysis_client import (submit_analysis, submit_combined,
                               submit_audience, cancel_analysis)
 from .. import kb_store
 from ..analysis_store import (_analysis_ref, _reconcile_analysis, _reconcile_derive,

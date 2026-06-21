@@ -47,7 +47,7 @@ def label_clusters(clusters_dict: Dict, llm: LLMClient) -> None:
     for g in groups:
         titles = [(a.get("title") or a.get("url", ""))[:40] for a in g.get("articles", [])[:5]]
         kws = "、".join(g.get("keywords", [])[:8])
-        blocks.append(f"群 {g['cluster_id'] + 1}：代表詞彙[{kws}]；文章[{' / '.join(titles)}]")
+        blocks.append(f"群 {g.get('cluster_id', 0) + 1}：代表詞彙[{kws}]；文章[{' / '.join(titles)}]")
 
     # 代表詞彙與文章標題皆來自爬取/匯入的不可信文字 → 與 run() 一致，套 INJECTION_GUARD
     # 並以 wrap_untrusted 包裹，避免被植入指示污染分群標籤/描述（→ 報告 §3）。
@@ -64,7 +64,7 @@ def label_clusters(clusters_dict: Dict, llm: LLMClient) -> None:
         data = json.loads(_clean_json(raw))
         lm = {int(l.get("id")): l for l in data.get("labels", []) if l.get("id") is not None}
         for g in groups:
-            l = lm.get(g["cluster_id"] + 1, {})
+            l = lm.get(g.get("cluster_id", 0) + 1, {})
             if l.get("label"):
                 g["label"] = l["label"]
             if l.get("desc"):
@@ -87,7 +87,7 @@ def _fmt_clusters(clusters: Dict) -> str:
         articles = g.get("articles", [])
         titles = [a.get("title", a.get("url", ""))[:25] for a in articles[:3]]
         suffix = "…" if len(articles) > 3 else ""
-        lines.append(f"  群 {g['cluster_id'] + 1}（{len(articles)} 篇）：{'、'.join(titles)}{suffix}")
+        lines.append(f"  群 {g.get('cluster_id', 0) + 1}（{len(articles)} 篇）：{'、'.join(titles)}{suffix}")
     return "\n".join(lines)
 
 

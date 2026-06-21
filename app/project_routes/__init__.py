@@ -18,30 +18,16 @@ Blueprint：project_bp（prefix /projects）
   GET  /projects/<pid>/analyses/<aid>/download → 下載 .md
   GET  /projects/<pid>/analyses/<aid>/status   → 輪詢進度（JSON）
 """
-import json
-import re
-import requests
+# 註：此 package __init__ 只放 Blueprint + 共用 helper；各領域路由邏輯與其 client/store
+# import 都在子模組（projects/analysis/datasets/discovery）。本檔僅 import 自己 helper 用得到的。
 from functools import wraps
-from flask import (Blueprint, render_template, request, jsonify,
-                   session, redirect, url_for, flash, send_file, abort)
+from flask import (Blueprint, session, redirect, url_for, flash, abort)
 from firebase_admin import firestore
-from io import BytesIO
 
 from ..services import db, get_admin_email
-from ..auth_guards import login_required, refresh_whitelist_status
-from ..analysis_client import (submit_analysis, get_job_status, cancel_analysis,
-                              submit_image_analysis, get_image_analysis_status,
-                              submit_combined, get_combined_status,
-                              submit_audience, get_audience_status)
-from ..crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
-                             submit_research, get_research_status,
-                             submit_extract_images, get_extract_images_status)
-from .. import kb_store
-from ..dataset_sync import _sync_crawling_dataset  # project_detail 載入時同步 crawling 資料集
+from ..auth_guards import refresh_whitelist_status
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
-
-# 自動續批最多輪數（每輪一個 ≤45 分批次補爬「未爬取」項），防失控。
 
 # ──────────────────────────────────────────────────────────────────────
 # 輔助函式
@@ -51,12 +37,9 @@ def current_user_email() -> str:
     return session.get('user', {}).get('email', '')
 
 
-# URL 工具與資料集 items store 層已抽出（見 url_utils.py / datasets_store.py）。
-from ..url_utils import _TRACKING_PARAMS, _url_key, parse_url_list  # noqa: F401
-from ..datasets_store import (  # noqa: F401  （re-export：admin_routes 仍 from project_routes import _load_dataset_items）
-    _items_ref, _load_dataset_items, _save_dataset_items,
-    _delete_dataset_items, _append_urls_to_draft, _replace_items_by_url,
-)
+# re-export：admin_routes 靠 `from .project_routes import _load_dataset_items` 取用，故此處保留。
+# （其餘 url_utils / datasets_store 名稱由各子模組直接 import，不需在此 re-export。）
+from ..datasets_store import _load_dataset_items  # noqa: F401
 
 def is_admin() -> bool:
     admin = get_admin_email()
@@ -139,7 +122,9 @@ def project_access_required(min_role: str = 'viewer'):
 # Project 路由
 # ──────────────────────────────────────────────────────────────────────
 
-# ── 領域子模組：套用各自的 @bp.route（須在 bp + 共用 helper 定義後）──
+# ── 領域子模組：⚠️ 這四行是「side-effect import」——import 時各子模組會套用自己的 @bp.route
+#    完成路由註冊（須在 bp + 共用 helper 定義之後才 import）。看似未使用，但**絕不可刪**
+#    （刪掉 = 所有 project 路由消失 404）；autoflake/自動清未用 import 時務必略過。──
 from . import projects   # noqa: E402,F401
 from . import analysis   # noqa: E402,F401
 from . import datasets   # noqa: E402,F401

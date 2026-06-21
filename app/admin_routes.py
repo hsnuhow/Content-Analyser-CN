@@ -17,7 +17,7 @@ from flask import (Blueprint, render_template, session, redirect,
                    url_for, request, flash, jsonify)
 
 from .services import (
-    db, get_secret, set_secret, get_admin_email,
+    db, set_secret, get_admin_email,
     list_all_users, approve_user, reject_user,
     create_api_key, list_api_keys, revoke_api_key, reactivate_api_key,
 )
