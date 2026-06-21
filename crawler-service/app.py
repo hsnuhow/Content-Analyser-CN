@@ -24,6 +24,7 @@ import uuid
 import threading
 import functools
 import subprocess
+import concurrent.futures
 
 import firebase_admin
 from firebase_admin import firestore
@@ -109,20 +110,56 @@ def health():
     }), 200
 
 
+def _force_close(c, timeout: int = 15):
+    """關閉 driver，對 close() 本身加超時上限——避免 close() 卡住整個請求生命週期。
+    逾時則直接 kill Chrome 進程（對齊 crawl_job 非同步看門狗）。"""
+    if c is None:
+        return
+    cex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        cex.submit(c.close).result(timeout=timeout)
+    except Exception:
+        try:
+            drv = getattr(c, "driver", None)
+            proc = getattr(getattr(drv, "service", None), "process", None)
+            if proc:
+                proc.kill()
+                print("[scrape] close() 逾時，已強制 kill Chrome 進程", flush=True)
+        except Exception:
+            pass
+    finally:
+        cex.shutdown(wait=False)
+
+
 def _tier1_scrape(url: str, use_gemini: bool, gemini_api_key: str,
                   hard_timeout_sec: int, use_proxy: bool = False) -> dict:
-    """Tier 1：undetected-chromedriver 爬取（use_proxy=True 時走 Tier 3 代理）。"""
+    """Tier 1：undetected-chromedriver 爬取（use_proxy=True 時走 Tier 3 代理）。
+
+    看門狗：scrape 步驟內若 Selenium 指令 hang，scrape 內部 hard_timeout 擋不住（卡在阻塞
+    呼叫），故在外層包 ThreadPoolExecutor + result(timeout) 強制上限；close() 亦走 _force_close
+    加超時。補上同步 /api/scrape 路徑原本缺、但非同步 crawl_job 早有的防護（單篇 hang / close 卡死）。
+    """
     crawler = HeadlessCrawler(use_proxy=use_proxy)
     try:
         if use_gemini and gemini_api_key:
             crawler.configure_genai(gemini_api_key)
-        return crawler.scrape(url, hard_timeout_sec=hard_timeout_sec)
+        # 看門狗上限留在 Cloud Run 300s 請求上限內（對齊 crawl_job PAGE_WATCHDOG=290）。
+        watchdog = min(hard_timeout_sec + 30, 290)
+        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            fut = ex.submit(crawler.scrape, url, hard_timeout_sec=hard_timeout_sec)
+            return fut.result(timeout=watchdog)
+        except concurrent.futures.TimeoutError:
+            return {"status": "failed", "url": url,
+                    "error": f"看門狗逾時（>{watchdog}s）已中止，頁面疑似無回應"}
+        finally:
+            ex.shutdown(wait=False)
     except UnsupportedSiteError as e:
         return {"status": "skipped", "url": url, "error": str(e)}
     except Exception as e:
         return {"status": "failed", "url": url, "error": str(e)}
     finally:
-        crawler.close()
+        _force_close(crawler)
 
 
 def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
