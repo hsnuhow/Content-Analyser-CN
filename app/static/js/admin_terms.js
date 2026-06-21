@@ -3,8 +3,9 @@
 // Jinja 產生的 URL 透過按鈕的 data-url 屬性傳入（靜態 js 不經模板渲染）。
 (function () {
   function esc(s) {
-    return (s || '').replace(/[&<>"]/g, function (c) {
-      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+    // 跳脫含單引號在內的 HTML 特殊字元（與其他頁面的 esc 一致，避免屬性值被提早閉合）
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
   }
 
