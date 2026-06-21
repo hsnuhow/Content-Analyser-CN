@@ -616,6 +616,11 @@ class HeadlessCrawler:
         # Cloud Run 跨國載入較慢，但「不管時間、確保滾到底抓完整內文」優先。
         options.page_load_strategy = "eager"
 
+        # ⭐ SSRF 縱深防禦：開 performance log，供 _assert_safe_remote_ip 取「主文件
+        #   實際連到的 remote IP」事後查驗（擋 DNS rebinding / redirect→內網，這條
+        #   driver.get 路徑繞過 net_guard.safe_urlopen）。
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+
         # ⭐ Tier 3：掛載代理（僅 self.proxy_config 有值時；預設不執行）。
         #   保存擴充目錄路徑，driver 關閉時清理（避免 temp 目錄累積）。
         if self.proxy_config:
@@ -689,12 +694,16 @@ class HeadlessCrawler:
             try:
                 self._log(f"[載入] 開啟網頁 (嘗試 {attempt}/{max_retries}): {url}")
                 self.driver.get(url)
+                self._assert_safe_remote_ip(url)
                 self._apply_locale_spoofing_js()
                 self._log("[載入] ✓ 網頁已載入（DOMContentLoaded）")
                 return
+            except UnsupportedSiteError:
+                raise  # SSRF 阻擋：直接往上拋，不重試、不容忍
             except TimeoutException:
                 # eager 載入逾時：容忍，用已載入的 DOM；不重試（重試一樣慢）。
                 self._log("[載入] ⚠️ 載入逾時，使用已載入內容繼續（網路保持，供後續滾動 lazy-load）")
+                self._assert_safe_remote_ip(url)  # 逾時仍可能已連上內網主文件，照驗
                 try:
                     self._apply_locale_spoofing_js()
                 except Exception:
@@ -719,6 +728,43 @@ class HeadlessCrawler:
                     raise TimeoutError(f"網路連線錯誤，已重試 {max_retries} 次: {url}")
                 else:
                     raise
+
+    def _assert_safe_remote_ip(self, url: str):
+        """SSRF 縱深防禦：driver.get 後查 Chrome **實際連到的主文件 remote IP**，
+        命中內網（含 GCP metadata 169.254.169.254）即丟棄。
+
+        net_guard.safe_urlopen 只擋 urllib 路徑；Chrome 自行解析 DNS、自動跟隨 redirect，
+        可被 DNS rebinding（TTL=0 翻內網）或 redirect→內網繞過。這裡用 performance log
+        取最後一個 Document 回應的 remoteIPAddress 再驗一次，涵蓋 scrape/extract-images/
+        research 三個都走 _open 的端點。
+
+        判不出 IP（無 perf log 能力 / 無 Document 事件）時 fail-open：不誤殺合法爬取
+        （入口 URL 已先過 is_safe_url），只在「確定連到內網」時才丟棄。"""
+        try:
+            from net_guard import is_safe_ip
+            logs = self.driver.get_log("performance")
+        except Exception:
+            return
+        main_ip = None
+        for entry in logs:
+            try:
+                msg = json.loads(entry.get("message", "{}")).get("message", {})
+                if msg.get("method") != "Network.responseReceived":
+                    continue
+                params = msg.get("params", {})
+                if params.get("type") != "Document":
+                    continue
+                ip = (params.get("response") or {}).get("remoteIPAddress")
+                if ip:
+                    main_ip = ip  # 取最後一個 Document（含 redirect 後的最終主文件）
+            except Exception:
+                continue
+        if not main_ip:
+            return
+        ok, reason = is_safe_ip(main_ip)
+        if not ok:
+            self._log(f"[SSRF] ⛔ 阻擋：主文件實際連到內網位址 {main_ip}（{reason}）")
+            raise UnsupportedSiteError(f"SSRF 阻擋：{url} 解析至內網位址 {main_ip}")
 
     def _apply_meta_fallback(self, content: str, html: str) -> str:
         """主文過短（< 200 字）時，補入 og:description / meta description 作為導語。
