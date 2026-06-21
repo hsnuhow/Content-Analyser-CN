@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Project 與 Analysis 路由
+Project 與 Analysis 路由（package：__init__ 定義 bp + 共用 helper；
+後續各領域路由可拆為 projects.py / analysis.py / datasets.py / discovery.py 子模組）
 
 Blueprint：project_bp（prefix /projects）
 
@@ -26,16 +27,16 @@ from flask import (Blueprint, render_template, request, jsonify,
 from firebase_admin import firestore
 from io import BytesIO
 
-from .services import db, get_admin_email
-from .auth_guards import login_required, refresh_whitelist_status
-from .analysis_client import (submit_analysis, get_job_status, cancel_analysis,
+from ..services import db, get_admin_email
+from ..auth_guards import login_required, refresh_whitelist_status
+from ..analysis_client import (submit_analysis, get_job_status, cancel_analysis,
                               submit_image_analysis, get_image_analysis_status,
                               submit_combined, get_combined_status,
                               submit_audience, get_audience_status)
-from .crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
+from ..crawler_client import (submit_crawl_batch, get_crawl_status, cancel_crawl,
                              submit_research, get_research_status,
                              submit_extract_images, get_extract_images_status)
-from . import kb_store
+from .. import kb_store
 
 bp = Blueprint('project_bp', __name__, url_prefix='/projects')
 
@@ -50,8 +51,8 @@ def current_user_email() -> str:
 
 
 # URL 工具與資料集 items store 層已抽出（見 url_utils.py / datasets_store.py）。
-from .url_utils import _TRACKING_PARAMS, _url_key, parse_url_list  # noqa: F401
-from .datasets_store import (  # noqa: F401  （re-export：admin_routes 仍 from project_routes import _load_dataset_items）
+from ..url_utils import _TRACKING_PARAMS, _url_key, parse_url_list  # noqa: F401
+from ..datasets_store import (  # noqa: F401  （re-export：admin_routes 仍 from project_routes import _load_dataset_items）
     _items_ref, _load_dataset_items, _save_dataset_items,
     _delete_dataset_items, _append_urls_to_draft, _replace_items_by_url,
 )
@@ -322,7 +323,7 @@ def update_settings(pid, project, role):
 
 
 # LLM 供應商模型查詢已抽出（見 llm_models.py）。
-from .llm_models import _fetch_provider_models  # noqa: F401
+from ..llm_models import _fetch_provider_models  # noqa: F401
 
 @bp.route('/<pid>/models')
 @project_access_required(min_role='editor')
@@ -443,7 +444,7 @@ def archive_project(pid, project, role):
 
 
 # 專案生命週期層已抽出（見 project_lifecycle.py）。
-from .project_lifecycle import _project_active_jobs, _cascade_delete_project  # noqa: F401
+from ..project_lifecycle import _project_active_jobs, _cascade_delete_project  # noqa: F401
 
 @bp.route('/<pid>/delete', methods=['POST'])
 @project_access_required(min_role='owner')
@@ -576,7 +577,7 @@ def submit_analysis_route(pid, project, role):
 
 
 # 分析狀態對帳層已抽出（見 analysis_store.py）。
-from .analysis_store import _analysis_ref, _reconcile_analysis, _reconcile_derive, _derived_label  # noqa: F401
+from ..analysis_store import _analysis_ref, _reconcile_analysis, _reconcile_derive, _derived_label  # noqa: F401
 
 @bp.route('/<pid>/analyses/<aid>')
 @project_access_required(min_role='viewer')
@@ -1044,7 +1045,7 @@ def start_crawl(pid, did, project, role):
 
 
 # 上傳檔文字抽取已抽出（見 doc_extract.py）。
-from .doc_extract import _extract_doc_text  # noqa: F401
+from ..doc_extract import _extract_doc_text  # noqa: F401
 
 @bp.route('/<pid>/datasets/manual', methods=['POST'])
 @project_access_required(min_role='editor')
@@ -1174,7 +1175,7 @@ def create_manual_dataset(pid, project, role):
 # ──────────────────────────────────────────────────────────────────────
 
 # 爬取狀態同步層已抽出（見 dataset_sync.py）。
-from .dataset_sync import _sync_crawling_dataset  # noqa: F401
+from ..dataset_sync import _sync_crawling_dataset  # noqa: F401
 
 @bp.route('/<pid>/datasets/<did>')
 @project_access_required(min_role='viewer')
@@ -1708,7 +1709,7 @@ def analyse_combined(pid, project, role):
 # ──────────────────────────────────────────────────────────────────────
 
 # 資料集匯出層已抽出（見 dataset_export.py）。
-from .dataset_export import _dataset_to_markdown, _dataset_to_json  # noqa: F401
+from ..dataset_export import _dataset_to_markdown, _dataset_to_json  # noqa: F401
 
 def _get_completed_dataset_or_redirect(pid: str, did: str):
     """讀取已完成的資料集；未完成回 (None, redirect_response)。"""
