@@ -53,30 +53,42 @@ def _query_status(path: str, job_id: str, timeout: int) -> dict:
         return {"status": "unavailable", "error": str(e)}
 
 
+def _request_json(method: str, path: str, *, payload=None,
+                  timeout: int = DEFAULT_TIMEOUT, timeout_msg: str = "請求逾時。") -> dict:
+    """共用 HTTP 包裝（給 submit / cancel / cleanup 等動作用）：
+      base 未設→error；POST 帶 json，GET 不帶；401→金鑰錯；逾時→timeout_msg；其餘例外→連線錯。
+    回傳 server JSON 或 {"error": ...}。把原本散在 5 個函式、一模一樣的 try/except 收斂成一份。
+    （狀態查詢不走這裡——它需要區分 unavailable / not_found 三態，見 _query_status。）"""
+    base = _crawler_url()
+    if not base:
+        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
+    try:
+        if method == "POST":
+            resp = requests.post(f"{base}{path}", json=payload, headers=_headers(), timeout=timeout)
+        else:
+            resp = requests.get(f"{base}{path}", headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": timeout_msg}
+    except Exception as e:
+        return {"error": f"無法連線爬蟲服務：{e}"}
+
+
 def submit_crawl_batch(urls: list, use_gemini: bool = False,
                        gemini_api_key: str = None,
                        timeout: int = SUBMIT_TIMEOUT,
                        force_listing: bool = False) -> dict:
     """提交非同步批次爬取。回傳 {"job_id": ...} 或 {"error": ...}。
     force_listing=True：強制爬取被判為列表/商品頁的 URL（不略過）。"""
-    base = _crawler_url()
-    if not base:
-        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
     payload = {"urls": urls, "use_gemini": bool(use_gemini)}
     if force_listing:
         payload["force_listing"] = True
     if gemini_api_key:
         payload["gemini_api_key"] = gemini_api_key
-    try:
-        resp = requests.post(f"{base}/api/crawl/batch", json=payload,
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交爬取任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線爬蟲服務：{e}"}
+    return _request_json("POST", "/api/crawl/batch", payload=payload, timeout=timeout,
+                         timeout_msg=f"提交爬取任務逾時（{timeout}s）。")
 
 
 def get_crawl_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
@@ -86,19 +98,8 @@ def get_crawl_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
 
 def submit_research(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
     """提交非同步「選擇器研究」（對失敗 URL）。回傳 {"job_id": ...} 或 {"error": ...}。"""
-    base = _crawler_url()
-    if not base:
-        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.post(f"{base}/api/research", json={"urls": urls},
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交研究任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線爬蟲服務：{e}"}
+    return _request_json("POST", "/api/research", payload={"urls": urls}, timeout=timeout,
+                         timeout_msg=f"提交研究任務逾時（{timeout}s）。")
 
 
 def get_research_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
@@ -108,19 +109,8 @@ def get_research_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
 
 def submit_extract_images(urls: list, timeout: int = SUBMIT_TIMEOUT) -> dict:
     """提交非同步「主文大圖擷取」。回傳 {"job_id": ...} 或 {"error": ...}。"""
-    base = _crawler_url()
-    if not base:
-        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.post(f"{base}/api/extract-images", json={"urls": urls},
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "爬蟲服務金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交影像擷取任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線爬蟲服務：{e}"}
+    return _request_json("POST", "/api/extract-images", payload={"urls": urls}, timeout=timeout,
+                         timeout_msg=f"提交影像擷取任務逾時（{timeout}s）。")
 
 
 def get_extract_images_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
@@ -130,34 +120,16 @@ def get_extract_images_status(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> di
 
 def cancel_crawl(job_id: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """請求取消非同步爬取任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
-    base = _crawler_url()
-    if not base:
-        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
     if not job_id:
         return {"error": "缺少 job_id。"}
-    try:
-        resp = requests.post(f"{base}/api/crawl/{job_id}/cancel",
-                             headers=_headers(), timeout=timeout)
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": "取消請求逾時。"}
-    except Exception as e:
-        return {"error": str(e)}
+    return _request_json("POST", f"/api/crawl/{job_id}/cancel", timeout=timeout,
+                         timeout_msg="取消請求逾時。")
 
 
 def cleanup_crawl_jobs(days: int = 7, timeout: int = SUBMIT_TIMEOUT) -> dict:
     """清除孤兒/陳舊爬取任務文件。回傳 {"deleted": N} 或 {"error": ...}。"""
-    base = _crawler_url()
-    if not base:
-        return {"error": "CRAWLER_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.post(f"{base}/api/crawl/cleanup", json={"days": days},
-                             headers=_headers(), timeout=timeout)
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": "清理請求逾時。"}
-    except Exception as e:
-        return {"error": str(e)}
+    return _request_json("POST", "/api/crawl/cleanup", payload={"days": days}, timeout=timeout,
+                         timeout_msg="清理請求逾時。")
 
 
 def check_crawler_health(timeout: int = DEFAULT_TIMEOUT) -> dict:
