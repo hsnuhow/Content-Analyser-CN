@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-21 重構：巨檔模組化（nlp_path + project_routes 徹底拆分，已部署，每刀 Chrome 驗證）
+零回歸、每刀部署後 Chrome MCP 實測、rollback.sh + snapshot 隨時可退。新增 tests/（pyflakes 把關每次拆分無 undefined name）。
+- **nlp_path.py 883→663**：抽出 `text_processing`（文字/來源層：jieba 斷詞/來源分類/停用詞/過濾清單；可本地測 12 例）。真實分析驗證（關鍵字/分群/情感全產出）。
+- **project_routes.py 2366 → package + 8 模組**：
+  - **策略 B（抽業務邏輯層）**：`url_utils`(URL 正規化, 12測) / `datasets_store`(items 子集合) / `dataset_export`(MD/JSON, 6測) / `doc_extract`(上傳檔→文字, 7測) / `analysis_store`(分析狀態對帳) / `dataset_sync`(爬取同步) / `llm_models`(供應商模型, 8測) / `project_lifecycle`(刪除/active jobs)。
+  - **策略 A（blueprint package 分領域）**：`project_routes/` package = `__init__`(146, 純 core：bp + 共用 helper + decorator + admin re-export + 4 子模組註冊) + `projects.py`(356, ①CRUD+②LLM設定) + `analysis.py`(545, ③分析+⑥整合) + `datasets.py`(731, ④資料集) + `discovery.py`(124, ⑤探勘)。URL/blueprint 名不變、admin re-export 不變。
+  - 順帶修：A0 的 `^from .` regex 漏改縮排 lazy import（discovery 的 search_extent，A1 改 module-level 修復）。
+- 測試基礎：先前零測試 → tests/（無 pytest 可 `bash tests/run.sh`）+ FakeFirestore 替身 + pyflakes 拆分把關。
+
 ## 2026-06-21 修正(N+1) + 補強：list_projects 索引查詢 + 測試環境機制（已部署）
 - **N+1**：`list_projects` 非 admin 由全表 `.stream()` 改為 owner 等值查 + `member_emails` array_contains（兩個索引查詢）；admin 全站視角仍全掃（單一管理員）。projects 加 `member_emails` 陣列（= members.keys()），create/add/remove_member 三處同步維護。owner 永遠由 owner== 查、不依賴新欄位 → 零空窗。既有專案以一次性 admin 路由 `/admin/backfill-member-emails`（伺服器端 SA 權限、冪等）補欄位（已跑：5/5）。附錄 C 更新。
 - **測試環境機制**（拆巨檔前的安全網）：`requirements-dev.txt`（pytest）+ `pytest.ini`（pythonpath 指向各服務）+ `tests/conftest.py` + `tests/fakes.py`（FakeFirestore 測試替身，讓 db 相依邏輯可在無真 Firestore 下測）。維持無 pytest 也能 `bash tests/run.sh`。全 42 tests 過（含 N+1 查詢邏輯驗證）。
