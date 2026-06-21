@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-22 程式碼審查模組 4–6（三後端服務）+ 未用 import 檢驗清理（三並行代理審 + 親驗 + 逐服務部署）
+三個後端服務（crawler 5754 / analysis 4702 / search-extent 812 行）以三個並行審查代理掃，發現親自驗證後逐服務部署驗證。
+- **🔴 修正(高，回歸)**：`crawler-service/image_extract.py` 從 `crawler` import `SITE_TEMPLATES`（站台模板外部化時改成 get_site_templates）+ `MAIN_CONTENT_SELECTORS`（抽取層三層化時搬到 dom_extract）→ `/api/extract-images` 一觸發就 ImportError 500（延遲 import，py_compile 掃不到）。改從 `site_templates.get_site_templates()` + `dom_extract.MAIN_CONTENT_SELECTORS` 取，順帶讓影像擷取也吃後台可編模板。**實測：25 URL 共 116 張大圖，功能恢復。**
+- **修正**：`search-extent/brand_presence.py` 內層 ThreadPoolExecutor 綁 `min(8, len(chunks))`，避免與外層每品牌池巢狀執行緒爆量。
+- **改善**：`analysis-service` cluster_id 直接索引統一改 `.get`（pipeline/synthesis/report，防 KeyError 靜默吞 search-extent）+ nlp_path 關聯規則 lift 除零 guard；`search-extent` `_ground/_ground_brand` 移除 tries=1 死碼。**實測：discover 42 候選、grounding 正常。**
+- **新增回歸守衛**：`tests/test_imports_resolve.py`——AST 跨模組 import 解析檢查，一次抓出「重構搬走名稱後忘改 import」的延遲 import 回歸（py_compile 抓不到，正是本次 image_extract 那類）。
+- **未用 import 檢驗清理**：content-analyser pyflakes 58 → 6（移除 52 個死 import）。**刻意保留 6 個並加 noqa+註解**：firebase 初始化 side-effect（app/__init__ services）、route 註冊 side-effect（project_routes/__init__ 四子模組）、admin_routes re-export（_load_dataset_items）。驗證無 undefined name、四子模組路由實測全 200（route 註冊未破壞）。
+- 部署：crawler 00092 / analysis 00054→新 / search-extent 00008→新 / content-analyser 00100。
+
 ## 2026-06-21 程式碼審查與最佳化（模組 1–3：前端 JS / 業務模組 / 路由層；逐模組部署驗證）
 系統性逐模組審查（找 bug + 邊界 + 效率不佳寫法 + 補註解），每模組部署後實測。
 - **模組 1 前端 JS**：① 抽 `app.js` 共用 `poll(url,opts)`（統一嘗試上限/終態/退避，根治「失控輪詢」類 bug）+ `renderMarkdown`（marked/DOMPurify 載入守衛）；6 處手刻輪詢收斂成 1 份。② dataset_detail.js 3 個 poll 補上嘗試上限（原本無上限，卡非終態會永遠打伺服器）。③ 複製成敗才回饋。④ admin_terms esc 補單引號。實測：analysis 頁 renderMarkdown 端對端、選擇器候選頁無重整、各頁無 console 錯誤。
