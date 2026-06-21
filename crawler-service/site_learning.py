@@ -166,8 +166,9 @@ _CANDIDATES_COLLECTION = "selector_candidates"
 
 def save_selector_candidate(domain: str, selectors: list, cms: str = "",
                             validated_chars: int = 0, sample_urls: list = None,
-                            diagnosis: str = "") -> bool:
-    """研究工具產出 → 寫入 selector_candidates/{domain}（待 admin 確認）。no-op on failure。
+                            diagnosis: str = "", status: str = "pending") -> bool:
+    """研究工具產出 → 寫入 selector_candidates/{domain}（status 預設 pending 待 admin 確認；
+    高信心自動升級時傳 status='auto_approved' 留可追溯紀錄）。no-op on failure。
 
     per-domain 隔離：候選只進該網域自己的文件，錯誤無法擴散到別的網域。
     """
@@ -182,7 +183,7 @@ def save_selector_candidate(domain: str, selectors: list, cms: str = "",
             "validated_chars": int(validated_chars or 0),
             "sample_urls": list(sample_urls or []),
             "diagnosis": diagnosis,
-            "status": "pending",
+            "status": status,
             "proposed_at": firestore.SERVER_TIMESTAMP,
         }, merge=True)
         print(f"[Research] 候選已存：{domain} → {selectors}（{validated_chars} 字）", flush=True)
