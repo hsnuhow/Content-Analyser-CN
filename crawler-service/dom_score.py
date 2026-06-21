@@ -180,6 +180,32 @@ def calculate_node_score(node, soup, log_fn=None) -> Tuple[float, Dict[str, floa
         return 0.0, {}
 
 
+def build_dom_summary(soup, max_count: int = 150):
+    """掃出候選正文容器摘要（供 LLM 選擇器詢問用）：每個 article/section/div/main
+    回 {css_path, text_len, p_count, link_density, preview}，依 text_len 由大到小取前 N。"""
+    cands = []
+    for node in soup.find_all(['article', 'section', 'div', 'main']):
+        try:
+            if not node or not hasattr(node, 'get_text') or not hasattr(node, 'find_all'):
+                continue
+            text = node.get_text(' ', strip=True)
+            pcount = len(node.find_all('p'))
+            if pcount >= 3 or len(text) > 300:
+                links_text = ''.join(a.get_text(strip=True) for a in node.find_all('a'))
+                ld = len(links_text) / max(len(text), 1)
+                cands.append({
+                    'css_path': css_path(node)[:512],
+                    'text_len': len(text),
+                    'p_count': pcount,
+                    'link_density': round(ld, 3),
+                    'preview': text[:120]
+                })
+        except Exception:
+            continue
+    cands.sort(key=lambda x: x['text_len'], reverse=True)
+    return cands[:max_count]
+
+
 def calculate_confidence(best_score: float, second_score: float, best_node: Any) -> float:
     margin_conf = min(1.0, max(best_score - second_score, 0.0) / best_score * 2) if best_score > 0 else 0.0
     if best_score >= 1500:
