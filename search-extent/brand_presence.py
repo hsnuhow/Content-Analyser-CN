@@ -29,9 +29,11 @@ def _slug(s: str) -> str:
     return re.sub(r'[^a-z0-9]', '', (s or '').lower())
 
 
-def _ground_brand(token, project, topic, brand):
+def _ground_brand(project, topic, brand):
     """單一品牌錨定 grounding。回 (text, chunks[(title,uri)], usage)。逾時/失敗即放棄該品牌
-    （由其他平行品牌補足結果），刻意不重試——避免破 Cloudflare 代理上限。"""
+    （由其他平行品牌補足結果），刻意不重試——避免破 Cloudflare 代理上限。
+    token 在此即時取（_d._access_token 有快取+鎖）——避免長任務（多品牌）一開始取的 token
+    跑到後段品牌才過期 → 401。"""
     prompt = (
         f"你在評估台灣市場的『內容聲量』。主題：「{topic}」，品牌：「{brand}」。\n"
         f"問題：針對這個主題，有沒有『第三方』（媒體 / 論壇 / 部落格 / YouTube，"
@@ -48,6 +50,7 @@ def _ground_brand(token, project, topic, brand):
             "tools": [{"googleSearch": {}}],
             "generationConfig": {"temperature": 0.2}}
     try:
+        token = _d._access_token()
         req = urllib.request.Request(
             url, data=json.dumps(body).encode(),
             headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
@@ -80,8 +83,8 @@ def _verdict(text: str) -> str:
     return ""   # 未判定 → 由啟發式補
 
 
-def _assess_one(token, project, topic, brand):
-    text, chunks, usage = _ground_brand(token, project, topic, brand)
+def _assess_one(project, topic, brand):
+    text, chunks, usage = _ground_brand(project, topic, brand)
     slug = _slug(brand)
     srcs, seen, earned, official = [], set(), 0, False
     if chunks:
@@ -122,14 +125,14 @@ def brand_presence(topic: str, brands, max_brands: int = 15) -> dict:
     brands = [b.strip() for b in (brands or []) if b and b.strip()][:max_brands]
     if not topic.strip() or not brands:
         return {"status": "failed", "error": "缺少主題或品牌", "results": []}
-    token = _d._access_token()
     usage_total = {"prompt": 0, "output": 0, "total": 0}
     results = []
 
     # 單一品牌 worker 例外時回標記「探勘失敗」的 sentinel，不讓整批 map 中止（部分失敗仍回結果）。
+    # token 由 _ground_brand 內即時取（_d._access_token 快取；過期自動 refresh，不會跑到後段品牌才 401）。
     def _assess_safe(b):
         try:
-            return _assess_one(token, project, topic, b)
+            return _assess_one(project, topic, b)
         except Exception as e:
             print(f"[brand_presence] 品牌探勘失敗（{b}）：{e}", flush=True)
             sentinel = {"brand": b, "presence_level": "探勘失敗", "earned_count": 0,

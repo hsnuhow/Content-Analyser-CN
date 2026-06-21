@@ -15,7 +15,6 @@
 系統吸收）。失敗 / 砍除過量 → 退回原文，不擋分析。
 """
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Tuple
 

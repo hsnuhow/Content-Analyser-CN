@@ -11,7 +11,6 @@ Path 2：LLM 直讀層
 費用：用戶 per-project LLM Key（Gemini 或 Claude），每次分析 < $0.005
 """
 import json
-import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Callable, Optional

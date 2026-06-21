@@ -294,7 +294,7 @@ def crawl_batch():
     urls = safe_urls
 
     job_id = str(uuid.uuid4())
-    from crawl_job import chunk_urls, CHUNK_SIZE
+    from crawl_job import chunk_urls
     import task_queue
     chunks = chunk_urls(urls)
     use_queue = task_queue.tasks_enabled()

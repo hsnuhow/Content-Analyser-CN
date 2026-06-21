@@ -104,10 +104,12 @@ _DEFAULT_ANGLES = [
 _MODEL = "gemini-2.5-flash"
 
 
-def _ground(token, project, prompt):
+def _ground(project, prompt):
     """單次 grounding 呼叫，回 (chunks:[(title,uri)], usage:{prompt,output,total})。
     45s 上限：多角度會平行跑，單一角度逾時/失敗即放棄該角度（其他角度仍有結果），
-    避免同步請求破 Cloudflare ~100s 代理上限（TypeError: Load failed 根因）。**刻意不重試。**"""
+    避免同步請求破 Cloudflare ~100s 代理上限（TypeError: Load failed 根因）。**刻意不重試。**
+    token 在此「即時」取（_access_token 有快取+鎖：有效回快取、過期才 refresh）——避免長任務
+    一開始取一次的 token 跑到後段角度才過期 → 401。把過期窗口從「整個任務」縮到「單次請求」。"""
     url = (f"https://aiplatform.googleapis.com/v1/projects/{project}"
            f"/locations/global/publishers/google/models/{_MODEL}:generateContent")
     body = {
@@ -116,6 +118,7 @@ def _ground(token, project, prompt):
         "generationConfig": {"temperature": 0.3},
     }
     try:
+        token = _access_token()
         req = urllib.request.Request(
             url, data=json.dumps(body).encode(),
             headers={"Authorization": "Bearer " + token,
@@ -204,14 +207,14 @@ def discover(query: str, max_results: int = 50, angles=None) -> dict:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     if not project:
         return {"status": "failed", "error": "GOOGLE_CLOUD_PROJECT 未設定", "candidates": []}
-    token = _access_token()
     angles = angles or _DEFAULT_ANGLES
 
     # 多角度 grounding **平行**跑：牆鐘 ≈ 最慢一個角度，而非相加（壓在 Cloudflare ~100s 內）。
     # 單一角度 worker 例外時回 sentinel（空 chunks + 零 usage），不讓整批 map 中止。
+    # token 由 _ground 內即時取（_access_token 快取，平行呼叫不會各打 metadata；過期自動 refresh）。
     def _ground_one(a):
         try:
-            return _ground(token, project, a.format(q=query))
+            return _ground(project, a.format(q=query))
         except Exception as e:
             print(f"[discover] 角度 grounding 失敗：{e}", flush=True)
             return [], {"prompt": 0, "output": 0, "total": 0}
