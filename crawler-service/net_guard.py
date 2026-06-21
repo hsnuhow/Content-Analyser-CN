@@ -109,6 +109,28 @@ def is_safe_url(url: str):
         return False, str(e)
 
 
+def is_safe_ip(ip_str: str):
+    """對「已知的連線目標 IP 字串」做 SSRF 判定（供 Chrome 實際連線 IP 的事後查驗）。
+
+    is_safe_url 只能擋 urllib 路徑；Chrome（driver.get）自行解析 DNS、自動跟隨 redirect，
+    可被 DNS rebinding（TTL=0 翻內網）或 redirect→169.254.169.254 繞過。本函式用於
+    driver.get 後拿「Chrome 實際連到的 remote IP」再驗一次，同一套 v4/v6 內網判定。
+
+    IP 字串判不出時回 (True, "")（fail-open，不因判不出而誤殺合法爬取——入口 URL
+    已先過 is_safe_url）。回傳 (ok: bool, reason: str)。"""
+    if not ip_str:
+        return True, ""
+    try:
+        ip = ipaddress.ip_address(ip_str.strip())
+    except ValueError:
+        return True, ""
+    if ip.version == 4 and _v4_dangerous(ip):
+        return False, f"連線目標為保留/私有 IP：{ip}"
+    if ip.version == 6 and _v6_internal(ip):
+        return False, f"連線目標為保留/私有 IPv6：{ip}"
+    return True, ""
+
+
 # 底線版別名（相容既有呼叫點：app.py 等以 _is_safe_url 命名匯入）。
 _is_safe_url = is_safe_url
 

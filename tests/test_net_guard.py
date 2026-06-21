@@ -75,6 +75,34 @@ def test_allow_public_v6():
     assert _ok("http://[2001:4860:4860::8888]/") is True
 
 
+# ── is_safe_ip：Chrome 實際連線 IP 的事後查驗（SSRF 縱深防禦）──
+def _ip_ok(ip):
+    res, _ = ng.is_safe_ip(ip)
+    return res
+
+def test_ip_block_metadata_and_private():
+    assert _ip_ok("169.254.169.254") is False   # GCP metadata
+    assert _ip_ok("10.0.0.5") is False           # RFC1918
+    assert _ip_ok("192.168.1.1") is False
+    assert _ip_ok("127.0.0.1") is False          # loopback
+    assert _ip_ok("::1") is False                # v6 loopback
+
+def test_ip_block_6to4_embedded_private():
+    # 6to4 包私有 v4（2002:a9fe:a9fe:: → 169.254.169.254）仍須擋
+    assert _ip_ok("2002:a9fe:a9fe::") is False
+
+def test_ip_allow_public():
+    assert _ip_ok("8.8.8.8") is True
+    assert _ip_ok("1.1.1.1") is True
+    assert _ip_ok("2606:4700:4700::1111") is True  # Cloudflare v6 全域
+
+def test_ip_fail_open_on_undetermined():
+    # 判不出 IP（空 / 非 IP 字串）→ fail-open，不誤殺合法爬取
+    assert _ip_ok("") is True
+    assert _ip_ok("not-an-ip") is True
+    assert _ip_ok(None) is True
+
+
 def _run():
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
