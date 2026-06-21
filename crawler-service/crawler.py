@@ -27,6 +27,7 @@ from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirec
 from page_classify import (looks_like_browser_error_page,
                             looks_like_http_error_page, looks_like_block_page)
 import text_clean
+import dom_score
 
 from bs4 import BeautifulSoup
 # 統一使用 undetected-chromedriver（對齊 Colab，最佳反偵測）
@@ -1230,41 +1231,9 @@ class HeadlessCrawler:
             return False
 
     def _css_path(self, el) -> str:
-        try:
-            parts = []
-            cur = el
-            while cur and getattr(cur, 'name', None) and cur.name != 'html':
-                try:
-                    ident = cur.name
-                    el_id = cur.get('id') if hasattr(cur, 'get') else None
-                    if el_id:
-                        ident += f"#{el_id}"
-                    classes = cur.get('class') if hasattr(cur, 'get') else None
-                    if classes and isinstance(classes, (list, tuple)):
-                        ident += '.' + '.'.join(str(c) for c in classes[:3])
-                    parts.append(ident)
-                    cur = cur.parent if hasattr(cur, 'parent') else None
-                except Exception:
-                    break
-                if len(parts) > 20:
-                    break
-            return ' > '.join(reversed(parts))
-        except Exception:
-            return "unknown"
-
+        return dom_score.css_path(el)
     def _get_element_depth(self, el) -> int:
-        try:
-            depth = 0
-            current = el
-            while current and hasattr(current, 'parent'):
-                depth += 1
-                current = current.parent
-                if depth > 50:
-                    break
-            return depth
-        except Exception:
-            return 0
-
+        return dom_score.get_element_depth(el)
     def _build_dom_summary(self, soup: BeautifulSoup, max_count: int = 150) -> List[Dict[str, Any]]:
         cands = []
         for node in soup.find_all(['article', 'section', 'div', 'main']):
@@ -1354,152 +1323,14 @@ class HeadlessCrawler:
             self._log(f"[LLM] Gemini call failed: {e}")
             return []
 
-    def _calculate_visual_weight(self, node, soup: BeautifulSoup) -> float:
-        try:
-            if node is None or not hasattr(node, 'get'):
-                return 1.0
-            classes = node.get('class')
-            classes_str = ' '.join(str(c) for c in classes).lower() if classes else ''
-            id_attr = node.get('id')
-            id_str = str(id_attr).lower() if id_attr else ''
-            weight = 1.0
-            if any(x in classes_str or x in id_str for x in ['main', 'content', 'center', 'article']):
-                weight += 0.3
-            if any(x in classes_str or x in id_str for x in ['side', 'sidebar', 'widget', 'aside']):
-                weight -= 0.5
-            if any(x in classes_str or x in id_str for x in ['header', 'footer', 'nav']):
-                weight -= 0.4
-            return max(0.1, weight)
-        except Exception:
-            return 1.0
-
-    def _calculate_dom_depth(self, node) -> int:
-        try:
-            if not node:
-                return 0
-            depth = 0
-            current = node
-            while current and hasattr(current, 'parent'):
-                depth += 1
-                current = current.parent
-                if depth > 50:
-                    break
-            return depth
-        except Exception:
-            return 5
-
-    def _calculate_paragraph_quality(self, node) -> float:
-        try:
-            if not node or not hasattr(node, 'find_all'):
-                return 0.0
-            paragraphs = node.find_all('p')
-            if not paragraphs:
-                return 0.0
-            total_score = 0.0
-            for p in paragraphs:
-                try:
-                    text = p.get_text(strip=True)
-                    if len(text) < 20:
-                        continue
-                    punctuation_count = sum(1 for c in text if c in '。，！？；：、')
-                    punct_density = punctuation_count / max(len(text), 1)
-                    if 0.03 <= punct_density <= 0.15:
-                        total_score += 1.0
-                    else:
-                        total_score += 0.5
-                except Exception:
-                    continue
-            return total_score / max(len(paragraphs), 1)
-        except Exception:
-            return 0.0
-
-    def _calculate_chinese_ratio(self, text: str) -> float:
-        if not text:
-            return 0.0
-        chinese_chars = sum(1 for c in text if '一' <= c <= '鿿')
-        return chinese_chars / max(len(text), 1)
-
     def _looks_like_listing_block(self, node) -> bool:
-        if len(node.find_all('article', recursive=False)) > 3 or len(node.find_all('li', recursive=False)) > 5:
-            self._log(f"[Filter] Node disqualified by structure (contains multiple <article> or <li>).")
-            return True
-        text = node.get_text(" ", strip=True).lower()
-        if not text:
-            return False
-        listing_keywords = [
-            '延伸閱讀', '相關文章', '推薦閱讀', '熱門文章', 'entertainment', '美麗佳人編輯部',
-            'articlelist', 'storylist', 'postlist', 'item-list', 'card-list'
-        ]
-        matched_keywords = [kw for kw in listing_keywords if kw in text]
-        if matched_keywords:
-            self._log(f"[Filter] Node disqualified by keywords: {matched_keywords}")
-            return True
-        return False
-
+        return dom_score.looks_like_listing_block(node, self._log)
     def _looks_like_cookie_banner(self, text: str, node=None) -> bool:
-        if not text:
-            return False
-        t = text.lower()
-        cookie_keywords = [
-            "cookie", "cookies", "gdpr", "consent", "同意管理", "隱私權", "隱私政策",
-            "personal data", "個人資料", "adchoices", "targeted advertising",
-            "performance cookies", "functional cookies", "audience measurement",
-            "本網站使用", "這些 cookie", "這些 cookies"
-        ]
-        if sum(1 for kw in cookie_keywords if kw in t) >= 3:
-            return True
-        return False
-
+        return dom_score.looks_like_cookie_banner(text, node)
     def _calculate_node_score(self, node, soup: BeautifulSoup) -> Tuple[float, Dict[str, float]]:
-        scores = {}
-        try:
-            if not node or not hasattr(node, 'get_text'):
-                return 0.0, {}
-            text = node.get_text("\n", strip=True)
-            text_len = len(text)
-            if text_len < 100:
-                return 0.0, {}
-            if self._looks_like_cookie_banner(text, node) or self._looks_like_listing_block(node):
-                return 0.0, {}
-            scores['text_length'] = text_len * 0.2
-            scores['paragraph_quality'] = self._calculate_paragraph_quality(node) * 1000 * 0.25
-            links = node.find_all('a')
-            link_text = ''.join(a.get_text(strip=True) for a in links)
-            link_density = len(link_text) / max(text_len, 1)
-            scores['link_density'] = (1 - link_density) * 500 * 0.25
-            depth = self._calculate_dom_depth(node)
-            optimal_depth = 8
-            depth_score = 1.0 - abs(depth - optimal_depth) / max(depth, optimal_depth)
-            scores['dom_depth'] = depth_score * 300 * 0.10
-            scores['visual_weight'] = self._calculate_visual_weight(node, soup) * 400 * 0.10
-            scores['chinese_ratio'] = self._calculate_chinese_ratio(text) * 300 * 0.10
-            total_score = sum(scores.values())
-            return total_score, scores
-        except Exception:
-            return 0.0, {}
-
+        return dom_score.calculate_node_score(node, soup, self._log)
     def _calculate_confidence(self, best_score: float, second_score: float, best_node: Any) -> float:
-        margin_conf = min(1.0, max(best_score - second_score, 0.0) / best_score * 2) if best_score > 0 else 0.0
-        if best_score >= 1500:
-            score_conf = 1.0
-        elif best_score >= 800:
-            score_conf = 0.7 + (best_score - 800) / 700 * 0.3
-        else:
-            score_conf = best_score / 800 * 0.7
-        structure_conf = 0.5
-        try:
-            if best_node.find(['h1', 'h2', 'h3']):
-                structure_conf += 0.2
-            if best_node.find(['time', '[datetime]']):
-                structure_conf += 0.15
-            if len(best_node.find_all('p')) >= 5:
-                structure_conf += 0.15
-        except Exception:
-            pass
-        structure_conf = min(1.0, structure_conf)
-        final_conf = (margin_conf * 0.4 + score_conf * 0.3 + structure_conf * 0.3)
-        return final_conf
-
+        return dom_score.calculate_confidence(best_score, second_score, best_node)
     def _wait_for_content_load(self):
         try:
             WebDriverWait(self.driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
