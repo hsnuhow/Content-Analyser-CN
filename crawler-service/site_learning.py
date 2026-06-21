@@ -18,6 +18,7 @@ from typing import Dict
 
 _CACHE = {"data": {}, "ts": 0.0}
 _COLLECTION = "learned_selectors"
+LEARNED_DECAY_THRESHOLD = 3   # P4：已學選擇器連續失效 N 次 → 自動降級（刪除）重新學
 
 
 def _client():
@@ -131,12 +132,41 @@ def save_learned_selector(domain: str, selector: str,
             "sample_url": sample_url,
             "chars": chars,
             "cms": cms,
+            "fail_count": 0,   # P4：學習/重學時歸零連續失效計數
             "updated_at": firestore.SERVER_TIMESTAMP,
         }, merge=True)
         _CACHE["ts"] = 0.0  # 失效快取，下次重讀
         print(f"[SiteLearning] 學到 {domain} → {selector}（{chars} 字）", flush=True)
     except Exception as e:
         print(f"[SiteLearning] 儲存失敗（略過）：{e}", flush=True)
+
+
+def note_learned_outcome(domain: str, ok: bool) -> None:
+    """P4 自我修復：記錄已學選擇器命中結果。連續失效 ≥ LEARNED_DECAY_THRESHOLD → 自動降級
+    （刪除 learned_selectors），下次該網域走模板/啟發式；若再失敗，P1 自動研究會重新學。
+    成功 → fail_count 歸零。呼叫端已確認該網域確有 learned 紀錄（is_learned_sel），故 doc 必存在。
+    best-effort，失敗只記 log。"""
+    if not domain:
+        return
+    try:
+        from firebase_admin import firestore
+        ref = _client().collection(_COLLECTION).document(_doc_id(domain))
+        if ok:
+            ref.set({"fail_count": 0}, merge=True)
+            return
+        snap = ref.get()
+        if not snap.exists:
+            return
+        fc = int((snap.to_dict() or {}).get("fail_count", 0) or 0) + 1
+        if fc >= LEARNED_DECAY_THRESHOLD:
+            ref.delete()
+            _CACHE["ts"] = 0.0
+            print(f"[SiteLearning] 已學選擇器連續失效 {fc} 次 → 自動降級刪除：{domain}", flush=True)
+        else:
+            ref.set({"fail_count": fc}, merge=True)
+            print(f"[SiteLearning] 已學選擇器失效 {fc}/{LEARNED_DECAY_THRESHOLD}：{domain}", flush=True)
+    except Exception as e:
+        print(f"[SiteLearning] note_learned_outcome 略過：{e}", flush=True)
 
 
 def detect_cms(html: str) -> str:

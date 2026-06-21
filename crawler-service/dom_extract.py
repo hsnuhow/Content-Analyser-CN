@@ -87,6 +87,13 @@ def extract_main_text(html, url, *, domain_cache, genai_api_key,
         sel = domain_cache[domain]
         _log(f"\n[Phase 2] Cache Hit! Using cached selector for domain '{domain}'")
         _log(f"  → Selector: '{sel}'")
+        # P4 自癒：此 cache 選擇器是否為「持久化的已學選擇器」（非模板/Phase5 暫存）→ 只對它記命中
+        #   結果，連續失效 N 次自動降級重學。load_learned_selectors 有 60s 快取，查詢便宜。
+        try:
+            from site_learning import load_learned_selectors as _lls, note_learned_outcome as _nlo
+            _is_learned = (_lls().get(domain) == sel)
+        except Exception:
+            _is_learned, _nlo = False, None
         node = soup.select_one(sel)
         if node:
             content = text_clean.clean_text(node.get_text("\n", strip=True))
@@ -98,13 +105,19 @@ def extract_main_text(html, url, *, domain_cache, genai_api_key,
                     and not dom_score.looks_like_cookie_banner(content, node)):
                 _log(f"  → ✅ Content extracted: {len(content)} chars")
                 _log(f"  → Preview: {content[:200]}...")
+                if _is_learned and _nlo:
+                    _nlo(domain, True)    # P4：命中有效 → fail_count 歸零
                 resolved = "learned"
                 return content, resolved
             _log(f"  → ⚠️ Cached selector 命中但內容不合格"
                       f"（{len(content)} 字／列表或 cookie 區塊），改走模板/啟發式")
+            if _is_learned and _nlo:
+                _nlo(domain, False)       # P4：已學選擇器命中但內容不合格 → 計失效
         else:
             _log(f"  → ⚠️ Cached selector no longer matches, clearing cache")
             del domain_cache[domain]
+            if _is_learned and _nlo:
+                _nlo(domain, False)       # P4：已學選擇器不再匹配 → 計失效
 
     # Phase 2.0: 優先嘗試模板選擇器（在噪音過濾之前！）
     _log("\n[Phase 2.0] Checking for Known Site Templates (BEFORE noise filtering)")
