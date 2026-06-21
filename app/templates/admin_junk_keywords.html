@@ -1,0 +1,33 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">爬蟲垃圾詞（尾部樣板）</h2>
+    <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">← 返回控制台</a>
+  </div>
+
+  <p class="text-muted">
+    這裡管理爬蟲抓正文後要<strong>裁掉的「尾部樣板」</strong>——文章正文之後的贊助 CTA、訂閱按鈕、
+    APP 下載等（只在累積足夠正文後遇到才裁，保守不誤傷短文）。
+    <br>
+    這裡放<strong>單一媒體專屬</strong>的樣板詞（如某新聞站的「支持◯◯／訂閱會員」）。
+    <strong>通用樣板詞</strong>（版權所有／不得轉載／訂閱電子報／下載APP 等）是<strong>程式內建地板、不顯示於此、永遠生效</strong>；
+    此處只「額外增加」。儲存後爬蟲最多 60 秒生效、<strong>不需重新部署</strong>。
+  </p>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">尾部樣板詞（目前 {{ n_terms }} 個，一行一個）</div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('admin_bp.junk_keywords_save') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="mb-2 small text-muted">一行一個樣板詞；<code>#</code> 開頭為註解。文末出現此詞（且前面已有足夠正文）就從該處裁掉。</div>
+        <textarea name="boilerplate_text" class="form-control font-monospace" rows="18"
+          spellcheck="false" placeholder="支持中央社&#10;加入訂閱會員&#10;請我們喝杯咖啡">{{ boilerplate_text }}</textarea>
+        <div class="d-flex justify-content-end mt-3">
+          <button type="submit" class="btn btn-primary">💾 儲存垃圾詞</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
