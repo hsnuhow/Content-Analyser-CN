@@ -359,7 +359,13 @@ agent 自動化留待此 backlog。相關檔：`crawler-service/research.py`、`
 - ✅ **P1 耐用性**：`normalize_selector` 寫入前把雜湊 class 轉 `[class*="Name"]`、拒原子類/數字 id、剝 nth → 直接解掉雜湊站「改版即失效」。
 - ✅ **P1b 儀表化**：每次爬取記 `resolved_by`（learned/template/structured/heuristic/llm）→ `crawl_telemetry/global`，先量測分布再決定後續投資。
 - ✅ **P2 結構化資料優先**：JSON-LD `articleBody`/`[itemprop]` 排到通用啟發式之前（≥500字閘門）→ 吃掉一塊長尾、少碰 LLM。
-- ⏳ **P3 研究器接受邏輯放寬**（修 `_classify_failure` 誤判乾淨 class）、**P4 學到的選擇器自癒重學** → 待 P1b 線上數據出來，看哪個桶最大再做。
+- ✅ **「自動學習迴圈」補完（2026-06-21，已部署 00086~00089）**：研究遙測（body_fallback 23+failed 13 為破口）後做齊——
+  - **爬完自動觸發研究**（P1，原本要手動點）；
+  - **研究候選品質收緊**（P3：候選階段擋過寬選擇器 + page_classify 偵測挑戰頁殘片，dcard 弱候選→改吐清楚診斷）；
+  - **強化自動轉移偵測**（Q1：`url_drift.py` 補同域軟轉址/登入牆/首頁，保守避誤判，14 測）；
+  - **高信心候選自動升級**（P2：跨樣本+≥800字→跳過 admin，三重安全網）；
+  - **已學選擇器失效自癒**（P4：連續失效 3 次→降級重學）。
+  完整迴圈：爬→失敗→自動研究→高信心自動升級/弱→admin/被擋→診斷拋用戶→learned 失效→自癒重學。詳見 changelog 2026-06-21。
 
 ### 待開發功能 10：全面 Token 用量記帳（2026-06-17 提出）
 **需求**：記錄**所有** LLM token 消耗（不只降噪），可累計、可在後台檢視，掌握成本。

@@ -1,6 +1,14 @@
 # Changelog
 
-## 2026-06-21 修正（健壯性）：同步 /api/scrape 補看門狗 + close() 超時（兩項 High，已部署 00085-ttk）
+## 2026-06-21 智慧化：爬蟲選擇器「自動學習迴圈」補完（P1/P2/P3/Q1/P4，已部署 00086~00089，每刀實測）
+研究現有智慧子系統（research.py 閉環 agent / site_learning / 轉移偵測都已存在）後，資料驅動（crawl_telemetry：body_fallback 23+failed 13 為最大品質破口）把片段自動化 + 補強可靠性，串成完整迴圈：**爬→失敗→自動研究→高信心自動升級/弱候選→admin/被擋→診斷拋用戶→learned 失效→自癒重學**。
+- **P1 爬完自動觸發研究**（content-analyser `dataset_sync`）：完成時收集 failed（items.status）+ body_fallback（job results.resolved_by）→ 經 `crawler_client.submit_research` 自動跑研究 agent（原本要用戶手動點）。editor+ 觸發、一次性 flag、上限 50。實測：PDF 失敗 → 自動建研究 job。
+- **P3 研究候選品質收緊**（`research.py`）：候選階段就擋過寬選擇器（main/body/article，`normalize_selector`+`_is_valid_selector`）+ 用 `page_classify` 偵測挑戰/錯誤頁殘片（`is_error`）+ 被擋站正確診斷。實測 dcard：弱候選 `main`/302 → 改吐清楚 `blocked_or_error` 診斷。
+- **Q1 強化自動轉移偵測**（新 `url_drift.py` 純函式）：舊版只比可註冊網域 → 補同域軟轉址（登入/同意子網域、文章→首頁、login/error path），**保守避開合法 redirect**（http→https/尾斜線/m.行動版/locale）。14 單元測試 + udn 無誤判實測。result 回 final_url。
+- **P2 高信心候選自動升級**（`run_research`）：2+ 樣本跨驗證 + 無診斷 + ≥800 字 → 跳過 admin 直接進 learned（少介入）。三重安全網（P3 正規化 + save_learned 再驗 + 讀取端驗證）。
+- **P4 已學選擇器失效自癒**（`site_learning.note_learned_outcome` + `dom_extract` Phase 2）：learned 命中有效→fail_count 歸零；連續失效 3 次→自動降級刪除→走模板/啟發式→再失敗 P1 重學。實測 autos.udn.com 命中 learned → fail_count:0。
+- 新增測試：url_drift 14 例。先前遙測經 Firestore REST 唯讀取得（resolved_by 分布、21 learned 網域、11 候選全 approved）。
+
 OPTIMIZATION 標 High 兩項，非同步 crawl_job 早有、同步 `/api/scrape` 路徑原本缺：
 - **看門狗**：`app.py:_tier1_scrape` 外包 `ThreadPoolExecutor + result(timeout=min(hard_timeout+30, 290))` → scrape 步驟內 Selenium 指令 hang（內部 hard_timeout 擋不住阻塞呼叫）強制上限，留在 Cloud Run 300s 請求上限內。
 - **close() 超時**：新增 `_force_close()`，close() 包 15s 上限、逾時直接 kill Chrome 進程（對齊 `crawl_job._force_close`）。
