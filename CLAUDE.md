@@ -760,14 +760,17 @@ Content-Analyser-CN/
 │   ├── crawler_client.py / analysis_client.py / search_extent_client.py   三服務 HTTP 客戶端
 │   ├── templates/                  Jinja2 模板
 │   └── static/                     CSS / JS（CSP：inline JS 已全外部化）
-├── crawler-service/                content-crawler（獨立，4Gi Chrome）
-│   ├── app.py                      API 入口（/api/scrape·crawl/batch·crawl/run worker…）
-│   ├── crawler.py                  HeadlessCrawler（抽取核心）
-│   ├── page_classify.py / text_clean.py   純函式啟發式（錯誤/封鎖頁判定·文字清理，已抽出+測試）
+├── crawler-service/                content-crawler（獨立，4Gi Chrome；抽取層三層化 2026-06-21）
+│   ├── app.py                      API 入口（/api/scrape 含看門狗+close 超時·crawl/batch·crawl/run worker）
+│   ├── crawler.py                  ⭐ Layer 3 driver：HeadlessCrawler（Chrome 生命週期/導航/滾動/scrape 主流程/特殊來源；2569→1423 行）
+│   ├── dom_extract.py              Layer 2 協調：_extract_main_text 五階（已學→模板→結構化→評分→LLM），driver/LLM 經 callback 注入、resolved_by 回傳
+│   ├── dom_score.py / dom_parse.py Layer 1 純函式：DOM 節點評分 / HTML 解析（JSON-LD·RSC·meta·列表頁·CMP）
+│   ├── page_classify.py / text_clean.py / site_templates.py  Layer 1 純函式/資料：錯誤封鎖頁判定 / 文字清理 / 站台模板（皆 leaf、有測試）
 │   ├── net_guard.py                SSRF 守門（is_safe_url 逐跳 + is_safe_ip）
-│   ├── crawl_job.py / task_queue.py 佇列 worker（Cloud Tasks，concurrency=1 防 OOM）
+│   ├── crawl_job.py / task_queue.py 佇列 worker（Cloud Tasks，concurrency=1 防 OOM；含看門狗/force_close）
 │   ├── tiered_fallback.py / image_extract.py / research.py / site_learning.py
 │   └── Dockerfile / requirements.txt / CRAWLER_STRATEGY.md
+│   # 依賴單向無循環：crawler → dom_extract → {dom_score,dom_parse,text_clean,site_templates,site_learning}（皆 leaf）
 ├── analysis-service/               analysis-pipeline（獨立，2Gi）
 │   ├── app.py                      API 入口（非同步 job）
 │   ├── pipeline.py                 主協調器（降噪前處理 → 雙路平行 → Synthesis）

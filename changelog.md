@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-21 修正（健壯性）：同步 /api/scrape 補看門狗 + close() 超時（兩項 High，已部署 00085-ttk）
+OPTIMIZATION 標 High 兩項，非同步 crawl_job 早有、同步 `/api/scrape` 路徑原本缺：
+- **看門狗**：`app.py:_tier1_scrape` 外包 `ThreadPoolExecutor + result(timeout=min(hard_timeout+30, 290))` → scrape 步驟內 Selenium 指令 hang（內部 hard_timeout 擋不住阻塞呼叫）強制上限，留在 Cloud Run 300s 請求上限內。
+- **close() 超時**：新增 `_force_close()`，close() 包 15s 上限、逾時直接 kill Chrome 進程（對齊 `crawl_job._force_close`）。
+- 自包含於 app.py 同步路徑，**不動已驗證的 async 批次（crawl_job）**；行為保留（看門狗只在真 hang 時觸發）。async 路徑實測無回歸（gq 2117/tvbs 2259/example 145 與基準一致）。
+
 ## 2026-06-21 重構：crawler.py 抽取層三層化完成（2569→1423 行，-45%，每刀 Porsche before/after 零回歸）
 延續 dom_score（評分）後，完成 God Object 分解。**crawler.py 由 2569 → 1423 行（-45%）**，抽取層三層分離、依賴單向無循環：
 - **Layer 1 純函式（leaf，可單元測試）**：`page_classify`(錯誤/封鎖頁,73) / `text_clean`(清文字,60) / `dom_score`(DOM評分+dom_summary,229) / `dom_parse`(JSON-LD/RSC/meta/列表頁/CMP,191) / `site_templates`(362行站台模板資料,364)。
