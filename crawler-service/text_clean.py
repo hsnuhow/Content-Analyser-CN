@@ -17,41 +17,34 @@ def clean_text(text: str) -> str:
     return "\n\n".join(lines)
 
 
-# 台灣新聞站常見「尾部樣板」：贊助 CTA、APP 下載、版權宣告、社群分享。
-# 文章正文之後才會出現，故只在「累積足夠正文後」遇到才裁切（保守，不誤傷短文）。
+# 通用尾部樣板（版權/訂閱/下載 CTA，文末才出現、不會在正文中段）——「通用基礎」留作 floor。
+# 單一媒體專屬的樣板詞（中央社/自由/鏡週刊/TechNews 的贊助·訂閱 CTA）已外部化到 Firestore
+# crawler_config/junk_keywords.boilerplate（admin 可編、加站不用部署），由呼叫端以 extra_terms 注入，
+# text_clean 維持純函式。
 TRAILING_BOILERPLATE = (
-    # 中央社
-    "支持中央社", "下載中央社", "一手新聞", "本網站之文字", "非經授權",
-    "小額贊助", "選擇與事實站在一起", "守護新聞自由",
-    # 自由時報
-    "一手掌握", "點我訂閱", "點我下載", "不用抽", "你可能有興趣",
-    "今日熱門新聞", "注目新聞", "Recommended by",
-    # 鏡週刊
-    "支持鏡週刊", "加入訂閱會員", "贊助本文",
-    # 科技新報 / TechNews
-    "請我們喝杯咖啡", "訂閱免費電子報", "您也可能喜歡", "科技新報粉絲團",
-    "從這裡可透過", "科技新知，時時更新",
-    # 通用版權/訂閱/分享（皆為文末不可能出現在正文中段的明確樣板）
     "不得轉載", "版權所有", "著作權所有", "未經授權", "禁止轉載",
     "點我加入", "訂閱電子報", "立即下載", "下載APP", "下載 APP",
     "更多內容請見", "授權轉載",
 )
 
 
-def trim_trailing_boilerplate(content: str, min_keep: int = 150, log_fn=None) -> str:
+def trim_trailing_boilerplate(content: str, min_keep: int = 150, log_fn=None,
+                              extra_terms=None) -> str:
     """裁掉文章正文之後的尾部樣板（贊助／APP／版權等）。
 
     只在累積正文已達 min_keep 字後，遇到樣板行才截斷；之前的不動，
     避免短文或正文中偶然含關鍵字時被誤砍。log_fn 可選（截斷時回報）。
+    extra_terms：呼叫端注入的額外樣板詞（單一媒體專屬，來自後台 Firestore）。
     """
     if not content:
         return content
+    terms = TRAILING_BOILERPLATE + tuple(extra_terms or ())
     lines = content.split("\n")
     kept = []
     acc = 0
     for line in lines:
         ls = line.strip()
-        if acc >= min_keep and any(bp in ls for bp in TRAILING_BOILERPLATE):
+        if acc >= min_keep and any(bp in ls for bp in terms):
             if log_fn:
                 log_fn(f"[Trim] 尾部樣板截斷於：{ls[:30]}")
             break

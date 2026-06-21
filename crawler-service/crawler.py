@@ -27,6 +27,7 @@ from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirec
 from page_classify import (looks_like_browser_error_page,
                             looks_like_http_error_page, looks_like_block_page)
 import text_clean
+import crawler_config
 import dom_score
 import dom_parse
 from site_templates import get_site_templates
@@ -670,8 +671,9 @@ class HeadlessCrawler:
         return text_clean.clean_text(text)
 
     def _trim_trailing_boilerplate(self, content: str, min_keep: int = 150) -> str:
-        # 文末樣板裁切已抽至 text_clean.trim_trailing_boilerplate（薄方法委派，呼叫點不變）。
-        return text_clean.trim_trailing_boilerplate(content, min_keep, self._log)
+        # 文末樣板裁切委派 text_clean；單一媒體專屬樣板詞由後台 Firestore 注入（資料/邏輯分離）。
+        return text_clean.trim_trailing_boilerplate(
+            content, min_keep, self._log, extra_terms=crawler_config.get_extra_boilerplate())
 
     def _reg_host(self, h: str) -> str:
         # 可註冊網域已抽至 url_drift.reg_host（純函式）。

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-21 重構：資料/邏輯分離——站台模板 + 爬蟲垃圾詞外部化到後台（Phase A/B，已部署 crawler 00091 / analyser 00096）
+依用戶原則「**單一網站專屬的資料 → 後台可編；通用基礎 → 程式內 floor**」，把爬蟲裡寫死的站台資料抽到 Firestore，admin 可增/改/刪、**不必改碼部署**。沿用 `get_ad_blocklist`/`get_term_filters` 範式（floor + Firestore + 60s 快取 + 讀失敗回退）。
+- **Phase A 站台抽取模板**：`site_templates.get_site_templates()` = 內建 37 模板（floor 安全基線）+ Firestore `crawler_config/site_templates.templates`（admin 以模板名為 key 覆寫/新增）。`crawler._content_container_known` / `dom_extract` Phase 2.0+2.1（3 處）改用之。已 seed 37 模板入 Firestore。admin 頁 `/admin/site-templates`（JSON 編輯 + 結構驗證）。驗證：gq 爬取 logs `Matched template: 'gq_tw'`（讀 floor+Firestore）、內容 2117=基準零回歸；admin 頁顯示 37。
+- **Phase B 爬蟲垃圾詞（尾部樣板）**：`text_clean.TRAILING_BOILERPLATE` 只留通用詞（版權/訂閱/下載 CTA）作 floor；單一媒體專屬詞（中央社/自由/鏡週刊/TechNews 的贊助·訂閱 CTA，25 個）externalize 到 Firestore `crawler_config/junk_keywords.boilerplate`。`trim_trailing_boilerplate` 加 `extra_terms` 參數（**呼叫端注入 → text_clean 維持純函式**）；新 `crawler_config.get_extra_boilerplate()` 只做 Firestore I/O（floor 不在此），`crawler._trim_trailing_boilerplate` wrapper 注入。admin 頁 `/admin/junk-keywords`（textarea）。自測：floor 截斷、extra 注入截斷、未注入不截斷（證明已移出 floor）。
+- 設計：純函式模組（text_clean/dom_score/site_templates）維持純粹，Firestore I/O 集中在 crawler_config / get_site_templates；floor 永遠是安全網（Firestore 空/掛仍可運作）。
+
+## 2026-06-21 修正（UI/JS）：選擇器候選頁無限重整、按鈕點不到
+- **根因**：`research_url_status` 用 `session['_research_job']` 記住研究 job，但完成後沒清 → 每次載入都輪詢到那個 completed job → JS 在 completed 分支 `location.reload()` → 又 completed → 無限重整（P1 自動研究產生大量 completed job 後變常態）。
+- **修**：① JS `admin_selector_candidates.js` 加 `sawInProgress`——只有真的觀察到「進行中→完成」轉換才 reload；一進頁面就是 completed（session 殘留）不 reload，迴圈當場斷。② server `research_url_status` 終態（completed/failed）後 `session.pop('_research_job')`，下次載入回 none。驗證：部署的 JS 含修正、頁面 200、status 端點回 none。
+
 ## 2026-06-21 智慧化：爬蟲選擇器「自動學習迴圈」補完（P1/P2/P3/Q1/P4，已部署 00086~00089，每刀實測）
 研究現有智慧子系統（research.py 閉環 agent / site_learning / 轉移偵測都已存在）後，資料驅動（crawl_telemetry：body_fallback 23+failed 13 為最大品質破口）把片段自動化 + 補強可靠性，串成完整迴圈：**爬→失敗→自動研究→高信心自動升級/弱候選→admin/被擋→診斷拋用戶→learned 失效→自癒重學**。
 - **P1 爬完自動觸發研究**（content-analyser `dataset_sync`）：完成時收集 failed（items.status）+ body_fallback（job results.resolved_by）→ 經 `crawler_client.submit_research` 自動跑研究 agent（原本要用戶手動點）。editor+ 觸發、一次性 flag、上限 50。實測：PDF 失敗 → 自動建研究 job。

@@ -7,6 +7,9 @@
   if (!root) return;
   var statusUrl = root.getAttribute('data-status-url');
   if (!statusUrl) return;
+  // 只有「本次真的觀察到 進行中→完成 的轉換」才 reload 刷新候選列表；
+  // 若一進頁面就是 completed（舊的研究 job，session 殘留），不 reload → 防無限重整。
+  var sawInProgress = false;
 
   function esc(s) {
     return String(s || '').replace(/[&<>"']/g, function (c) {
@@ -27,12 +30,16 @@
           h += '<div class="alert alert-warning py-2 mb-2"><b>' + esc(g.domain) + '</b>：' + esc(g.diagnosis) + '</div>';
         });
         document.getElementById('arResult').innerHTML = h || '<div class="text-muted">無候選/診斷。</div>';
-        setTimeout(function () { location.reload(); }, 1500);
+        if (sawInProgress) {
+          // 確實看到研究跑完 → reload 一次，讓伺服器重新渲染含新候選的列表（有確認/拒絕按鈕）。
+          setTimeout(function () { location.reload(); }, 1500);
+        }
       } else if (d.status === 'failed') {
         document.getElementById('arLog').textContent = '研究失敗：' + (d.log || '');
       } else if (d.status === 'none') {
         document.getElementById('arLog').textContent = '';
       } else {
+        sawInProgress = true;   // 研究進行中 → 之後若轉完成才 reload
         setTimeout(pollAR, 4000);
       }
     }).catch(function () { setTimeout(pollAR, 6000); });

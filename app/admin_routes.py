@@ -251,6 +251,36 @@ def site_templates_save():
     return redirect(url_for('admin_bp.site_templates_admin'))
 
 
+# ── 爬蟲垃圾詞：單一媒體專屬尾部樣板（外部化；通用詞 floor 在 text_clean）──
+@bp.route('/junk-keywords')
+@admin_required
+def junk_keywords_admin():
+    """尾部樣板「垃圾詞」編輯（單一媒體專屬，如某新聞站的贊助/訂閱 CTA）。資料存
+    crawler_config/junk_keywords.boilerplate；爬蟲裁尾部樣板時 = text_clean 通用 floor + 此處注入。"""
+    try:
+        doc = db.collection('crawler_config').document('junk_keywords').get()
+        terms = (doc.to_dict() or {}).get('boilerplate', []) if doc.exists else []
+    except Exception:
+        terms = []
+    return render_template('admin_junk_keywords.html', user=session.get('user'),
+                           boilerplate_text='\n'.join(terms), n_terms=len(terms or []))
+
+
+@bp.route('/junk-keywords/save', methods=['POST'])
+@admin_required
+def junk_keywords_save():
+    terms = [t.strip() for t in (request.form.get('boilerplate_text', '') or '').splitlines()
+             if t.strip() and not t.strip().startswith('#')]
+    terms = list(dict.fromkeys(terms))   # 去重保序
+    try:
+        db.collection('crawler_config').document('junk_keywords').set(
+            {'boilerplate': terms}, merge=True)
+        flash(f'已儲存 {len(terms)} 個尾部樣板詞（爬蟲最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'儲存失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.junk_keywords_admin'))
+
+
 @bp.route('/terms/suggest')
 @admin_required
 def term_filters_suggest():
@@ -698,12 +728,17 @@ def research_url():
 @bp.route('/research-url/status')
 @admin_required
 def research_url_status():
-    """輪詢主動研究結果（JSON）。"""
+    """輪詢主動研究結果（JSON）。研究到終態（completed/failed）後清掉 session 的 _research_job，
+    避免下次載入頁面仍輪詢到舊的已完成 job → 前端無限重整、無法按按鈕。"""
+    from_session = not request.args.get('job')
     job_id = request.args.get('job') or session.get('_research_job')
     if not job_id:
         return jsonify({'status': 'none'}), 200
     job = get_research_status(job_id)
-    return jsonify({'status': job.get('status', 'unknown'),
+    status = job.get('status', 'unknown')
+    if from_session and status in ('completed', 'failed'):
+        session.pop('_research_job', None)   # 終態後不再黏住，下次載入回 none
+    return jsonify({'status': status,
                     'log': job.get('log', ''), 'result': job.get('result', {})}), 200
 
 
