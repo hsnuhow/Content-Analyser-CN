@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-21 重構：crawler.py 部分模組化（page_classify + text_clean，刻意收手）
+crawler.py（2569 單一大 class HeadlessCrawler）抽出兩個純函式模組，每刀部署後實跑爬蟲驗證（成功 1/略過 0/失敗 0）、pyflakes 把關、characterization 測試：
+- `page_classify.py`：`_looks_like_browser_error/http_error/block_page` + 三組 marker 常數（純 bool 分類、無 driver/_log），6 處呼叫點改用 module 函式，9 測。
+- `text_clean.py`：`_clean_text` / `_trim_trailing_boilerplate`（+ _TRAILING_BOILERPLATE）；crawler.py 保留同名薄方法委派（呼叫點全不變、self._log 經 log_fn 傳入），9 測。
+- **DOM 內容評分群（_calculate_node_score 等）刻意暫緩**：彼此深度互呼叫、是「從真實文章選正文」的核心抽取品質邏輯，簡單頁爬取無法可靠驗證抽取品質回歸 → 風險/報酬不佳，記為已評估技術債（與 project_routes 獨立 route handler 性質不同）。
+
 ## 2026-06-21 安全：crawler-service 漏洞審查 + 三項修補（已部署，每項實跑爬蟲驗證）
 多代理安全審查 crawler-service（風險最高：抓任意 URL + 跑 Chrome + 執行 JS + LLM 選擇器）。找到 1 High + 2 Medium + 2 Low，已修可利用的三項：
 - **🟠 High SSRF（Chrome 路徑繞過 net_guard）**：`net_guard.safe_urlopen` 只擋 urllib；Chrome（`driver.get`）自行解析 DNS + 自動跟隨 redirect，可被 DNS rebinding（TTL=0 翻 169.254.169.254）或 redirect→內網繞過，讀 GCP metadata（SA token）。修：`net_guard.is_safe_ip(ip)` + `_init_driver` 開 performance log + `_open` 後 `_assert_safe_remote_ip` 取主文件實際 remoteIPAddress 再驗，命中內網拋 UnsupportedSiteError 丟棄；fail-open 不誤殺合法站。涵蓋 scrape/extract-images/research 三端點。實跑：公網 httpbin/example 成功 2/略過 0/失敗 0、IP 檢查未誤殺。
