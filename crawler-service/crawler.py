@@ -28,6 +28,7 @@ from page_classify import (looks_like_browser_error_page,
                             looks_like_http_error_page, looks_like_block_page)
 import text_clean
 import dom_score
+import dom_parse
 
 from bs4 import BeautifulSoup
 # 統一使用 undetected-chromedriver（對齊 Colab，最佳反偵測）
@@ -511,14 +512,6 @@ SITE_TEMPLATES = {
 
 # ⭐️ [v3.8] 抽取前要移除的 CMP（Cookie 同意視窗）容器
 #    避免 cookie 分類說明文字被誤判為主文；即使遮罩沒成功關閉也能擋住。
-CMP_REMOVE_SELECTORS = [
-    "#onetrust-consent-sdk", "#onetrust-banner-sdk", "#onetrust-pc-sdk",
-    "#ot-sdk-container", "#ot-sdk-cookie-policy", ".onetrust-pc-dark-filter",
-    "[id^='onetrust']", "[class*='onetrust']", "[class*='ot-sdk']",
-    "[id*='fides']", "[class*='fides']",
-    "[id*='cookie-consent']", "[class*='cookie-consent']",
-]
-
 HEURISTIC_CONF_THRESHOLD = 0.55
 
 # 抽取字數門檻（集中管理，原本散落 200/300/500）
@@ -771,142 +764,13 @@ class HeadlessCrawler:
             raise UnsupportedSiteError(f"SSRF 阻擋：{url} 解析至內網位址 {main_ip}")
 
     def _apply_meta_fallback(self, content: str, html: str) -> str:
-        """主文過短（< 200 字）時，補入 og:description / meta description 作為導語。
-        對齊 Colab v3.8 _extract_main_text 末段邏輯。
-        """
-        try:
-            soup = BeautifulSoup(html, 'html.parser')
-            meta_desc = None
-            # 優先 og:description
-            ogd = soup.find('meta', attrs={'property': 'og:description'})
-            if ogd and ogd.get('content'):
-                meta_desc = ogd['content'].strip()
-            # 次選 name=description
-            if not meta_desc:
-                m = soup.find('meta', attrs={'name': 'description'})
-                if m and m.get('content'):
-                    meta_desc = m['content'].strip()
-            if meta_desc and meta_desc not in content:
-                self._log(f"[Fallback] 主文過短（{len(content)} 字），補入 meta description")
-                return meta_desc + "\n\n" + content
-        except Exception:
-            pass
-        return content
-
+        return dom_parse.apply_meta_fallback(content, html, self._log)
     def _extract_from_json_ld(self, html: str) -> str:
-        """從 JSON-LD <script> 中萃取 articleBody 文字。
-
-        適用於 MirrorMedia 等 Next.js 站台：內文以 JSON-LD NewsArticle schema 嵌入，
-        headless 瀏覽器渲染後 DOM 仍可能難以用 CSS selector 抓到（styled-components hash），
-        但 JSON-LD 在初始 HTML 中就完整存在。
-        """
-        try:
-            # 找所有 application/ld+json script
-            ld_scripts = re.findall(
-                r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
-                html, re.DOTALL | re.I
-            )
-            for raw_json in ld_scripts:
-                try:
-                    data = json.loads(raw_json.strip())
-                except Exception:
-                    continue
-                # 支援 @graph 陣列
-                items = data if isinstance(data, list) else [data]
-                for item in items:
-                    if isinstance(item, dict) and item.get('@graph'):
-                        items = item['@graph']
-                        break
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    body = item.get('articleBody', '')
-                    if body and len(body) >= 200:
-                        self._log(f"[JSON-LD] 從 @type={item.get('@type', '?')} 抽到 {len(body)} 字")
-                        return self._clean_text(body)
-        except Exception as e:
-            self._log(f"[JSON-LD] 萃取失敗: {e}")
-        return ""
-
+        return dom_parse.extract_from_json_ld(html, self._log)
     def _quick_content_len(self, source: str) -> int:
-        """快速估算頁面「已就緒」的主文長度（JSON-LD + 主文容器選擇器）。
-
-        供深度滾動「前」判斷內容是否已足量：Hearst listicle/gallery 等頁面主文在
-        `.listicle-body-content`/JSON-LD 早已就緒，但有上百個 slide + lazy 圖會讓
-        `_scroll_and_wait_for_full_load` 滾到逾時。已足量就跳過深度滾動。
-        """
-        try:
-            best = len(self._extract_from_json_ld(source))
-            soup = BeautifulSoup(source, 'html.parser')
-            for sel in ('.listicle-body-content', '.content-container',
-                        '[itemprop="articleBody"]', 'article'):
-                node = soup.select_one(sel)
-                if node:
-                    best = max(best, len(node.get_text(' ', strip=True)))
-            return best
-        except Exception:
-            return 0
-
+        return dom_parse.quick_content_len(source, self._log)
     def _extract_from_block_payload(self, html: str) -> str:
-        """從現代框架（Next.js App Router / RSC、Condé Nast Copilot 等）的
-        序列化 block payload 抽取主文。
-
-        支援兩種格式：
-        1. 簡化格式：["p","段落文字"]、["blockquote","引言"]
-        2. React RSC 格式：["$","p","key",{"children":"文字"}]
-                           ["$","p",null,{"className":"...","children":["文字段落"]}]
-        """
-        try:
-            seen = set()
-            parts = []
-
-            def _add(text):
-                text = (text or "").strip()
-                if len(text) >= 10 and text not in seen:
-                    seen.add(text)
-                    parts.append(text)
-
-            # 格式1：["p","..."] / ["blockquote","..."] / ["h1~h6","..."]
-            # re.DOTALL 讓 [^"\\] 能匹配包含換行的段落（修正多行段落漏抓）
-            pat1 = re.compile(r'\["(p|blockquote|h[1-6])","((?:[^"\\]|\\.)*)"\]', re.DOTALL)
-            for m in pat1.finditer(html):
-                raw = m.group(2)
-                try:
-                    text = json.loads('"' + raw + '"')
-                except Exception:
-                    text = raw
-                _add(text)
-
-            # 格式2：["$","p","key",{"children":"..."}] (React RSC)
-            # children 可為字串或陣列，re.DOTALL 同上修正多行漏抓
-            pat2 = re.compile(
-                r'\["\$","(?:p|blockquote|h[1-6])",[^,]*,\{"[^}]*"children":"((?:[^"\\]|\\.)*)"\}',
-                re.DOTALL
-            )
-            for m in pat2.finditer(html):
-                raw = m.group(1)
-                try:
-                    text = json.loads('"' + raw + '"')
-                except Exception:
-                    text = raw
-                _add(text)
-
-            # 格式3：純文字字串（至少15字，在 RSC JSON 串流中）
-            # 比對 script 區段中較長的中文/英文字串段落
-            pat3 = re.compile(r'"([一-鿿㐀-䶿][^\\"]{14,})"')
-            for m in pat3.finditer(html):
-                raw = m.group(1)
-                try:
-                    text = json.loads('"' + raw + '"')
-                except Exception:
-                    text = raw
-                _add(text)
-
-            return self._clean_text("\n".join(parts))
-        except Exception as e:
-            self._log(f"[Block Payload] 抽取失敗: {e}")
-            return ""
-
+        return dom_parse.extract_from_block_payload(html, self._log)
     def _clear_overlays_and_click_cta(self, rounds: int = 3,
                                       skip_generic_fallback: bool = False):
         """遮罩處理：對齊 Colab v3.8。
@@ -1097,33 +961,7 @@ class HeadlessCrawler:
             time.sleep(0.5)
 
     def _is_listing_page(self, soup: BeautifulSoup) -> bool:
-        self._log("[Page Type Analysis] Starting analysis...")
-        articles = soup.find_all('article', limit=10)
-        if len(articles) >= 5:
-            self._log(f"[Page Type Analysis] Judgement: LISTING PAGE (found {len(articles)} <article> tags).")
-            return True
-        if 2 <= len(articles) < 5:
-            # Article pages often have 1 main + 2-3 related-article cards.
-            # Only call it a listing if the articles are similarly sized (none dominates).
-            text_lens = sorted([len(a.get_text(strip=True)) for a in articles], reverse=True)
-            avg_rest = sum(text_lens[1:]) / max(len(text_lens) - 1, 1)
-            if text_lens[0] > max(3 * avg_rest, 500):
-                self._log(f"[Page Type Analysis] {len(articles)} <article> tags but largest ({text_lens[0]} chars) dominates — SINGLE ARTICLE PAGE.")
-            else:
-                self._log(f"[Page Type Analysis] Judgement: LISTING PAGE ({len(articles)} similarly-sized <article> tags).")
-                return True
-        list_items = soup.find_all('li', limit=20)
-        if len(list_items) > 5:
-            article_like_li = 0
-            for item in list_items:
-                if item.find('a') and len(item.get_text(strip=True)) > 20:
-                    article_like_li += 1
-            if article_like_li > 5:
-                self._log(f"[Page Type Analysis] Judgement: LISTING PAGE (found {article_like_li} article-like <li> items).")
-                return True
-        self._log("[Page Type Analysis] Judgement: SINGLE ARTICLE PAGE.")
-        return False
-
+        return dom_parse.is_listing_page(soup, self._log)
     def _scroll_and_wait_for_full_load(self, max_scrolls: int = 60, original_url: str = None,
                                        deadline: float = None):
         """滾動到底以觸發 lazy-load（對齊 Colab v3.8 _scroll_page_safe）。
@@ -1235,28 +1073,7 @@ class HeadlessCrawler:
     def _get_element_depth(self, el) -> int:
         return dom_score.get_element_depth(el)
     def _build_dom_summary(self, soup: BeautifulSoup, max_count: int = 150) -> List[Dict[str, Any]]:
-        cands = []
-        for node in soup.find_all(['article', 'section', 'div', 'main']):
-            try:
-                if not node or not hasattr(node, 'get_text') or not hasattr(node, 'find_all'):
-                    continue
-                text = node.get_text(' ', strip=True)
-                pcount = len(node.find_all('p'))
-                if pcount >= 3 or len(text) > 300:
-                    links_text = ''.join(a.get_text(strip=True) for a in node.find_all('a'))
-                    ld = len(links_text) / max(len(text), 1)
-                    cands.append({
-                        'css_path': self._css_path(node)[:512],
-                        'text_len': len(text),
-                        'p_count': pcount,
-                        'link_density': round(ld, 3),
-                        'preview': text[:120]
-                    })
-            except Exception:
-                continue
-        cands.sort(key=lambda x: x['text_len'], reverse=True)
-        return cands[:max_count]
-
+        return dom_score.build_dom_summary(soup, max_count)
     def _ask_gemini_selector(self, url: str, soup: BeautifulSoup) -> List[str]:
         """向 Gemini 詢問主文容器選擇器（回傳多組建議）。
         對齊 Colab v3.8：改用新的 google-genai 套件（genai.Client + models.generate_content），
@@ -1354,28 +1171,7 @@ class HeadlessCrawler:
                 continue
 
     def _remove_cmp_containers(self, soup: BeautifulSoup):
-        """⭐️ [v3.8] 抽取前移除 OneTrust / Fides / 通用 CMP 同意視窗容器。
-        避免 cookie 分類說明文字被誤判為主文（即使遮罩沒成功關閉也能擋住）。
-        """
-        # 移除 Fides 遮罩留下的殘餘 append 容器
-        try:
-            fides_remnant = soup.find(id="fides-iframe-append")
-            if fides_remnant:
-                fides_remnant.decompose()
-        except Exception:
-            pass
-
-        removed = 0
-        for _sel in CMP_REMOVE_SELECTORS:
-            try:
-                for _el in soup.select(_sel):
-                    _el.decompose()
-                    removed += 1
-            except Exception:
-                continue
-        if removed:
-            self._log(f"  → [CMP] Removed {removed} cookie-consent container(s) before scoring")
-
+        return dom_parse.remove_cmp_containers(soup, self._log)
     def _extract_main_text(self, html: str, url: str) -> str:
         # P1b 儀表化：本次抽取由哪一階解出（learned/template/structured/heuristic/llm/body_fallback/failed）。
         self.last_resolved_by = "failed"
