@@ -442,43 +442,8 @@ def archive_project(pid, project, role):
     return redirect(url_for('project_bp.project_detail', pid=pid))
 
 
-def _project_active_jobs(pid: str) -> list:
-    """列出專案內執行中的相依工作（dataset crawling / analysis pending|running）。"""
-    base = db.collection('projects').document(pid)
-    active = []
-    for d in base.collection('datasets').stream():
-        data = d.to_dict() or {}
-        if data.get('status') == 'crawling':
-            active.append(('資料集', data.get('name', d.id), data.get('crawl_job_id')))
-    for a in base.collection('analyses').stream():
-        data = a.to_dict() or {}
-        if data.get('status') in ('pending', 'running'):
-            active.append(('分析', data.get('report_title', a.id), data.get('job_id')))
-    return active
-
-
-def _cascade_delete_project(pid: str, cancel: bool = False) -> None:
-    """刪除專案及其所有 datasets / analyses。cancel=True 時先取消執行中工作（強制刪除用）。"""
-    base = db.collection('projects').document(pid)
-    for d in base.collection('datasets').stream():
-        data = d.to_dict() or {}
-        if cancel and data.get('status') == 'crawling' and data.get('crawl_job_id'):
-            try:
-                cancel_crawl(data['crawl_job_id'])
-            except Exception:
-                pass
-        _delete_dataset_items(pid, d.id)  # 連同 items 子集合
-        d.reference.delete()
-    for a in base.collection('analyses').stream():
-        data = a.to_dict() or {}
-        if cancel and data.get('status') in ('pending', 'running') and data.get('job_id'):
-            try:
-                cancel_analysis(data['job_id'])
-            except Exception:
-                pass
-        a.reference.delete()
-    base.delete()
-
+# 專案生命週期層已抽出（見 project_lifecycle.py）。
+from .project_lifecycle import _project_active_jobs, _cascade_delete_project  # noqa: F401
 
 @bp.route('/<pid>/delete', methods=['POST'])
 @project_access_required(min_role='owner')
