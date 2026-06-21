@@ -16,6 +16,22 @@ def _items_ref(pid: str, did: str):
             .collection('datasets').document(did).collection('items'))
 
 
+def _batch_delete_docs(doc_snaps) -> int:
+    """批次刪除一組文件（每 400 筆 commit 一次），取代逐筆 delete() 的 N 次網路往返。
+    回傳刪除筆數；傳入空集合即 no-op（不發 commit）。"""
+    batch = db.batch()
+    n = 0
+    for d in doc_snaps:
+        batch.delete(d.reference)
+        n += 1
+        if n % 400 == 0:    # Firestore 批次上限 500，留餘裕在 400 切批
+            batch.commit()
+            batch = db.batch()
+    if n % 400 != 0:        # 提交最後一批殘餘（n==0 時為 False，不會發空 commit）
+        batch.commit()
+    return n
+
+
 def _load_dataset_items(pid: str, did: str) -> list:
     try:
         items = []
@@ -43,8 +59,7 @@ def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -
     items = list(items)
     count = len(items)
     if not append:
-        for d in ref.stream():
-            d.reference.delete()
+        _batch_delete_docs(ref.stream())   # 清空既有（批次刪，取代逐筆）
         seq = 0
     else:
         # 並發安全：用交易「預約」一段連續的 _seq（count 個）。避免兩個併發 append
@@ -74,8 +89,7 @@ def _save_dataset_items(pid: str, did: str, items: list, append: bool = False) -
 
 def _delete_dataset_items(pid: str, did: str) -> None:
     try:
-        for d in _items_ref(pid, did).stream():
-            d.reference.delete()
+        _batch_delete_docs(_items_ref(pid, did).stream())
     except Exception:
         pass
 
@@ -108,7 +122,6 @@ def _append_urls_to_draft(pid: str, did: str, urls: list):
 def _replace_items_by_url(pid: str, did: str, urls_set: set, new_items: list) -> None:
     """recrawl-failed：刪除 url 在 urls_set 的舊 item，再 append new_items（保留已成功項）。"""
     ref = _items_ref(pid, did)
-    for d in ref.stream():
-        if (d.to_dict() or {}).get('url') in urls_set:
-            d.reference.delete()
+    _batch_delete_docs(d for d in ref.stream()
+                       if (d.to_dict() or {}).get('url') in urls_set)
     _save_dataset_items(pid, did, new_items, append=True)

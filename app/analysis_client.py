@@ -54,6 +54,29 @@ def _query_status(path: str, job_id: str, timeout: int) -> dict:
         return {"status": "unavailable", "error": str(e)}
 
 
+def _request_json(method: str, path: str, *, payload=None,
+                  timeout: int = POLL_TIMEOUT, timeout_msg: str = "請求逾時。") -> dict:
+    """共用 HTTP 包裝（給 submit / cancel / cleanup 等動作用）：
+      base 未設→error；POST 帶 json，GET 不帶；401→金鑰錯；逾時→timeout_msg；其餘例外→連線錯。
+    回傳 server JSON 或 {"error": ...}。把原本散在 8 個函式、一模一樣的 try/except 收斂成一份。
+    （狀態查詢不走這裡——它需區分 unavailable / not_found 三態，見 _query_status。）"""
+    base = _base_url()
+    if not base:
+        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
+    try:
+        if method == "POST":
+            resp = requests.post(f"{base}{path}", json=payload, headers=_headers(), timeout=timeout)
+        else:
+            resp = requests.get(f"{base}{path}", headers=_headers(), timeout=timeout)
+        if resp.status_code == 401:
+            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
+        return resp.json()
+    except requests.exceptions.Timeout:
+        return {"error": timeout_msg}
+    except Exception as e:
+        return {"error": f"無法連線至分析服務：{e}"}
+
+
 def check_health(timeout: int = POLL_TIMEOUT) -> dict:
     """呼叫 analysis-pipeline /health，回傳狀態 dict。"""
     base = _base_url()
@@ -74,21 +97,9 @@ def suggest_filters(contents: list, max_candidates: int = 60,
                     timeout: int = 120) -> dict:
     """同步呼叫分析服務找候選垃圾詞（三信號）。
     回傳 {"candidates":[...], "n_docs", "by_source"} 或 {"error": "..."}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.post(
-            f"{base}/api/suggest-filters",
-            json={"contents": contents, "max_candidates": max_candidates},
-            headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401）。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"分析逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/suggest-filters",
+                         payload={"contents": contents, "max_candidates": max_candidates},
+                         timeout=timeout, timeout_msg=f"分析逾時（{timeout}s）。")
 
 
 def submit_analysis(report_title: str, contents: list,
@@ -103,10 +114,6 @@ def submit_analysis(report_title: str, contents: list,
     回傳：{"job_id": "...", "status": "pending"}
     失敗：{"error": "..."}
     """
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交分析任務。"}
-
     payload = {
         "report_title": report_title,
         "contents": contents,
@@ -120,20 +127,8 @@ def submit_analysis(report_title: str, contents: list,
         "top_p": top_p,
         "input_scale": input_scale,
     }
-    try:
-        resp = requests.post(
-            f"{base}/api/analyse",
-            json=payload,
-            headers=_headers(),
-            timeout=timeout,
-        )
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交分析任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/analyse", payload=payload, timeout=timeout,
+                         timeout_msg=f"提交分析任務逾時（{timeout}s）。")
 
 
 def submit_image_analysis(report_title: str, images: list,
@@ -141,9 +136,6 @@ def submit_image_analysis(report_title: str, images: list,
                           temperature: float = 0.3,
                           timeout: int = DEFAULT_TIMEOUT) -> dict:
     """提交影像視覺分析任務（非同步，階段②）。回傳 {"job_id": ...} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交影像分析任務。"}
     payload = {
         "report_title": report_title,
         "images": images,
@@ -152,16 +144,8 @@ def submit_image_analysis(report_title: str, images: list,
         "llm_api_key": llm_api_key,
         "temperature": temperature,
     }
-    try:
-        resp = requests.post(f"{base}/api/analyse-images", json=payload,
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交影像分析任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/analyse-images", payload=payload, timeout=timeout,
+                         timeout_msg=f"提交影像分析任務逾時（{timeout}s）。")
 
 
 def get_image_analysis_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
@@ -174,9 +158,6 @@ def submit_combined(report_title: str, text_markdown: str, visual_markdown: str,
                     topic: str = "", temperature: float = 0.3,
                     timeout: int = DEFAULT_TIMEOUT) -> dict:
     """提交整合報告任務（非同步，階段③）。回傳 {"job_id": ...} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交整合任務。"}
     payload = {
         "report_title": report_title,
         "text_markdown": text_markdown,
@@ -187,16 +168,8 @@ def submit_combined(report_title: str, text_markdown: str, visual_markdown: str,
         "llm_api_key": llm_api_key,
         "temperature": temperature,
     }
-    try:
-        resp = requests.post(f"{base}/api/synthesize-combined", json=payload,
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交整合任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/synthesize-combined", payload=payload, timeout=timeout,
+                         timeout_msg=f"提交整合任務逾時（{timeout}s）。")
 
 
 def get_combined_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
@@ -206,34 +179,16 @@ def get_combined_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
 
 def cancel_analysis(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
     """請求取消分析任務（合作式）。回傳 {"status": ...} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
     if not job_id:
         return {"error": "缺少 job_id。"}
-    try:
-        resp = requests.post(f"{base}/api/analyse/{job_id}/cancel",
-                             headers=_headers(), timeout=timeout)
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": "取消請求逾時。"}
-    except Exception as e:
-        return {"error": str(e)}
+    return _request_json("POST", f"/api/analyse/{job_id}/cancel", timeout=timeout,
+                         timeout_msg="取消請求逾時。")
 
 
 def cleanup_analysis_jobs(days: int = 7, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """清除孤兒/陳舊分析任務文件。回傳 {"deleted": N} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定。"}
-    try:
-        resp = requests.post(f"{base}/api/analyse/cleanup", json={"days": days},
-                             headers=_headers(), timeout=timeout)
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": "清理請求逾時。"}
-    except Exception as e:
-        return {"error": str(e)}
+    return _request_json("POST", "/api/analyse/cleanup", payload={"days": days}, timeout=timeout,
+                         timeout_msg="清理請求逾時。")
 
 
 def get_job_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
@@ -251,9 +206,6 @@ def submit_audience(report_title: str, source_markdown: str, experts: list,
                     timeout: int = DEFAULT_TIMEOUT) -> dict:
     """提交延伸行動報告任務（非同步）。experts=[{slug,label,prompt,playbook}]。
     回傳 {"job_id": ...} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定，無法提交延伸報告任務。"}
     payload = {
         "report_title": report_title,
         "source_markdown": source_markdown,
@@ -263,16 +215,8 @@ def submit_audience(report_title: str, source_markdown: str, experts: list,
         "llm_api_key": llm_api_key,
         "temperature": temperature,
     }
-    try:
-        resp = requests.post(f"{base}/api/audience-reports", json=payload,
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401），請確認 ANALYSIS_API_KEY。"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"提交延伸報告任務逾時（{timeout}s）。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/audience-reports", payload=payload, timeout=timeout,
+                         timeout_msg=f"提交延伸報告任務逾時（{timeout}s）。")
 
 
 def get_audience_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
@@ -283,17 +227,6 @@ def get_audience_status(job_id: str, timeout: int = POLL_TIMEOUT) -> dict:
 def trigger_kb_index(expert_slug: str, timeout: int = 120) -> dict:
     """請 analysis-pipeline 重新索引某專家的參考文件（切塊 + 系統 SA embedding → kb_chunks）。
     回 {"indexed": N} 或 {"error": ...}。"""
-    base = _base_url()
-    if not base:
-        return {"error": "ANALYSIS_SERVICE_URL 未設定"}
-    try:
-        resp = requests.post(f"{base}/api/kb/index",
-                             json={"expert_slug": expert_slug},
-                             headers=_headers(), timeout=timeout)
-        if resp.status_code == 401:
-            return {"error": "分析服務金鑰驗證失敗（401）"}
-        return resp.json()
-    except requests.exceptions.Timeout:
-        return {"error": f"索引逾時（{timeout}s），文件量大時可稍後重試。"}
-    except Exception as e:
-        return {"error": f"無法連線至分析服務：{e}"}
+    return _request_json("POST", "/api/kb/index", payload={"expert_slug": expert_slug},
+                         timeout=timeout,
+                         timeout_msg=f"索引逾時（{timeout}s），文件量大時可稍後重試。")

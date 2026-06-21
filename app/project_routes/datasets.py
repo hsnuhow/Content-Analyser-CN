@@ -219,9 +219,7 @@ def start_crawl(pid, did, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
-# 上傳檔文字抽取已抽出（見 doc_extract.py）。
-from ..doc_extract import _extract_doc_text  # noqa: F401
-
+# 上傳檔文字抽取（_extract_doc_text）實作見 doc_extract.py（已於檔案頂部 import）。
 @bp.route('/<pid>/datasets/manual', methods=['POST'])
 @project_access_required(min_role='editor')
 def create_manual_dataset(pid, project, role):
@@ -349,9 +347,7 @@ def create_manual_dataset(pid, project, role):
 # 每筆用 auto-id 文件 + `_seq` 單調遞增欄位（刪除後 append 不撞 id），讀取依 `_seq` 排序。
 # ──────────────────────────────────────────────────────────────────────
 
-# 爬取狀態同步層已抽出（見 dataset_sync.py）。
-from ..dataset_sync import _sync_crawling_dataset  # noqa: F401
-
+# 爬取狀態同步（_sync_crawling_dataset）實作見 dataset_sync.py（已於檔案頂部 import）。
 @bp.route('/<pid>/datasets/<did>')
 @project_access_required(min_role='viewer')
 def dataset_detail(pid, did, project, role):

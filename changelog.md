@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-21 程式碼審查與最佳化（模組 1–3：前端 JS / 業務模組 / 路由層；逐模組部署驗證）
+系統性逐模組審查（找 bug + 邊界 + 效率不佳寫法 + 補註解），每模組部署後實測。
+- **模組 1 前端 JS**：① 抽 `app.js` 共用 `poll(url,opts)`（統一嘗試上限/終態/退避，根治「失控輪詢」類 bug）+ `renderMarkdown`（marked/DOMPurify 載入守衛）；6 處手刻輪詢收斂成 1 份。② dataset_detail.js 3 個 poll 補上嘗試上限（原本無上限，卡非終態會永遠打伺服器）。③ 複製成敗才回饋。④ admin_terms esc 補單引號。實測：analysis 頁 renderMarkdown 端對端、選擇器候選頁無重整、各頁無 console 錯誤。
+- **模組 2 業務模組**：① 修正 doc_extract 上傳純文字加編碼回退（UTF-8→cp950/Big5），台灣 .txt 不再亂碼（與 admin _extract_text 既有多編碼一致）。② crawler_client(5)+analysis_client(8) 共 13 個 HTTP 包裝抽 `_request_json`（mock 行為對照一致）。③ datasets_store 三處逐筆 delete 改 batch。實測：gq 爬取 2117 字零回歸。
+- **模組 3 路由層**：審查 auth_guards/routes/project_routes(package)/admin_routes——品質高、無 bug、無安全/效率問題（三級存取控制 + 白名單 gate + N+1 索引查 + Firestore dot-bug 防護 + 跨提供商金鑰外洩防護皆到位）。僅移除 modularization 殘留的 6 處重複 inline import（含一段 dataset_export 死碼）。實測路由正常。
+- 全程純 content-analyser，API 介面不變；部署 00097→00099。
+
 ## 2026-06-21 重構：資料/邏輯分離——站台模板 + 爬蟲垃圾詞外部化到後台（Phase A/B，已部署 crawler 00091 / analyser 00096）
 依用戶原則「**單一網站專屬的資料 → 後台可編；通用基礎 → 程式內 floor**」，把爬蟲裡寫死的站台資料抽到 Firestore，admin 可增/改/刪、**不必改碼部署**。沿用 `get_ad_blocklist`/`get_term_filters` 範式（floor + Firestore + 60s 快取 + 讀失敗回退）。
 - **Phase A 站台抽取模板**：`site_templates.get_site_templates()` = 內建 37 模板（floor 安全基線）+ Firestore `crawler_config/site_templates.templates`（admin 以模板名為 key 覆寫/新增）。`crawler._content_container_known` / `dom_extract` Phase 2.0+2.1（3 處）改用之。已 seed 37 模板入 Firestore。admin 頁 `/admin/site-templates`（JSON 編輯 + 結構驗證）。驗證：gq 爬取 logs `Matched template: 'gq_tw'`（讀 floor+Firestore）、內容 2117=基準零回歸；admin 頁顯示 37。
