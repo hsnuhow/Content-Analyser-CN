@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">站台抽取模板</h2>
+    <a href="{{ url_for('admin_bp.admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">← 返回控制台</a>
+  </div>
+
+  <p class="text-muted">
+    這裡管理「<strong>單一網站專屬</strong>」的主文抽取模板——某網站文章內文在哪個 CSS 容器。
+    爬蟲對命中的網站直接用模板選擇器抓正文，比通用啟發式準。
+    <br>
+    內建模板為<strong>地板（安全基線，程式內，Firestore 空/掛時仍可運作）</strong>；此處 Firestore
+    可<strong>增/改/刪</strong>（以模板名為 key 覆寫或新增）。儲存後爬蟲最多 60 秒生效、<strong>不需重新部署</strong>。
+    <br>
+    <strong>加新站台</strong>：在 JSON 裡新增一個 <code>"模板名": {"indicators": [...], "selectors": [...]}</code>。
+    <code>indicators</code>＝命中此模板的 URL 片段（含網域更具體，如 <code>cna.com.tw</code>）；
+    <code>selectors</code>＝由具體到通用、依序試的主文容器 CSS。
+  </p>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-header fw-semibold">
+      模板清單（目前 {{ n_templates }} 個，JSON）
+    </div>
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('admin_bp.site_templates_save') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="mb-2 small text-muted">
+          格式：<code>{ "模板名": { "indicators": ["網域或URL片段"], "selectors": ["CSS選擇器", ...] }, ... }</code>
+          。請保持合法 JSON。
+        </div>
+        <textarea name="templates_json" class="form-control font-monospace" rows="24"
+          spellcheck="false">{{ templates_json }}</textarea>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+          <div class="small text-muted">⚠️ 儲存會以此 JSON 整份覆寫 Firestore 模板。內建地板不受影響。</div>
+          <button type="submit" class="btn btn-primary">💾 儲存站台模板</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="alert alert-light border small text-muted">
+    範例：<br>
+    <code class="d-block mt-1">"cna": &#123; "indicators": ["cna.com.tw"], "selectors": [".paragraph", "article .centralContent"] &#125;</code>
+  </div>
+</div>
+{% endblock %}
