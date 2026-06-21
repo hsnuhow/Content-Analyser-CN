@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-21 安全：crawler-service 漏洞審查 + 三項修補（已部署，每項實跑爬蟲驗證）
+多代理安全審查 crawler-service（風險最高：抓任意 URL + 跑 Chrome + 執行 JS + LLM 選擇器）。找到 1 High + 2 Medium + 2 Low，已修可利用的三項：
+- **🟠 High SSRF（Chrome 路徑繞過 net_guard）**：`net_guard.safe_urlopen` 只擋 urllib；Chrome（`driver.get`）自行解析 DNS + 自動跟隨 redirect，可被 DNS rebinding（TTL=0 翻 169.254.169.254）或 redirect→內網繞過，讀 GCP metadata（SA token）。修：`net_guard.is_safe_ip(ip)` + `_init_driver` 開 performance log + `_open` 後 `_assert_safe_remote_ip` 取主文件實際 remoteIPAddress 再驗，命中內網拋 UnsupportedSiteError 丟棄；fail-open 不誤殺合法站。涵蓋 scrape/extract-images/research 三端點。實跑：公網 httpbin/example 成功 2/略過 0/失敗 0、IP 檢查未誤殺。
+- **🟡 ReDoS**：`_extract_from_json_ld` 的 `(?:[^"\\]|\\.|\n)*` 歧義量詞（`|\n` 在 DOTALL 下與 `[^"\\]` 重疊）→ 移除冗餘 `|\n`，行為等價、消除回溯。
+- **🟡 金鑰落地**：`/api/crawl/batch` 把解析後 gemini_api_key（含系統 GENAI fallback）放進 Cloud Tasks body 明文持久化 → 改存 access-controlled 的 `crawl_jobs/{job_id}.gemini_api_key`（僅使用者金鑰），worker 從 job doc 讀回、系統金鑰只在 worker 從 env/Secret 解析、永不進佇列；research/extract-images 本就不帶金鑰。
+- 測試：net_guard 測試 +4（is_safe_ip）共 19 例。**🔵 Low 未處理**：error 訊息夾帶 URL/例外、背景 fallback 無並行上限（已知）。**根治建議（你的 infra）**：Cloud Run egress 封 metadata/內網（縱深之外的網路層根治）。
+- ✅ **已做對的防護**：urllib 逐跳 SSRF 重驗、API key hmac.compare_digest、LLM 選擇器只進 BeautifulSoup 不進 JS、抓取讀取上限、proxy 帳密 json.dumps、金鑰不進 log。
+
 ## 2026-06-21 重構：巨檔模組化（nlp_path + project_routes 徹底拆分，已部署，每刀 Chrome 驗證）
 零回歸、每刀部署後 Chrome MCP 實測、rollback.sh + snapshot 隨時可退。新增 tests/（pyflakes 把關每次拆分無 undefined name）。
 - **nlp_path.py 883→663**：抽出 `text_processing`（文字/來源層：jieba 斷詞/來源分類/停用詞/過濾清單；可本地測 12 例）。真實分析驗證（關鍵字/分群/情感全產出）。
