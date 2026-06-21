@@ -16,8 +16,8 @@ Phase 3 將重建：
   - /download_project → 下載 Markdown 報告
 """
 import os
-from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for, flash
-from .services import db, get_admin_email, ensure_user, update_last_login, get_user
+from flask import Blueprint, render_template, jsonify, session, redirect, url_for, flash
+from .services import get_admin_email, ensure_user, update_last_login
 from .auth_guards import login_required, is_dev_env
 from . import oauth
 
