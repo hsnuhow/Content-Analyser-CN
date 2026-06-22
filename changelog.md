@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-22 廢除 Tier 2（Gemini URL 直讀）
+實測證明 Tier 2 無效後直接移除（見研究：Gemini url_context 透過 API 連維基百科都讀不到、是該工具本身不穩，對 Cloudflare 難站如 Dcard 亦無解；且官方文件還推薦維基當測試）。
+- `tiered_fallback.py`：移除 `gemini_url_read` + `is_gemini_url_fallback_enabled`；`run_tier23` → `run_tier3`（移除 Tier2 區塊 + 不再需要的 gemini_api_key 參數）；模組 docstring 記錄廢除原因。
+- 呼叫端 `app.py` / `crawl_job.py` 改呼叫 `run_tier3`、移除 Tier2 相關。
+- 行為：分層降為 Tier 1 → Tier 3（住宅代理，仍預設關閉）。難站改走 Tier 3 或 Cowork（真實瀏覽器+住宅 IP）。
+- 驗證：無任何 Tier2 殘留引用、pyflakes 乾淨、import 解析回歸測試 + 全測試通過。
+
 ## 2026-06-22 程式碼審查模組 4–6（三後端服務）+ 未用 import 檢驗清理（三並行代理審 + 親驗 + 逐服務部署）
 三個後端服務（crawler 5754 / analysis 4702 / search-extent 812 行）以三個並行審查代理掃，發現親自驗證後逐服務部署驗證。
 - **🔴 修正(高，回歸)**：`crawler-service/image_extract.py` 從 `crawler` import `SITE_TEMPLATES`（站台模板外部化時改成 get_site_templates）+ `MAIN_CONTENT_SELECTORS`（抽取層三層化時搬到 dom_extract）→ `/api/extract-images` 一觸發就 ImportError 500（延遲 import，py_compile 掃不到）。改從 `site_templates.get_site_templates()` + `dom_extract.MAIN_CONTENT_SELECTORS` 取，順帶讓影像擷取也吃後台可編模板。**實測：25 URL 共 116 張大圖，功能恢復。**

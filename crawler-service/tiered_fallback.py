@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-分層爬取 fallback（Tier 2 / Tier 3）
+分層爬取 fallback（Tier 3）
 
 設計原則（見 CRAWLER_STRATEGY.md 第 4 節）：
   - Tier 1：undetected-chromedriver（crawler.py 既有，零額外成本）
-  - Tier 2：Gemini URL 直讀（本模組，僅 token 成本）
   - Tier 3：Webshare 住宅 IP 代理（本模組，付費，僅對失敗網址啟用）
 
-⚠️ 全部由環境變數控制，預設關閉。未設定憑證時所有函式都是 no-op，
-   不影響現有 Tier 1 流程。等使用者填入 Webshare 憑證後再啟用。
+⛔ Tier 2「Gemini URL 直讀」已於 2026-06 廢除：
+   實測 Gemini 的 url_context 工具透過 API 連維基百科都讀不到（官方文件還推薦維基當測試），
+   是該工具本身不穩（開發者社群普遍回報），對 Cloudflare 難站（如 Dcard）更無解。
+   難站改走 Tier 3 住宅代理或 Cowork（真實瀏覽器 + 住宅 IP）。
+
+⚠️ Tier 3 由環境變數控制，預設關閉。未設定憑證時為 no-op，不影響現有 Tier 1 流程。
 
 環境變數：
-  ENABLE_GEMINI_URL_FALLBACK = "1"      啟用 Tier 2
-  GENAI_API_KEY                          Tier 2 用（與既有共用）
-
   WEBSHARE_PROXY_ENABLED     = "1"      啟用 Tier 3
   WEBSHARE_PROXY_HOST                    例：proxy.webshare.io
   WEBSHARE_PROXY_PORT                    例：80
@@ -187,11 +187,9 @@ def apply_proxy_to_options(options, proxy: Dict[str, str], log_fn=None) -> Optio
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Tier 2：Gemini URL 直讀
+# Tier 3 升級協調 + 共用「需升級」判定
+# （Tier 2「Gemini URL 直讀」已於 2026-06 廢除——見模組 docstring。）
 # ──────────────────────────────────────────────────────────────────────
-
-def is_gemini_url_fallback_enabled() -> bool:
-    return os.environ.get("ENABLE_GEMINI_URL_FALLBACK", "") == "1"
 
 
 # 視為「需要升級到下一層」的條件：失敗，或成功但內文過短（疑似只抓到導語）
@@ -210,35 +208,22 @@ def needs_upgrade(result: dict, min_len: int = TIER_UPGRADE_MIN_LEN) -> bool:
     return len(result.get("content") or "") < min_len
 
 
-def run_tier23(url: str, tier1_result: dict, gemini_api_key: str,
-               proxied_scrape_fn=None, log_fn=None) -> dict:
-    """分層協調（Tier 2 → 3）。輸入 Tier 1 結果，需要時依序升級。
+def run_tier3(url: str, tier1_result: dict,
+              proxied_scrape_fn=None, log_fn=None) -> dict:
+    """Tier 3 升級協調：輸入 Tier 1 結果，未達標（失敗/內文過短/cloaked）時用住宅代理重抓一次。
 
-    - Tier 2：Gemini URL 直讀（env ENABLE_GEMINI_URL_FALLBACK + 有 key）。
-    - Tier 3：呼叫 proxied_scrape_fn(url)（由呼叫端提供，內部用 use_proxy=True 的 crawler）。
-
-    Tier 2/3 皆 env 控制、預設關閉：未設定時直接回傳 Tier 1 結果，行為不變。
+    呼叫 proxied_scrape_fn(url)（由呼叫端提供，內部用 use_proxy=True 的 crawler）。
+    Tier 3 由 proxy 設定控制、預設關閉：未設定代理時直接回傳 Tier 1 結果，行為不變。
+    （Tier 2「Gemini URL 直讀」已於 2026-06 廢除——見模組 docstring。）
     """
     if not needs_upgrade(tier1_result):
         return tier1_result
 
-    # ── Tier 2 ──
-    try:
-        if is_gemini_url_fallback_enabled() and gemini_api_key:
-            text = gemini_url_read(url, gemini_api_key, log_fn=log_fn)
-            if len(text) >= TIER_UPGRADE_MIN_LEN:
-                return {"status": "success", "url": url,
-                        "title": (tier1_result or {}).get("title") or "(Tier2 Gemini)",
-                        "content": text, "length": len(text), "tier": 2}
-    except Exception as e:
-        if log_fn:
-            log_fn(f"[Tier2] 協調失敗：{e}")
-
-    # ── Tier 3 ──
+    # ── Tier 3：住宅代理重試 ──
     try:
         if load_proxy_config() is not None and proxied_scrape_fn is not None:
             if log_fn:
-                log_fn(f"[Tier3] Tier1/2 未達標，改用 Webshare 代理重試：{url}")
+                log_fn(f"[Tier3] Tier1 未達標，改用 Webshare 代理重試：{url}")
             proxied = proxied_scrape_fn(url)
             if not needs_upgrade(proxied):
                 proxied["tier"] = 3
@@ -250,47 +235,3 @@ def run_tier23(url: str, tier1_result: dict, gemini_api_key: str,
     return tier1_result
 
 
-def gemini_url_read(url: str, api_key: str, log_fn=None) -> str:
-    """Tier 2：把 URL 交給 Gemini，請其回傳該頁面的正文純文字。
-
-    使用 google-genai 的 url_context 工具（讓模型自行抓取 URL 內容）。
-    僅在 ENABLE_GEMINI_URL_FALLBACK=1 且有 api_key 時由呼叫端啟用。
-
-    回傳萃取到的正文；失敗回傳空字串。
-    """
-    def _log(m):
-        if log_fn:
-            log_fn(m)
-
-    if not api_key:
-        return ""
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        _log("[Tier2] google-genai 未安裝，略過")
-        return ""
-
-    try:
-        client = genai.Client(api_key=api_key)
-        prompt = (
-            f"請讀取這個網址的文章內容並回傳「純文字正文」，"
-            f"只要文章主體段落，不要導覽列、廣告、相關文章、留言或版權宣告。"
-            f"用原文語言輸出，不要加任何說明或標題。網址：{url}"
-        )
-        # url_context 工具讓模型自行抓取 URL（Gemini 2.x 支援）
-        config = types.GenerateContentConfig(
-            tools=[types.Tool(url_context=types.UrlContext())],
-            temperature=0.1,
-        )
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=config,
-        )
-        text = (getattr(resp, "text", None) or "").strip()
-        _log(f"[Tier2] Gemini URL 直讀回傳 {len(text)} 字")
-        return text
-    except Exception as e:
-        _log(f"[Tier2] Gemini URL 直讀失敗：{e}")
-        return ""

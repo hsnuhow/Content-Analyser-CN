@@ -164,26 +164,25 @@ def _tier1_scrape(url: str, use_gemini: bool, gemini_api_key: str,
 
 def _run_scrape(url: str, use_gemini: bool, gemini_api_key: str,
                 hard_timeout_sec: int = 60) -> dict:
-    """分層爬取協調器（Tier 1 → 2 → 3）。
+    """分層爬取協調器（Tier 1 → 3；Tier 2 Gemini 直讀已廢除）。
 
-    Tier 2/3 皆由環境變數控制、預設關閉：未設定時行為與單純 Tier 1 完全相同。
+    Tier 3（住宅代理）由環境變數控制、預設關閉：未設定時行為與單純 Tier 1 完全相同。
     見 tiered_fallback.py 與 CRAWLER_STRATEGY.md。
     """
     # ── Tier 1：無頭瀏覽器（直連）──
     result = _tier1_scrape(url, use_gemini, gemini_api_key, hard_timeout_sec)
 
-    # ── Tier 2/3：交給共用協調器（Tier 3 代理重試用獨立 crawler）──
+    # ── Tier 3：未達標時用住宅代理重抓一次（獨立 crawler）。Tier 2(Gemini)已廢除。──
     try:
-        from tiered_fallback import run_tier23
-        key = gemini_api_key or os.environ.get("GENAI_API_KEY")
-        return run_tier23(
-            url, result, key,
+        from tiered_fallback import run_tier3
+        return run_tier3(
+            url, result,
             proxied_scrape_fn=lambda u: _tier1_scrape(
                 u, use_gemini, gemini_api_key, hard_timeout_sec, use_proxy=True),
             log_fn=lambda m: print(m, flush=True),
         )
     except Exception as e:
-        print(f"[Tier2/3] 協調失敗（回退 Tier1 結果）：{e}", flush=True)
+        print(f"[Tier3] 協調失敗（回退 Tier1 結果）：{e}", flush=True)
         return result
 
 
