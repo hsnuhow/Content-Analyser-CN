@@ -87,4 +87,95 @@ document.addEventListener('DOMContentLoaded', function () {
       onTimeout: function () { if (logEl) logEl.textContent = '擷取仍在進行，請稍後重新整理頁面查看。'; }
     });
   })();
+
+  // 4) 逐項管理（僅爬取資料集 completed 時有勾選 UI）：全選 / 分析只送勾選 / 檢視+編輯彈窗
+  (function () {
+    // 4a) 全選切換
+    var selectAll = document.getElementById('ds-select-all');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        document.querySelectorAll('.ds-item-select').forEach(function (cb) { cb.checked = selectAll.checked; });
+      });
+    }
+
+    // 4b) 分析表單送出 → 注入勾選的 item id（只送勾選項）。有勾選 UI 才介入；否則維持全部。
+    var form = document.getElementById('analyseForm');
+    if (form && document.querySelector('.ds-item-select')) {
+      form.addEventListener('submit', function (e) {
+        var checked = [].slice.call(document.querySelectorAll('.ds-item-select:checked'));
+        if (!checked.length) {
+          e.preventDefault();
+          window.alert('請至少勾選一個項目再分析。');
+          return;
+        }
+        form.querySelectorAll('input[name="selected_ids"]').forEach(function (n) { n.remove(); });
+        checked.forEach(function (cb) {
+          var h = document.createElement('input');
+          h.type = 'hidden'; h.name = 'selected_ids'; h.value = cb.value;
+          form.appendChild(h);
+        });
+      });
+    }
+
+    // 4c) 檢視/編輯彈窗（按需向 items/<id> 取內文）
+    var modalEl = document.getElementById('itemModal');
+    if (!modalEl || typeof bootstrap === 'undefined') return;
+    var base = modalEl.getAttribute('data-item-base');
+    var canEdit = modalEl.getAttribute('data-can-edit') === '1';
+    var csrf = modalEl.getAttribute('data-csrf');
+    var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    var elUrl = document.getElementById('im-url');
+    var elTitle = document.getElementById('im-title');
+    var elContent = document.getElementById('im-content');
+    var elLen = document.getElementById('im-len');
+    var elMsg = document.getElementById('im-msg');
+    var curId = null;
+
+    function setMsg(t, cls) { elMsg.textContent = t; elMsg.className = 'small mb-2 ' + (cls || 'text-muted'); }
+    if (elContent) elContent.addEventListener('input', function () { if (elLen) elLen.textContent = elContent.value.length; });
+
+    document.querySelectorAll('.ds-item-view').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        curId = btn.getAttribute('data-item-id');
+        setMsg('載入中…');
+        elTitle.value = ''; elContent.value = ''; elLen.textContent = '0';
+        elUrl.textContent = ''; elUrl.href = '#';
+        modal.show();
+        fetch(base + encodeURIComponent(curId), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.error) { setMsg('載入失敗：' + d.error, 'text-danger'); return; }
+            elUrl.textContent = d.url || ''; elUrl.href = d.url || '#';
+            elTitle.value = d.title || '';
+            elContent.value = d.content || '';
+            elLen.textContent = (d.content || '').length;
+            if (d.incomplete) setMsg('⚠️ 此項標記為不完整（' + (d.incomplete_reason || '') + '）' + (canEdit ? '：可貼上完整版覆蓋。' : ''), 'text-warning-emphasis');
+            else setMsg(d.edited ? '（此項已被編輯過）' : '', 'text-muted');
+          })
+          .catch(function (e) { setMsg('載入失敗：' + e, 'text-danger'); });
+      });
+    });
+
+    var saveBtn = document.getElementById('im-save');
+    if (saveBtn && canEdit) {
+      saveBtn.addEventListener('click', function () {
+        if (!curId) return;
+        if (!elContent.value.trim()) { setMsg('內容不可為空。', 'text-danger'); return; }
+        saveBtn.disabled = true; setMsg('儲存中…');
+        var fd = new FormData();
+        fd.append('csrf_token', csrf);
+        fd.append('content', elContent.value);
+        fd.append('title', elTitle.value);
+        fetch(base + encodeURIComponent(curId) + '/edit', { method: 'POST', body: fd, cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            saveBtn.disabled = false;
+            if (d.error) { setMsg('儲存失敗：' + d.error, 'text-danger'); return; }
+            setMsg('已儲存（' + d.length + ' 字），重新整理中…', 'text-success');
+            location.reload();
+          })
+          .catch(function (e) { saveBtn.disabled = false; setMsg('儲存失敗：' + e, 'text-danger'); });
+      });
+    }
+  })();
 });
