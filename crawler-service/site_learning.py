@@ -149,7 +149,6 @@ def note_learned_outcome(domain: str, ok: bool) -> None:
     if not domain:
         return
     try:
-        from firebase_admin import firestore
         ref = _client().collection(_COLLECTION).document(_doc_id(domain))
         if ok:
             ref.set({"fail_count": 0}, merge=True)

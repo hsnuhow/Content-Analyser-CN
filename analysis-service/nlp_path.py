@@ -8,7 +8,6 @@ Path 1：數值分析層
 
 不需要本地 BERT 模型。Vertex AI API 取代傳統 Word2Vec / BERT。
 """
-import os
 import re
 import concurrent.futures
 from typing import List, Dict, Any, Callable, Optional
@@ -20,11 +19,10 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import normalize
 
 # 文字 / 來源處理層已抽出至 text_processing.py（純 os/re/jieba，可單獨測）。
-from text_processing import (  # noqa: F401  （部分為 re-export 供既有用法）
-    _is_social_url, _source_type, SOURCE_TYPES,
-    get_term_filters, _strip_terms, _text_for_keywords, _tokenize,
-    _STOPWORDS, _SOCIAL_UI_STOPWORDS, _MEDIA_NAMES, _DOMAIN_TERMS, _SOCIAL_DOMAINS,
-    _URL_RE,
+# 只 import nlp_path 實際用到的；其餘 _STOPWORDS 等若需要請直接 from text_processing import。
+from text_processing import (
+    _source_type, SOURCE_TYPES,
+    get_term_filters, _text_for_keywords, _tokenize,
 )
 
 # 詞性白名單/填充判定（F2 建議用）。BRAND=專名/數字 → 保護；FILLER=副詞/語助等 → 建議。

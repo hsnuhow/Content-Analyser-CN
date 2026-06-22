@@ -113,11 +113,11 @@ def _crawl_sequence(urls, use_gemini, gemini_api_key, log, record_fn,
         except Exception as e:
             return {"status": "failed", "url": url, "error": str(e)}
         try:
-            from tiered_fallback import run_tier23
-            return run_tier23(url, result, gemini_api_key,
-                              proxied_scrape_fn=_proxied_scrape, log_fn=log)
+            from tiered_fallback import run_tier3
+            return run_tier3(url, result,
+                             proxied_scrape_fn=_proxied_scrape, log_fn=log)
         except Exception as e:
-            log(f"[Tier2/3] 協調失敗（回退 Tier1）：{e}")
+            log(f"[Tier3] 協調失敗（回退 Tier1）：{e}")
             return result
 
     def _scrape_with_watchdog(url: str):

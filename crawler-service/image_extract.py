@@ -18,7 +18,6 @@
 """
 import random
 import re
-import threading
 import urllib.request
 from typing import Callable, Dict, List, Optional
 from urllib.parse import urljoin, urlparse

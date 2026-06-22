@@ -17,7 +17,7 @@
 import csv
 import io
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict
 from urllib.parse import urlparse
 
 TAIPEI_TZ = timezone(timedelta(hours=8))
