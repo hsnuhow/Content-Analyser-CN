@@ -665,29 +665,31 @@ def cleanup_crawl_jobs():
     deleted = 0
     MAX_CLEAN = 500  # 單次上限，避免一次掃/刪過多導致請求逾時
     try:
-        # 只查「已結束」狀態（伺服器端單欄位過濾，免複合索引），並設上限，
-        # 不再全表 stream。updated_at 的 cutoff 比較在取回後做。
-        q = (db.collection(JOBS_COLLECTION)
-             .where("status", "in", ["completed", "failed", "cancelled"])
-             .limit(MAX_CLEAN))
-        for doc in q.stream():
-            d = doc.to_dict() or {}
-            updated = d.get("updated_at") or d.get("completed_at")
-            if updated is None or updated < cutoff:
-                try:
-                    rbatch = db.batch()
-                    nr = 0
-                    for r in doc.reference.collection("results").stream():
-                        rbatch.delete(r.reference)
-                        nr += 1
-                        if nr % 400 == 0:
-                            rbatch.commit()
-                            rbatch = db.batch()
-                    rbatch.commit()
-                except Exception as e:
-                    print(f"[cleanup] 刪除 results 子集合失敗 {doc.id}: {e}", flush=True)
-                doc.reference.delete()
-                deleted += 1
+        # 清 crawler 自管的 3 個 job 集合（crawl / image_extract / research）——之前只清 crawl_jobs，
+        # 導致已完成的圖片擷取/研究記錄（純文字網址清單）永遠累積。三個都清才不會慢慢長大。
+        # 只查「已結束」狀態（伺服器端單欄位過濾，免複合索引）+ 每集合上限；cutoff 比較在取回後做。
+        for col in _REAP_COLLECTIONS:
+            q = (db.collection(col)
+                 .where("status", "in", ["completed", "failed", "cancelled"])
+                 .limit(MAX_CLEAN))
+            for doc in q.stream():
+                d = doc.to_dict() or {}
+                updated = d.get("updated_at") or d.get("completed_at")
+                if updated is None or updated < cutoff:
+                    try:
+                        rbatch = db.batch()
+                        nr = 0
+                        for r in doc.reference.collection("results").stream():
+                            rbatch.delete(r.reference)
+                            nr += 1
+                            if nr % 400 == 0:
+                                rbatch.commit()
+                                rbatch = db.batch()
+                        rbatch.commit()
+                    except Exception as e:
+                        print(f"[cleanup] 刪除 results 子集合失敗 {doc.id}: {e}", flush=True)
+                    doc.reference.delete()
+                    deleted += 1
     except Exception as e:
         return jsonify({"status": "failed", "error": str(e),
                         "deleted": deleted, "reaped": reaped}), 500

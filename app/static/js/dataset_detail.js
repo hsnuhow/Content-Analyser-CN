@@ -68,16 +68,39 @@ document.addEventListener('DOMContentLoaded', function () {
       onData: function (d) {
         if (logEl) logEl.textContent = d.log || d.status || '';
         if (d.status === 'completed') {
-          var rs = d.results || []; var h = `<div class="mb-2 small text-muted">共 ${d.n_images || 0} 張大圖</div>`;
-          rs.forEach(function (it) {
-            if (!(it.images || []).length) return;
-            h += `<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count || 0} 張・${esc(it.source || '')}）</span></div><div class="d-flex flex-wrap gap-2">`;
-            (it.images || []).forEach(function (im) {
-              h += `<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
-            });
-            h += `</div></div>`;
+          var rs = d.results || [];
+          var total = d.n_images || 0;
+          imgEl.innerHTML = '';
+          if (!total) { imgEl.innerHTML = '<div class="text-muted">無擷取到大圖。</div>'; return 'stop'; }
+          // 預設收合：只放「展開」按鈕，點了才注入 <img>——避免一打開頁面就把幾十張圖
+          // 全塞進 DOM、全部去原站抓圖（圖只是原站網址、非我們儲存）。
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-secondary';
+          var grid = document.createElement('div');
+          grid.className = 'mt-2 d-none';
+          var built = false;
+          function label() { btn.textContent = (grid.classList.contains('d-none') ? '📷 展開大圖（' : '📷 收合大圖（') + total + ' 張）'; }
+          btn.addEventListener('click', function () {
+            if (!built) {
+              var h = '';
+              rs.forEach(function (it) {
+                if (!(it.images || []).length) return;
+                h += `<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count || 0} 張・${esc(it.source || '')}）</span></div><div class="d-flex flex-wrap gap-2">`;
+                (it.images || []).forEach(function (im) {
+                  h += `<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
+                });
+                h += `</div></div>`;
+              });
+              grid.innerHTML = h;
+              built = true;
+            }
+            grid.classList.toggle('d-none');
+            label();
           });
-          imgEl.innerHTML = h || '<div class="text-muted">無擷取到大圖。</div>';
+          label();
+          imgEl.appendChild(btn);
+          imgEl.appendChild(grid);
           return 'stop';
         }
         if (d.status === 'failed') { if (logEl) logEl.textContent = '擷取失敗：' + (d.log || ''); return 'stop'; }
