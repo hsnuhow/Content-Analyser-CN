@@ -68,16 +68,39 @@ document.addEventListener('DOMContentLoaded', function () {
       onData: function (d) {
         if (logEl) logEl.textContent = d.log || d.status || '';
         if (d.status === 'completed') {
-          var rs = d.results || []; var h = `<div class="mb-2 small text-muted">共 ${d.n_images || 0} 張大圖</div>`;
-          rs.forEach(function (it) {
-            if (!(it.images || []).length) return;
-            h += `<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count || 0} 張・${esc(it.source || '')}）</span></div><div class="d-flex flex-wrap gap-2">`;
-            (it.images || []).forEach(function (im) {
-              h += `<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
-            });
-            h += `</div></div>`;
+          var rs = d.results || [];
+          var total = d.n_images || 0;
+          imgEl.innerHTML = '';
+          if (!total) { imgEl.innerHTML = '<div class="text-muted">無擷取到大圖。</div>'; return 'stop'; }
+          // 預設收合：只放「展開」按鈕，點了才注入 <img>——避免一打開頁面就把幾十張圖
+          // 全塞進 DOM、全部去原站抓圖（圖只是原站網址、非我們儲存）。
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-sm btn-outline-secondary';
+          var grid = document.createElement('div');
+          grid.className = 'mt-2 d-none';
+          var built = false;
+          function label() { btn.textContent = (grid.classList.contains('d-none') ? '📷 展開大圖（' : '📷 收合大圖（') + total + ' 張）'; }
+          btn.addEventListener('click', function () {
+            if (!built) {
+              var h = '';
+              rs.forEach(function (it) {
+                if (!(it.images || []).length) return;
+                h += `<div class="mb-3"><div class="small fw-semibold mb-1"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="text-decoration-none">${esc(it.url)}</a> <span class="text-muted">（${it.count || 0} 張・${esc(it.source || '')}）</span></div><div class="d-flex flex-wrap gap-2">`;
+                (it.images || []).forEach(function (im) {
+                  h += `<a href="${esc(im.src)}" target="_blank" rel="noopener" title="${esc(im.alt)}"><img src="${esc(im.src)}" style="height:90px;width:auto;border-radius:6px;border:1px solid #ddd;object-fit:cover" loading="lazy"></a>`;
+                });
+                h += `</div></div>`;
+              });
+              grid.innerHTML = h;
+              built = true;
+            }
+            grid.classList.toggle('d-none');
+            label();
           });
-          imgEl.innerHTML = h || '<div class="text-muted">無擷取到大圖。</div>';
+          label();
+          imgEl.appendChild(btn);
+          imgEl.appendChild(grid);
           return 'stop';
         }
         if (d.status === 'failed') { if (logEl) logEl.textContent = '擷取失敗：' + (d.log || ''); return 'stop'; }
@@ -86,5 +109,96 @@ document.addEventListener('DOMContentLoaded', function () {
       },
       onTimeout: function () { if (logEl) logEl.textContent = '擷取仍在進行，請稍後重新整理頁面查看。'; }
     });
+  })();
+
+  // 4) 逐項管理（僅爬取資料集 completed 時有勾選 UI）：全選 / 分析只送勾選 / 檢視+編輯彈窗
+  (function () {
+    // 4a) 全選切換
+    var selectAll = document.getElementById('ds-select-all');
+    if (selectAll) {
+      selectAll.addEventListener('change', function () {
+        document.querySelectorAll('.ds-item-select').forEach(function (cb) { cb.checked = selectAll.checked; });
+      });
+    }
+
+    // 4b) 分析表單送出 → 注入勾選的 item id（只送勾選項）。有勾選 UI 才介入；否則維持全部。
+    var form = document.getElementById('analyseForm');
+    if (form && document.querySelector('.ds-item-select')) {
+      form.addEventListener('submit', function (e) {
+        var checked = [].slice.call(document.querySelectorAll('.ds-item-select:checked'));
+        if (!checked.length) {
+          e.preventDefault();
+          window.alert('請至少勾選一個項目再分析。');
+          return;
+        }
+        form.querySelectorAll('input[name="selected_ids"]').forEach(function (n) { n.remove(); });
+        checked.forEach(function (cb) {
+          var h = document.createElement('input');
+          h.type = 'hidden'; h.name = 'selected_ids'; h.value = cb.value;
+          form.appendChild(h);
+        });
+      });
+    }
+
+    // 4c) 檢視/編輯彈窗（按需向 items/<id> 取內文）
+    var modalEl = document.getElementById('itemModal');
+    if (!modalEl || typeof bootstrap === 'undefined') return;
+    var base = modalEl.getAttribute('data-item-base');
+    var canEdit = modalEl.getAttribute('data-can-edit') === '1';
+    var csrf = modalEl.getAttribute('data-csrf');
+    var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    var elUrl = document.getElementById('im-url');
+    var elTitle = document.getElementById('im-title');
+    var elContent = document.getElementById('im-content');
+    var elLen = document.getElementById('im-len');
+    var elMsg = document.getElementById('im-msg');
+    var curId = null;
+
+    function setMsg(t, cls) { elMsg.textContent = t; elMsg.className = 'small mb-2 ' + (cls || 'text-muted'); }
+    if (elContent) elContent.addEventListener('input', function () { if (elLen) elLen.textContent = elContent.value.length; });
+
+    document.querySelectorAll('.ds-item-view').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        curId = btn.getAttribute('data-item-id');
+        setMsg('載入中…');
+        elTitle.value = ''; elContent.value = ''; elLen.textContent = '0';
+        elUrl.textContent = ''; elUrl.href = '#';
+        modal.show();
+        fetch(base + encodeURIComponent(curId), { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.error) { setMsg('載入失敗：' + d.error, 'text-danger'); return; }
+            elUrl.textContent = d.url || ''; elUrl.href = d.url || '#';
+            elTitle.value = d.title || '';
+            elContent.value = d.content || '';
+            elLen.textContent = (d.content || '').length;
+            if (d.incomplete) setMsg('⚠️ 此項標記為不完整（' + (d.incomplete_reason || '') + '）' + (canEdit ? '：可貼上完整版覆蓋。' : ''), 'text-warning-emphasis');
+            else setMsg(d.edited ? '（此項已被編輯過）' : '', 'text-muted');
+          })
+          .catch(function (e) { setMsg('載入失敗：' + e, 'text-danger'); });
+      });
+    });
+
+    var saveBtn = document.getElementById('im-save');
+    if (saveBtn && canEdit) {
+      saveBtn.addEventListener('click', function () {
+        if (!curId) return;
+        if (!elContent.value.trim()) { setMsg('內容不可為空。', 'text-danger'); return; }
+        saveBtn.disabled = true; setMsg('儲存中…');
+        var fd = new FormData();
+        fd.append('csrf_token', csrf);
+        fd.append('content', elContent.value);
+        fd.append('title', elTitle.value);
+        fetch(base + encodeURIComponent(curId) + '/edit', { method: 'POST', body: fd, cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            saveBtn.disabled = false;
+            if (d.error) { setMsg('儲存失敗：' + d.error, 'text-danger'); return; }
+            setMsg('已儲存（' + d.length + ' 字），重新整理中…', 'text-success');
+            location.reload();
+          })
+          .catch(function (e) { saveBtn.disabled = false; setMsg('儲存失敗：' + e, 'text-danger'); });
+      });
+    }
   })();
 });

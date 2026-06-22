@@ -177,11 +177,14 @@
   </div>
   {% endif %}
 
+  {# 可逐項管理（看/編輯/勾選）：僅「系統爬取且已完成」的資料集；手動匯入不開放（已自行篩過）#}
+  {% set can_curate = dataset.status == 'completed' and dataset.origin != 'manual' and role in ('owner', 'editor') %}
+
   {# 一鍵分析（completed 時，Owner/Editor）#}
   {% if dataset.status == 'completed' and role in ('owner', 'editor') %}
   <div class="card shadow-sm mb-4 border-primary">
     <div class="card-body">
-      <form method="POST" action="{{ url_for('project_bp.analyse_dataset', pid=pid, did=dataset.id) }}" class="row g-2 align-items-end">
+      <form method="POST" action="{{ url_for('project_bp.analyse_dataset', pid=pid, did=dataset.id) }}" class="row g-2 align-items-end" id="analyseForm">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-md-8">
           <label class="form-label fw-semibold mb-1">報告標題</label>
@@ -194,6 +197,9 @@
           </button>
         </div>
       </form>
+      {% if can_curate %}
+      <div class="form-text mt-2">下方爬取結果可逐項<strong>勾選</strong>，只分析勾選項；<strong>不完整（付費牆）項預設不勾</strong>。也可點「🔍 檢視」看全文或編輯內容。</div>
+      {% endif %}
       {% if not project.llm_config.api_key %}
       <div class="form-text text-warning mt-2">⚠️ 尚未設定 LLM API Key，請先至專案設定填入。</div>
       {% endif %}
@@ -218,11 +224,12 @@
     <div class="table-responsive">
       <table class="table table-hover mb-0 align-middle">
         <thead class="table-light">
-          <tr><th>狀態</th><th>標題 / 網址</th><th>字數</th>{% if role in ('owner','editor') %}<th></th>{% endif %}</tr>
+          <tr>{% if can_curate %}<th><input type="checkbox" id="ds-select-all" class="form-check-input" checked title="全選/全不選"></th>{% endif %}<th>狀態</th><th>標題 / 網址</th><th>字數</th>{% if role in ('owner','editor') %}<th></th>{% endif %}</tr>
         </thead>
         <tbody>
           {% for it in dataset['items'] %}
           <tr>
+            {% if can_curate %}<td>{% if it.status == 'success' and it._id %}<input type="checkbox" class="form-check-input ds-item-select" value="{{ it._id }}"{% if not it.incomplete %} checked{% endif %}>{% endif %}</td>{% endif %}
             <td>
               {% if it.cloaked %}
               <span class="badge bg-warning text-dark" title="網站對爬蟲反爬（封鎖或內容飄移誤導），需手動爬取">🚫 需手動</span>
@@ -243,9 +250,15 @@
             </td>
             <td>{{ it.length or '-' }}</td>
             {% if role in ('owner','editor') %}
-            <td class="text-end">
+            <td class="text-end text-nowrap">
+              {% if it._id and it.status == 'success' %}
+              <button type="button" class="btn btn-sm btn-link p-0 me-2 ds-item-view"
+                      data-item-id="{{ it._id }}"
+                      title="檢視內容{% if can_curate %}／編輯{% endif %}">🔍</button>
+              {% endif %}
               {% if it._id %}
               <form method="POST" action="{{ url_for('project_bp.delete_dataset_item', pid=pid, did=dataset.id, item_id=it._id) }}"
+                    class="d-inline-block"
                     data-confirm="從此資料集刪除這個網址項目？此操作不可還原。">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-link text-danger p-0" title="刪除此項">🗑</button>
@@ -257,6 +270,42 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+  </div>
+  {% endif %}
+
+  {# 單條檢視/編輯彈窗：JS 按需向 items/<id> 取內容；can_curate 時可編輯存回 #}
+  {% if role in ('owner', 'editor') %}
+  <div class="modal fade" id="itemModal" tabindex="-1" aria-hidden="true"
+       data-item-base="{{ url_for('project_bp.dataset_detail', pid=pid, did=dataset.id) }}/items/"
+       data-can-edit="{{ '1' if can_curate else '' }}"
+       data-csrf="{{ csrf_token() }}">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">檢視{% if can_curate %} / 編輯{% endif %}項目內容</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="關閉"></button>
+        </div>
+        <div class="modal-body">
+          <div class="small text-muted mb-2 text-truncate"><a id="im-url" href="#" target="_blank" rel="noopener"></a></div>
+          <div id="im-msg" class="small mb-2"></div>
+          <div class="mb-2">
+            <label class="form-label small fw-semibold mb-1">標題</label>
+            <input type="text" id="im-title" class="form-control form-control-sm"{% if not can_curate %} readonly{% endif %}>
+          </div>
+          <label class="form-label small fw-semibold mb-1">內文（<span id="im-len">0</span> 字）</label>
+          <textarea id="im-content" class="form-control font-monospace" rows="16" spellcheck="false"{% if not can_curate %} readonly{% endif %}></textarea>
+        </div>
+        <div class="modal-footer">
+          {% if can_curate %}
+          <span class="me-auto small text-muted">存檔會清除「不完整」標記、標記為已編輯；之後重爬會覆蓋。</span>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary" id="im-save">💾 儲存內容</button>
+          {% else %}
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">關閉</button>
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
   {% endif %}

@@ -104,6 +104,60 @@ def delete_dataset_item(pid, did, item_id, project, role):
     return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
 
+@bp.route('/<pid>/datasets/<did>/items/<item_id>')
+@project_access_required(min_role='viewer')
+def get_dataset_item(pid, did, item_id, project, role):
+    """取單條 item 內容（JSON），供前端「檢視/編輯」彈窗按需載入
+    （列表頁不內嵌全部內文，大資料集才不會卡）。"""
+    doc = _items_ref(pid, did).document(item_id).get()
+    if not doc.exists:
+        return jsonify({'error': '找不到該項目'}), 404
+    d = doc.to_dict() or {}
+    return jsonify({
+        'id': item_id, 'url': d.get('url', ''), 'title': d.get('title', ''),
+        'content': d.get('content', ''),
+        'length': d.get('length') or len(d.get('content') or ''),
+        'status': d.get('status', ''),
+        'incomplete': bool(d.get('incomplete')),
+        'incomplete_reason': d.get('incomplete_reason', ''),
+        'edited': bool(d.get('edited')),
+    })
+
+
+@bp.route('/<pid>/datasets/<did>/items/<item_id>/edit', methods=['POST'])
+@project_access_required(min_role='editor')
+def edit_dataset_item(pid, did, item_id, project, role):
+    """編輯單條 item 的內文/標題。**僅系統爬取資料集**；手動匯入(origin=manual)不開放。
+    存回 + 重算字數 + 清除付費牆「不完整」標記（人工已補全）+ 標 edited 供追溯。
+    註：之後對該 URL「重爬」會以新爬結果覆蓋此手動編輯。"""
+    ds_ref = (db.collection('projects').document(pid)
+              .collection('datasets').document(did))
+    ds_doc = ds_ref.get()
+    if not ds_doc.exists:
+        return jsonify({'error': '找不到資料集'}), 404
+    if (ds_doc.to_dict() or {}).get('origin') == 'manual':
+        return jsonify({'error': '手動匯入的資料集不開放逐項編輯'}), 403
+    item_ref = _items_ref(pid, did).document(item_id)
+    if not item_ref.get().exists:
+        return jsonify({'error': '找不到該項目'}), 404
+    content = (request.form.get('content', '') or '').strip()[:50000]
+    title = (request.form.get('title', '') or '').strip()[:512]
+    if not content:
+        return jsonify({'error': '內容不可為空'}), 400
+    upd = {
+        'content': content, 'length': len(content),
+        'incomplete': firestore.DELETE_FIELD,
+        'incomplete_reason': firestore.DELETE_FIELD,
+        'edited': True, 'edited_by': current_user_email(),
+        'edited_at': firestore.SERVER_TIMESTAMP,
+    }
+    if title:
+        upd['title'] = title
+    item_ref.update(upd)
+    log_usage('edit_item', detail=(ds_doc.to_dict() or {}).get('name', ''), project_id=pid)
+    return jsonify({'ok': True, 'length': len(content)})
+
+
 @bp.route('/<pid>/datasets/<did>/delete', methods=['POST'])
 @project_access_required(min_role='editor')
 def delete_dataset(pid, did, project, role):
@@ -386,8 +440,14 @@ def analyse_dataset(pid, did, project, role):
         flash('資料集尚未爬取完成，無法分析。', 'warning')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
-    # 取成功項目，轉成 analysis 的 contents（爬蟲回傳 content 欄位）
+    # 取成功項目，轉成 analysis 的 contents（爬蟲回傳 content 欄位）。
+    # 逐項勾選：前端送 selected_ids（爬取資料集才有勾選 UI）→ 只分析勾選項；
+    # 未送 selected_ids（如手動匯入、或舊版）→ 維持「全部成功項」向後相容。
     items = _load_dataset_items(pid, did)
+    pool = [it for it in items if it.get('status') == 'success' and it.get('content')]
+    selected = set(request.form.getlist('selected_ids'))
+    if selected:
+        pool = [it for it in pool if it.get('_id') in selected]
     contents = [
         {
             'url': it.get('url', ''),
@@ -395,10 +455,11 @@ def analyse_dataset(pid, did, project, role):
             'text': it.get('content', ''),       # analysis 相容 content，但統一帶 text
             'source_type': 'media',
         }
-        for it in items if it.get('status') == 'success' and it.get('content')
+        for it in pool
     ]
     if not contents:
-        flash('資料集中沒有可分析的成功項目。', 'danger')
+        flash('沒有可分析的項目（請至少勾選一個成功項）。' if selected
+              else '資料集中沒有可分析的成功項目。', 'danger')
         return redirect(url_for('project_bp.dataset_detail', pid=pid, did=did))
 
     # 與 submit_analysis_route 一致的保護：單次最多 100 篇、每篇截斷 50,000 字元
