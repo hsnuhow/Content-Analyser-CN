@@ -71,3 +71,30 @@ def looks_like_block_page(content: str, title: str = "") -> bool:
     if not any(m in blob for m in _BLOCK_PAGE_MARKERS):
         return False
     return len((content or "").strip()) < 1200
+
+
+def detect_paywall_incomplete(content: str, url: str = "",
+                              markers=(), paywall_domains=None) -> tuple:
+    """偵測「付費牆截斷」的不完整內容。回 (incomplete: bool, reason: str)。
+
+    markers / paywall_domains 由呼叫端注入（crawler_config 的 floor + Firestore），本模組維持純函式。
+    兩種付費牆型態（實測天下/商周/端傳媒歸納）：
+      A) 內容含付費牆 CTA 標記（如天下「訂戶限定」「查看訂閱方案」「不限篇數暢讀」）
+         → (True, 'paywall')。最可靠。
+      B) 網域屬「已知靜默截斷付費牆站」（商周/端傳媒：付費牆是 JS 遮罩、抓不到 CTA 文字，
+         只抓到引言）且抽到的內容短於該網域門檻 → (True, 'paywall_short')。啟發式。
+
+    註：寧可「多標不完整」也不要漏（不完整內容會污染分析）；admin 可於後台調 markers/門檻。
+    """
+    c = content or ""
+    for m in (markers or ()):
+        if m and m in c:
+            return True, "paywall"
+    u = (url or "").lower()
+    for dom, min_len in (paywall_domains or {}).items():
+        try:
+            if dom and dom in u and len(c) < int(min_len):
+                return True, "paywall_short"
+        except (TypeError, ValueError):
+            continue
+    return False, ""

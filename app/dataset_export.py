@@ -16,9 +16,12 @@ def _dataset_to_markdown(dataset: dict) -> str:
     lines = [f"# {name}", "",
              f"> 共 {dataset.get('item_count', len(items))} 個網址，成功 {len(success)} 篇", ""]
     for it in success:
-        lines += [f"## {it.get('title') or '(無標題)'}", "",
+        # 付費牆截斷的不完整內容明確標註，避免下游/分析誤當完整文。
+        inc = '　⚠️ 內容不完整（付費牆截斷，僅預覽）' if it.get('incomplete') else ''
+        lines += [f"## {it.get('title') or '(無標題)'}{inc}", "",
                   f"- 網址：{it.get('url', '')}",
-                  f"- 字數：{it.get('length', '-')}", "",
+                  f"- 字數：{it.get('length', '-')}"
+                  + ('（不完整：付費牆）' if it.get('incomplete') else ''), "",
                   it.get('content', ''), "", "---", ""]
     if others:
         lines += ["## 未成功項目", ""]
@@ -44,6 +47,8 @@ def _dataset_to_json(dataset: dict) -> dict:
                 'status': it.get('status', ''),
                 'content': it.get('content', ''),
                 'error': it.get('error', ''),
+                'incomplete': bool(it.get('incomplete')),
+                'incomplete_reason': it.get('incomplete_reason', ''),
             } for it in items
         ],
     }

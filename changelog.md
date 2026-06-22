@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-22 新增：付費牆截斷內容「標示不完整」
+天下/商周/端傳媒/工商/UDN/鏡週刊 等站常在付費牆前只給少量預覽——這對分析是不完整的，需標示。
+實爬 6 站歸納兩型，雙路偵測（皆後台可編 floor+Firestore）：
+- **A 明確 CTA**（天下型）：內容含「訂戶限定/解鎖/查看訂閱方案/不限篇數暢讀/立即購買」等標記 → incomplete=paywall。
+- **B 靜默截斷**（商周/端傳媒型，付費牆是 JS 遮罩、抓不到 CTA）：已知付費網域 + 內容短於門檻 → incomplete=paywall_short。
+實作：page_classify.detect_paywall_incomplete（純函式、設定注入）+ crawler_config.get_paywall_config
+（floor: 17 標記 + 3 網域門檻；Firestore crawler_config/paywall admin 可加）+ crawler._success
+（各抽取路徑集中標記，內容保留不丟棄）。result/item 加 incomplete + incomplete_reason。
+標示：資料集頁「⚠️ 不完整」標籤 + 說明；Markdown/JSON 匯出也標註。
+驗證：page_classify 4 新測試（CTA命中/短截斷/完整不標/付費網域長免費文不誤標）+ 全測試通過。
+
 ## 2026-06-22 廢除 Tier 2（Gemini URL 直讀）
 實測證明 Tier 2 無效後直接移除（見研究：Gemini url_context 透過 API 連維基百科都讀不到、是該工具本身不穩，對 Cloudflare 難站如 Dcard 亦無解；且官方文件還推薦維基當測試）。
 - `tiered_fallback.py`：移除 `gemini_url_read` + `is_gemini_url_fallback_enabled`；`run_tier23` → `run_tier3`（移除 Tier2 區塊 + 不再需要的 gemini_api_key 參數）；模組 docstring 記錄廢除原因。

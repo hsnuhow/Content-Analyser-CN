@@ -25,7 +25,8 @@ from urllib.parse import urlparse
 
 from net_guard import safe_urlopen  # SSRF 安全版 urlopen（逐跳驗 redirect 目標）
 from page_classify import (looks_like_browser_error_page,
-                            looks_like_http_error_page, looks_like_block_page)
+                            looks_like_http_error_page, looks_like_block_page,
+                            detect_paywall_incomplete)
 import text_clean
 import crawler_config
 import dom_score
@@ -675,6 +676,24 @@ class HeadlessCrawler:
         return text_clean.trim_trailing_boilerplate(
             content, min_keep, self._log, extra_terms=crawler_config.get_extra_boilerplate())
 
+    def _success(self, url, title, content, **extra):
+        """組裝 success 結果並集中做「付費牆/不完整」偵測標記（各抽取路徑共用，避免漏標）。
+        命中 → 加 incomplete=True + incomplete_reason（'paywall' / 'paywall_short'）。
+        內容仍保留（依需求「標示不完整」而非丟棄）；偵測設定走後台可編 floor+Firestore。"""
+        res = {"status": "success", "url": url, "title": title,
+               "content": content, "length": len(content)}
+        try:
+            pw = crawler_config.get_paywall_config()
+            inc, reason = detect_paywall_incomplete(content, url, pw["markers"], pw["domains"])
+            if inc:
+                res["incomplete"] = True
+                res["incomplete_reason"] = reason
+                self._log(f"[Paywall] 偵測到付費牆截斷（{reason}），標示不完整：{url}")
+        except Exception as e:
+            self._log(f"[Paywall] 偵測略過：{e}")
+        res.update(extra)
+        return res
+
     def _reg_host(self, h: str) -> str:
         # 可註冊網域已抽至 url_drift.reg_host（純函式）。
         return url_drift.reg_host(h)
@@ -865,8 +884,7 @@ class HeadlessCrawler:
              or re.search(r'<title[^>]*>(.*?)</title>', html_raw, re.S | re.I))
         title = _html.unescape(m.group(1).strip()) if m else url
         self._log(f"[SSR-Probe] ✅ 靜態 HTML 結構化內文足量（{len(content)} 字），跳過 Chrome")
-        return {"status": "success", "url": url, "title": title,
-                "content": content, "length": len(content), "source": "ssr_preprobe"}
+        return self._success(url, title, content, source="ssr_preprobe")
 
     def _static_extract(self, url: str) -> Dict[str, Any]:
         """抓靜態 HTML 並用「模板/啟發式」抽正文（_extract_main_text）。
@@ -896,8 +914,7 @@ class HeadlessCrawler:
              or re.search(r'<title[^>]*>(.*?)</title>', html_raw, re.S | re.I))
         title = _html.unescape(m.group(1).strip()) if m else url
         self._log(f"[StaticExtract] ✅ 靜態模板抽取成功（{len(content)} 字），未用 Chrome")
-        return {"status": "success", "url": url, "title": title,
-                "content": content, "length": len(content), "source": "static_template"}
+        return self._success(url, title, content, source="static_template")
 
     def _neterror_salvage(self, url: str):
         """Chrome 連線錯誤頁（neterror）後的靜態 HTTP 救援＋封鎖判別。
@@ -1014,9 +1031,8 @@ class HeadlessCrawler:
         if len(content) < 20:
             return {"status": "failed", "url": url,
                     "error": "YouTube 影片無法取得標題/說明（影片可能私人或不存在）"}
-        return {"status": "success", "url": url, "title": title,
-                "content": content, "length": len(content),
-                "source": "youtube" + ("+transcript" if transcript else "")}
+        return self._success(url, title, content,
+                             source="youtube" + ("+transcript" if transcript else ""))
 
     # Cloudflare 挑戰頁特徵（標題/內文）。命中代表正在「請稍候」驗證，需等待自動通過。
     _CF_CHALLENGE_MARKERS = (
@@ -1143,8 +1159,7 @@ class HeadlessCrawler:
                 title = (og.get("title") or "").strip() or url
                 content = self._clean_text(f"{title}\n\n{desc}")
                 self._log(f"[Social] 由 og:description 取得貼文文案（{len(content)} 字）")
-                return {"status": "success", "url": url, "title": title,
-                        "content": content, "length": len(content), "source": "og_social"}
+                return self._success(url, title, content, source="og_social")
             if "instagram.com" in url_l:
                 self._log("[Social] Instagram 無 og 文案（Meta 已封鎖）")
                 return {"status": "skipped", "url": url,
@@ -1339,7 +1354,7 @@ class HeadlessCrawler:
                         "error": f"{reason}，需手動爬取（建議用手動匯入貼上真人版內容）",
                         "cloaked": True, "needs_manual": True, "final_url": final_url}
 
-            return {"status": "success", "url": url, "title": title, "content": content, "length": len(content)}
+            return self._success(url, title, content)
 
         except TimeoutError as e:
             self._log(f"[Crawler] 硬性時限超過: {e}")

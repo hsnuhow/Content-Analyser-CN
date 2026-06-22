@@ -60,6 +60,39 @@ def test_block_page_clean_false():
     assert pc.looks_like_block_page("一般文章，無封鎖字樣。") is False
 
 
+# ── 付費牆/不完整偵測（detect_paywall_incomplete）──
+import crawler_config as _cc  # noqa: E402
+_PW_M = _cc._PAYWALL_MARKERS_FLOOR
+_PW_D = _cc._PAYWALL_DOMAINS_FLOOR
+
+
+def test_paywall_cta_marker_hit():
+    # A 型：天下 CTA 文字在內容裡 → paywall
+    inc, reason = pc.detect_paywall_incomplete(
+        "正文預覽…此篇為訂戶限定文章。查看訂閱方案", "https://www.cw.com.tw/article/1", _PW_M, _PW_D)
+    assert inc is True and reason == "paywall"
+
+
+def test_paywall_short_on_known_domain():
+    # B 型：商周網域 + 內容過短（靜默截斷）→ paywall_short
+    inc, reason = pc.detect_paywall_incomplete(
+        "引言" * 20, "https://www.businessweekly.com.tw/magazine/x", _PW_M, _PW_D)
+    assert inc is True and reason == "paywall_short"
+
+
+def test_paywall_complete_not_flagged():
+    # 一般完整文（無標記、非付費網域）不標
+    inc, _ = pc.detect_paywall_incomplete("完整正文" * 400, "https://www.gq.com.tw/x", _PW_M, _PW_D)
+    assert inc is False
+
+
+def test_paywall_long_free_on_paywall_domain_not_flagged():
+    # 付費牆網域的長免費文（>門檻）不應誤標（防 B 型誤判）
+    inc, _ = pc.detect_paywall_incomplete(
+        "完整正文" * 300, "https://www.businessweekly.com.tw/careers/blog/x", _PW_M, _PW_D)
+    assert inc is False
+
+
 def _run():
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
