@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-23 新增：專案成員 email autocomplete（從已核准名單挑選）
+新增成員時，email 欄加 HTML5 datalist：打 email 字母即從「已核准(approved)且尚未在本專案」的用戶
+下拉挑選（顯示姓名認人）；找不到才直接輸入 email 邀請（行為不變）。比每次手打 email 快。
+- project_detail 路由：Owner 才帶 member_suggest（list_all_users 篩 approved、排除 owner+現有成員、排序）。
+- project_detail.html：email 欄 list=memberSuggest + datalist + 提示。僅 Owner 可見、無新端點/JS、向後相容。
+
 ## 2026-06-22 圖片(A 方案：只存網址)：大圖預設收合 + 清理涵蓋圖片/研究 job 記錄
 確認系統只存圖片「網址」非檔案（無 GCS）→ 不接儲存，做兩件輕量改善：
 - **大圖預設收合**：資料集頁擷取大圖改成「📷 展開大圖（N 張）」按鈕，**點了才注入 <img>**，避免一打開頁面就把幾十張圖全塞 DOM、全去原站抓。
