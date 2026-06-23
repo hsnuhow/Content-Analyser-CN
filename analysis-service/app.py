@@ -28,6 +28,7 @@ from image_report import run_image_analysis, JOBS_COLLECTION as IMAGE_JOBS_COLLE
 from combined_report import run_combined_report, JOBS_COLLECTION as COMBINED_JOBS_COLLECTION
 from audience_reports import run_audience_reports, JOBS_COLLECTION as AUDIENCE_JOBS_COLLECTION
 import kb_index
+import task_queue
 from auth import authorize, SYSTEM_CALLER_ID
 
 SERVICE_VERSION = "1.2.0"
@@ -195,6 +196,9 @@ def analyse():
         "n_articles": len(contents),
         "llm_provider": llm_provider,
         "llm_model": llm_model,
+        # 使用者 LLM 金鑰存 job doc（owner-gated；get_job 走白名單不外洩），供 worker 自取，
+        # 避免金鑰進 Cloud Tasks body。與 crawler-service 的金鑰處理一致。
+        "llm_api_key": llm_api_key,
         "result_markdown": None,
         "owner": g.caller_id,  # job 歸屬：外部金鑰僅能查自己的 job
         "created_at": firestore.SERVER_TIMESTAMP,
@@ -202,11 +206,10 @@ def analyse():
         "completed_at": None,
     })
 
-    # ── 背景 thread 執行分析 ──
-    llm_config = {
+    # 非金鑰設定（金鑰由 worker 從 job doc 取，不放進任何 task body）
+    llm_config_nokey = {
         "provider": llm_provider,
         "model": llm_model,
-        "api_key": llm_api_key,
         "temperature": temperature,
         "thinking": thinking,
         "search_extent": search_extent,
@@ -214,14 +217,59 @@ def analyse():
         "top_p": top_p,
         "input_scale": input_scale,
     }
-    t = threading.Thread(
-        target=run_analysis,
-        args=(job_id, report_title, contents, llm_config, db),
-        daemon=True,
-    )
-    t.start()
 
+    # ── 派工：優先走 Cloud Tasks worker（請求生命週期內同步跑＝滿 CPU、不被節流）；
+    #    佇列未啟用或 enqueue 失敗（如 payload 過大）→ 回退舊背景 thread（不破壞既有環境）。──
+    if task_queue.tasks_enabled() and task_queue.enqueue(
+        "/api/analyse/run",
+        {"job_id": job_id, "report_title": report_title,
+         "contents": contents, "llm_config": llm_config_nokey},
+    ):
+        return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+    threading.Thread(
+        target=run_analysis,
+        args=(job_id, report_title, contents, dict(llm_config_nokey, api_key=llm_api_key), db),
+        daemon=True,
+    ).start()
     return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@app.route("/api/analyse/run", methods=["POST"])
+@require_api_key
+def analyse_run():
+    """Cloud Tasks worker：在請求生命週期內**同步**跑完分析（拿到滿 CPU、不被節流）。
+    由 /api/analyse 經 Cloud Tasks 派送而來；contents/設定走 task body，金鑰從 job doc 取。
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    job_id = (data.get("job_id") or "").strip()
+    if not job_id:
+        return jsonify({"status": "failed", "error": "缺少 job_id"}), 400
+
+    snap = db.collection(JOBS_COLLECTION).document(job_id).get()
+    if not snap.exists:
+        return jsonify({"status": "failed", "error": f"找不到 job_id：{job_id}"}), 404
+    job = snap.to_dict() or {}
+
+    report_title = data.get("report_title") or job.get("report_title") or ""
+    contents = data.get("contents") or []
+    llm_config = dict(data.get("llm_config") or {})
+    llm_config["api_key"] = job.get("llm_api_key", "")  # 金鑰只從 job doc 取
+
+    # 同步執行（非背景 thread）→ Cloud Run 在請求處理當下給滿 CPU。
+    # run_analysis 已自包 try/except 寫 failed 狀態、不外拋；此處再加防禦層：
+    # 無論如何都回 200，避免 worker 回非 2xx 觸發 Cloud Tasks 重試 → 重複跑分析、重複扣 token。
+    try:
+        run_analysis(job_id, report_title, contents, llm_config, db)
+    except Exception as e:
+        print(f"[analyse_run] job {job_id} 意外例外（已記 failed，不重試）：{e}", flush=True)
+        try:
+            db.collection(JOBS_COLLECTION).document(job_id).update(
+                {"status": "failed", "log": f"worker 例外：{e}",
+                 "updated_at": firestore.SERVER_TIMESTAMP})
+        except Exception:
+            pass
+    return jsonify({"status": "ok", "job_id": job_id}), 200
 
 
 @app.route("/api/analyse/<job_id>", methods=["GET"])
