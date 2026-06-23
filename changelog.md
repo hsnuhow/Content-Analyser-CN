@@ -10,7 +10,7 @@ TF-IDF（5 分）、關聯規則（3.5 分）等 CPU 密集步驟慢 ~10x，Path
 - 金鑰存 job doc（owner-gated，get_job 白名單不外洩），worker 自取；enqueue 失敗自動回退背景 thread。
 - worker 永遠回 200 防 Cloud Tasks 重試重複扣 token；requirements 補 google-cloud-tasks。
 - 部署：analysis-pipeline 加 env（TASKS_QUEUE/TASKS_LOCATION/WORKER_URL/ANALYSIS_USE_QUEUE）+ timeout 3600 + concurrency 1。
-- 已知後續：image_report / combined_report / audience_reports 仍走背景 thread，可比照遷移。
+- 已評估不需遷：image_report / combined_report / audience_reports 雖仍走背景 thread，但皆 LLM/網路 I/O bound、不含 CPU 密集 Path1（combined/audience docstring 明載無 NLP；image 為 LLM 視覺+輕量 Pillow），節流影響小、不會撞 600s 牆 → 維持現狀。
 
 ## 2026-06-23 新增：專案成員 email autocomplete（從已核准名單挑選）
 新增成員時，email 欄加 HTML5 datalist：打 email 字母即從「已核准(approved)且尚未在本專案」的用戶
