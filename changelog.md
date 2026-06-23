@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-23 新增：analysis 改 Cloud Tasks worker 同步跑（解 CPU 節流逾時）
+循環扇 46 篇合併分析在背景 daemon thread 跑，Cloud Run 在無 in-flight 請求時 CPU 被節流，
+TF-IDF（5 分）、關聯規則（3.5 分）等 CPU 密集步驟慢 ~10x，Path1 撞 600s 看門狗 →
+整個分析中止、零報告。改為與 crawler 同範式：/api/analyse 經 Cloud Tasks 派工 →
+/api/analyse/run worker 在請求生命週期內同步跑（Cloud Run 請求處理當下給滿 CPU、
+閒置 scale to 0 不付閒置費）。實測同 46 篇：Path1 從 >600s 中止 → **13 秒完成**、數值層完整、~90s 出報告。
+- analysis-service/task_queue.py（新）：ANALYSIS_USE_QUEUE 旗標 + 沿用 crawler-tasks 佇列；金鑰不入 task body。
+- 金鑰存 job doc（owner-gated，get_job 白名單不外洩），worker 自取；enqueue 失敗自動回退背景 thread。
+- worker 永遠回 200 防 Cloud Tasks 重試重複扣 token；requirements 補 google-cloud-tasks。
+- 部署：analysis-pipeline 加 env（TASKS_QUEUE/TASKS_LOCATION/WORKER_URL/ANALYSIS_USE_QUEUE）+ timeout 3600 + concurrency 1。
+- 已知後續：image_report / combined_report / audience_reports 仍走背景 thread，可比照遷移。
+
 ## 2026-06-23 新增：專案成員 email autocomplete（從已核准名單挑選）
 新增成員時，email 欄加 HTML5 datalist：打 email 字母即從「已核准(approved)且尚未在本專案」的用戶
 下拉挑選（顯示姓名認人）；找不到才直接輸入 email 邀請（行為不變）。比每次手打 email 快。
