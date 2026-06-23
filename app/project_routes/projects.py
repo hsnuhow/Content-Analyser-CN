@@ -7,7 +7,7 @@ from firebase_admin import firestore
 
 from . import (bp, project_access_required, current_user_email, is_admin,
                log_usage)
-from ..services import db
+from ..services import db, list_all_users
 from ..auth_guards import login_required
 from ..dataset_sync import _sync_crawling_dataset
 from ..llm_models import _fetch_provider_models
@@ -136,11 +136,26 @@ def project_detail(pid, project, role):
     except Exception:
         brand_scans = []
 
+    # 新增成員的 autocomplete 候選：已核准(approved)且尚未在本專案的用戶（僅 Owner 需要）。
+    # 供成員 email 欄的 datalist：打 email 字母即篩選；無符合則直接輸入 email 邀請（行為不變）。
+    member_suggest = []
+    if role == 'owner':
+        try:
+            in_project = {(project.get('owner') or '').lower()}
+            in_project |= {e.lower() for e in (project.get('members') or {}).keys()}
+            for u in list_all_users():
+                em = (u.get('email') or '').lower()
+                if em and u.get('whitelist_status') == 'approved' and em not in in_project:
+                    member_suggest.append({'email': em, 'name': u.get('display_name') or ''})
+            member_suggest.sort(key=lambda x: x['email'])
+        except Exception as e:
+            print(f"[project_detail] 成員建議名單載入略過：{e}", flush=True)
+
     return render_template('project_detail.html',
                            project=project, pid=pid,
                            analyses=analyses, datasets=datasets, role=role,
                            discoveries=discoveries, draft_datasets=draft_datasets,
-                           brand_scans=brand_scans,
+                           brand_scans=brand_scans, member_suggest=member_suggest,
                            is_admin=is_admin())
 
 

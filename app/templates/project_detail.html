@@ -645,12 +645,21 @@
           <form method="POST" action="{{ url_for('project_bp.add_member', pid=pid) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="input-group input-group-sm mb-2">
-              <input type="email" name="email" class="form-control" placeholder="Email" required>
+              <input type="email" name="email" class="form-control" placeholder="Email"
+                     list="memberSuggest" autocomplete="off" required>
               <select name="role" class="form-select" style="max-width:90px">
                 <option value="editor">editor</option>
                 <option value="viewer">viewer</option>
               </select>
             </div>
+            {% if member_suggest %}
+            <datalist id="memberSuggest">
+              {% for u in member_suggest %}
+              <option value="{{ u.email }}">{{ u.name or u.email }}</option>
+              {% endfor %}
+            </datalist>
+            <div class="form-text small mb-2">打 email 字母可從已核准名單挑選；找不到就直接輸入 email 邀請。</div>
+            {% endif %}
             <button type="submit" class="btn btn-sm btn-outline-primary w-100">邀請成員</button>
           </form>
         </div>
