@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-06-24 新增：專案頁 LLM API 金鑰取得指引
+協助用戶自行申請 LLM API 金鑰。純前端、無後端/新路由。
+- 專案頁頂端可收合說明卡：列 Gemini/Claude/ChatGPT 三家取得網址 + 需自綁信用卡、金鑰自備不代管。
+- LLM 設定 API Key 欄下方動態提示（#apiKeyHint）：依 providerSel 顯示對應網址，整合進 project_detail.js。
+- 網址經瀏覽器實測：Gemini=aistudio.google.com/apikey、Claude=platform.claude.com/settings/keys
+  （Anthropic 從 console.anthropic.com 搬家）、ChatGPT=platform.openai.com/api-keys。
+- 部署：content-analyser 00107-6d8。
+
 ## 2026-06-24 新增：正向保留清單（必留詞 + 品牌）
 補足過濾只有「垃圾詞」負向清單的缺口。原候選垃圾偵測只排除「已在垃圾清單」者，使用者判定為
 非垃圾的詞無處記錄 → 每次分析又被當垃圾候選重複建議；品牌保護僅靠 Cloud NL salience 自動判斷。
