@@ -24,6 +24,21 @@ document.addEventListener('DOMContentLoaded', function () {
     const modelHidden = document.getElementById('modelHidden');
     const modelMsg = document.getElementById('modelMsg');
 
+    // API Key 取得網址（依供應商動態提示；網址經瀏覽器實測確認導向，2026-06）。
+    const KEY_INFO = {
+      gemini: { name: 'Gemini', url: 'https://aistudio.google.com/apikey', label: 'Google AI Studio' },
+      claude: { name: 'Claude', url: 'https://platform.claude.com/settings/keys', label: 'Anthropic Console' },
+      openai: { name: 'ChatGPT（OpenAI）', url: 'https://platform.openai.com/api-keys', label: 'OpenAI Platform' }
+    };
+    const apiKeyHint = document.getElementById('apiKeyHint');
+    function updateHint() {
+      if (!apiKeyHint) return;
+      const info = KEY_INFO[providerSel.value];
+      apiKeyHint.innerHTML = info
+        ? '🔑 到 <a href="' + info.url + '" target="_blank" rel="noopener noreferrer">' + info.label + '</a> 取得 ' + info.name + ' API 金鑰（需自行登入並綁定信用卡付費）。'
+        : '';
+    }
+
     function toggleCustom(show) { modelCustom.classList.toggle('d-none', !show); }
     function syncHidden() { modelHidden.value = (modelSel.value === CUSTOM) ? modelCustom.value.trim() : modelSel.value; }
     function populate(list, selected) {
@@ -39,8 +54,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     modelSel.addEventListener('change', function () { toggleCustom(modelSel.value === CUSTOM); syncHidden(); });
     modelCustom.addEventListener('input', syncHidden);
-    providerSel.addEventListener('change', function () { populate(CURATED[providerSel.value], ''); modelMsg.textContent = ''; });
+    providerSel.addEventListener('change', function () { populate(CURATED[providerSel.value], ''); modelMsg.textContent = ''; updateHint(); });
     populate(CURATED[providerSel.value], modelHidden.value);
+    updateHint();
 
     const refreshBtn = document.getElementById('refreshModels');
     if (refreshBtn) {
