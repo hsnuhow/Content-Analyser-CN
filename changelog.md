@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-24 新增：白名單申請/審核通過 email 通知（Resend）
+白名單流程加 email 通知：有人首次登入建 pending → 通知管理員審核；審核通過 → 通知申請者可登入。
+- app/notifications.py（新）：Resend transactional API 純 REST 寄信（requests，無新 SDK）。
+  旗標 gate（未設 RESEND_API_KEY 則靜默 no-op）、best-effort（失敗只記 log、絕不外拋，不影響登入/審核）。
+- 兩掛鉤（app/services.py）：ensure_user 建 pending 後 → notify_new_application（通知 admin 去 /admin/users）；
+  approve_user 成功後 → notify_approved（通知申請者）。寄件人 notify@annexix.cc；連結用 SITE_URL（預設 insightout.annexix.cc）。
+- 網域 annexix.cc 經 Resend「Auto configure」自動寫入 Cloudflare DNS（DKIM/MX/SPF）並驗證通過。
+- 部署：content-analyser rev 00105-mz5，--update-secrets RESEND_API_KEY=Resend:latest
+  （Secret Manager secret 名為 Resend、send-only key）。無新 pip 依賴。真實投遞待真實申請驗證。
+
 ## 2026-06-23 新增：analysis 改 Cloud Tasks worker 同步跑（解 CPU 節流逾時）
 循環扇 46 篇合併分析在背景 daemon thread 跑，Cloud Run 在無 in-flight 請求時 CPU 被節流，
 TF-IDF（5 分）、關聯規則（3.5 分）等 CPU 密集步驟慢 ~10x，Path1 撞 600s 看門狗 →
