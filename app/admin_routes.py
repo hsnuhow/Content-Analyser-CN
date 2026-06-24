@@ -182,19 +182,70 @@ def _parse_term_filters(text: str):
     return out
 
 
+# ── 正向保留清單（必留詞 + 品牌）：與上面的負向「垃圾詞」相對 ──
+def _serialize_keep_terms(entries) -> str:
+    """keep_terms 陣列 → 每行 `詞`（必留）或 `詞 | 品牌`（品牌）的可編輯文字。"""
+    lines = []
+    for e in (entries or []):
+        if not isinstance(e, dict):
+            continue
+        term = str(e.get('term', '')).strip()
+        if not term:
+            continue
+        lines.append(f"{term} | 品牌" if e.get('is_brand') else term)
+    return '\n'.join(lines)
+
+
+def _parse_keep_terms(text: str):
+    """每行 `詞` 或 `詞 | 品牌` → keep_terms 陣列 [{term, is_brand}]（去重）。"""
+    out, seen = [], set()
+    for raw in (text or '').splitlines():
+        raw = raw.strip()
+        if not raw or raw.startswith('#'):
+            continue
+        parts = [p.strip() for p in raw.split('|')]
+        term = parts[0].strip()
+        if not term or term in seen:
+            continue
+        seen.add(term)
+        is_brand = len(parts) > 1 and ('品牌' in parts[1] or 'brand' in parts[1].lower())
+        out.append({'term': term, 'is_brand': bool(is_brand)})
+    return out
+
+
 @bp.route('/terms')
 @admin_required
 def term_filters():
     """字詞過濾清單編輯區。"""
+    entries, keep_entries = [], []
     try:
         doc = db.collection('system').document('config').get()
-        entries = (doc.to_dict() or {}).get('term_filters') if doc.exists else []
+        d = doc.to_dict() if doc.exists else {}
+        entries = (d or {}).get('term_filters') or []
+        keep_entries = (d or {}).get('keep_terms') or []
     except Exception:
-        entries = []
+        pass
     return render_template(
         'admin_terms.html', user=session.get('user'),
         terms_text=_serialize_term_filters(entries),
-        scopes=_TERM_SCOPES, n_entries=len(entries or []))
+        keep_text=_serialize_keep_terms(keep_entries),
+        scopes=_TERM_SCOPES,
+        n_entries=len(entries or []), n_keep=len(keep_entries or []))
+
+
+@bp.route('/terms/keep/save', methods=['POST'])
+@admin_required
+def keep_terms_save():
+    """儲存正向保留清單（必留詞 + 品牌）到 system/config.keep_terms。"""
+    entries = _parse_keep_terms(request.form.get('keep_text', ''))
+    try:
+        db.collection('system').document('config').set(
+            {'keep_terms': entries}, merge=True)
+        n_brand = sum(1 for e in entries if e.get('is_brand'))
+        flash(f'已儲存 {len(entries)} 個保留詞（含 {n_brand} 個品牌，分析服務最多 60 秒生效）。', 'success')
+    except Exception as e:
+        flash(f'儲存失敗：{e}', 'danger')
+    return redirect(url_for('admin_bp.term_filters'))
 
 
 @bp.route('/terms/save', methods=['POST'])
@@ -359,21 +410,36 @@ def term_filters_suggest_all():
 @bp.route('/terms/suggest/apply', methods=['POST'])
 @admin_required
 def term_filters_suggest_apply():
-    """把勾選的候選詞（格式 `詞 | 範圍 | media`）併入現行 term_filters。"""
-    picks = request.form.getlist('pick')
-    new_entries = _parse_term_filters('\n'.join(picks))
-    if not new_entries:
+    """把候選詞依勾選分流：垃圾→term_filters（負向）；必留/品牌→keep_terms（正向）。
+    垃圾格式 `詞 | 範圍 | media`；keep/brand 只傳詞（品牌帶 is_brand）。"""
+    junk_new = _parse_term_filters('\n'.join(request.form.getlist('pick')))
+    keep_picks = [t.strip() for t in request.form.getlist('keep') if t.strip()]
+    brand_picks = [t.strip() for t in request.form.getlist('brand') if t.strip()]
+    keep_new = ([{'term': t, 'is_brand': False} for t in keep_picks]
+                + [{'term': t, 'is_brand': True} for t in brand_picks])
+    if not junk_new and not keep_new:
         flash('沒有勾選任何候選詞。', 'info')
         return redirect(url_for('admin_bp.term_filters'))
     try:
         doc = db.collection('system').document('config').get()
-        existing = (doc.to_dict() or {}).get('term_filters') if doc.exists else []
-        existing = existing or []
-        have = {str(e.get('term', '')).strip() for e in existing if isinstance(e, dict)}
-        added = [e for e in new_entries if e['term'] not in have]
-        db.collection('system').document('config').set(
-            {'term_filters': existing + added}, merge=True)
-        flash(f'已加入 {len(added)} 個過濾詞（最多 60 秒生效）。', 'success')
+        d = doc.to_dict() if doc.exists else {}
+        payload, msg = {}, []
+        if junk_new:
+            existing = (d or {}).get('term_filters') or []
+            have = {str(e.get('term', '')).strip() for e in existing if isinstance(e, dict)}
+            added = [e for e in junk_new if e['term'] not in have]
+            payload['term_filters'] = existing + added
+            msg.append(f'{len(added)} 個垃圾詞')
+        if keep_new:
+            existing_k = (d or {}).get('keep_terms') or []
+            have_k = {str(e.get('term', '')).strip() for e in existing_k if isinstance(e, dict)}
+            added_k = [e for e in keep_new if e['term'] not in have_k]
+            payload['keep_terms'] = existing_k + added_k
+            nb = sum(1 for e in added_k if e['is_brand'])
+            msg.append(f'{len(added_k)} 個保留詞（含 {nb} 品牌）')
+        if payload:
+            db.collection('system').document('config').set(payload, merge=True)
+        flash(f'已加入 {"、".join(msg)}（最多 60 秒生效）。', 'success')
     except Exception as e:
         flash(f'加入失敗：{e}', 'danger')
     return redirect(url_for('admin_bp.term_filters'))

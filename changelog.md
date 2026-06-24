@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-24 新增：正向保留清單（必留詞 + 品牌）
+補足過濾只有「垃圾詞」負向清單的缺口。原候選垃圾偵測只排除「已在垃圾清單」者，使用者判定為
+非垃圾的詞無處記錄 → 每次分析又被當垃圾候選重複建議；品牌保護僅靠 Cloud NL salience 自動判斷。
+新增 system/config.keep_terms = [{term, is_brand}]（後台可編、floor 空）：
+- analysis text_processing.get_keep_terms()（60s 快取）；get_term_filters 回傳前扣除 keep
+  → _tokenize / _text_for_keywords / 實體過濾全自動保護（keep wins over junk、保證進詞典）。
+- nlp_path.suggest_filters 把 keep 併入 already 排除集 → 不再重複建議。
+- 後台 admin_terms：新增「保留詞/品牌清單」編輯卡（詞 | 品牌 格式）+ keep_terms_save 路由；
+  候選審查改三選一（略過/垃圾/必留/品牌），apply 分流寫 term_filters 或 keep_terms。
+- 品牌目前 = 保留 + 識別（jieba 整塊切出 + 標記），未餵額外品牌分析。
+- 部署：analysis-pipeline 00059-gsq + content-analyser 00106-5mv。
+
 ## 2026-06-24 新增：白名單申請/審核通過 email 通知（Resend）
 白名單流程加 email 通知：有人首次登入建 pending → 通知管理員審核；審核通過 → 通知申請者可登入。
 - app/notifications.py（新）：Resend transactional API 純 REST 寄信（requests，無新 SDK）。
