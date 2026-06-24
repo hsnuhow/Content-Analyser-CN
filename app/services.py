@@ -165,6 +165,12 @@ def ensure_user(email: str, display_name: str = "", picture: str = "") -> str:
             'created_at': firestore.SERVER_TIMESTAMP,
         })
         print(f"[Services] 新用戶 {email} 已建立（status=pending）")
+        # 通知管理員有新申請（best-effort，寄信失敗不影響登入流程）
+        try:
+            from . import notifications
+            notifications.notify_new_application(email, display_name, admin_email)
+        except Exception as e:
+            print(f"[Services] 申請通知略過 {email}: {e}")
         return 'pending'
     except Exception as e:
         print(f"[Services] ensure_user 失敗 {email}: {e}")
@@ -186,11 +192,20 @@ def approve_user(email: str, admin_email: str) -> bool:
     """將用戶設為 approved。"""
     email = email.strip().lower()
     try:
-        db.collection('users').document(email).update({
+        ref = db.collection('users').document(email)
+        ref.update({
             'whitelist_status': 'approved',
             'added_by': admin_email,
             'approved_at': firestore.SERVER_TIMESTAMP,
         })
+        # 通知申請者已通過（best-effort，寄信失敗不影響審核結果）
+        try:
+            snap = ref.get()
+            display_name = (snap.to_dict() or {}).get('display_name', '') if snap.exists else ''
+            from . import notifications
+            notifications.notify_approved(email, display_name)
+        except Exception as e:
+            print(f"[Services] 通過通知略過 {email}: {e}")
         return True
     except Exception as e:
         print(f"[Services] approve_user 失敗 {email}: {e}")
