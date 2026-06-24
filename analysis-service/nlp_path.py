@@ -22,7 +22,7 @@ from sklearn.preprocessing import normalize
 # 只 import nlp_path 實際用到的；其餘 _STOPWORDS 等若需要請直接 from text_processing import。
 from text_processing import (
     _source_type, SOURCE_TYPES,
-    get_term_filters, _text_for_keywords, _tokenize,
+    get_term_filters, get_keep_terms, _text_for_keywords, _tokenize,
 )
 
 # 詞性白名單/填充判定（F2 建議用）。BRAND=專名/數字 → 保護；FILLER=副詞/語助等 → 建議。
@@ -85,6 +85,8 @@ def suggest_filters(contents: List[Dict], max_candidates: int = 60) -> Dict[str,
     already = set(conf['all']) | set(conf['media_names'])
     for s in conf['by_source'].values():
         already |= s
+    # 正向保留清單（必留詞 + 品牌）：排除於候選之外 → 你判定為非垃圾的詞不再被重複建議。
+    already |= get_keep_terms()['keep']
 
     df = defaultdict(Counter)
     tfc = defaultdict(Counter)

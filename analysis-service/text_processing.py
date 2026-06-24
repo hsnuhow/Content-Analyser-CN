@@ -192,7 +192,62 @@ def get_term_filters() -> Dict[str, Any]:
         except Exception:
             pass
         all_scope.add(m)
+    # 正向保留清單優先於垃圾清單（keep wins over junk）：keep 詞（含品牌）一律不被當停用詞，
+    # 從所有 scope 扣除 → _tokenize / _text_for_keywords / 實體過濾全都自動保護，保證進詞典。
+    keep = get_keep_terms()["keep"]
+    if keep:
+        all_scope -= keep
+        for s in by_source:
+            by_source[s] -= keep
     val = {"all": all_scope, "by_source": by_source, "media_names": media_names}
+    c["val"], c["ts"] = val, now
+    return val
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 正向保留清單（與上面的「垃圾詞」負向清單相對）：後台可編，floor 預設空。
+# 用途：① suggest_filters 不再把這些詞當垃圾重複建議 ② 關鍵字/實體過濾永不丟棄
+#       ③ 標為品牌者額外併入 Cloud NL salience 白名單強化保護。
+# 品牌依分析主題而異，故不寫死 floor，純由後台依需求填入。
+# ──────────────────────────────────────────────────────────────────────
+_KEEP_TERMS_CACHE = {"val": None, "ts": 0.0}
+
+
+def get_keep_terms() -> Dict[str, Any]:
+    """生效保留清單 = Firestore `system/config.keep_terms`（後台可編輯）。
+
+    Firestore 格式：keep_terms: [{term, is_brand:bool}]
+    回 {'keep': set（全部必留詞，含品牌）, 'brands': set（其中標為品牌者）}。
+    60s 行程快取；讀失敗回退空集（不影響既有過濾，與 get_term_filters 同模式）。
+    """
+    import time
+    now = time.time()
+    c = _KEEP_TERMS_CACHE
+    if c["val"] is not None and now - c["ts"] < 60:
+        return c["val"]
+    keep, brands = set(), set()
+    try:
+        from firebase_admin import firestore
+        doc = firestore.client().collection("system").document("config").get()
+        if doc.exists:
+            for e in ((doc.to_dict() or {}).get("keep_terms") or []):
+                if not isinstance(e, dict):
+                    continue
+                term = str(e.get("term", "")).strip()
+                if not term:
+                    continue
+                keep.add(term)
+                if e.get("is_brand"):
+                    brands.add(term)
+    except Exception:
+        pass
+    # 保留詞（尤其多字品牌如「無印良品」）jieba 整塊切出，避免被切碎而保護失效。
+    for w in keep:
+        try:
+            jieba.add_word(w)
+        except Exception:
+            pass
+    val = {"keep": keep, "brands": brands}
     c["val"], c["ts"] = val, now
     return val
 
