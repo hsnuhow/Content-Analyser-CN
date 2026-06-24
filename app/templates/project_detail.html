@@ -24,6 +24,22 @@
     </span>
   </div>
 
+  {# 取得 LLM API 金鑰說明（所有人可見、可收合）#}
+  <div class="alert alert-info py-2 small mb-4">
+    <a class="fw-semibold text-decoration-none" data-bs-toggle="collapse" href="#apiKeyGuide" role="button" aria-expanded="false">
+      ℹ️ 還沒有 LLM API 金鑰？三家都可自行申請（點開）
+    </a>
+    <div class="collapse mt-2" id="apiKeyGuide">
+      分析需自備 LLM API 金鑰。請到以下任一處登入申請，<strong>皆需自行綁定信用卡／付費方案</strong>；
+      金鑰由你填入本系統右側「LLM 設定」，我們不代管：
+      <ul class="mb-0 mt-1">
+        <li><strong>Gemini</strong>（Google AI Studio）：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a></li>
+        <li><strong>Claude</strong>（Anthropic）：<a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">platform.claude.com/settings/keys</a></li>
+        <li><strong>ChatGPT</strong>（OpenAI）：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a></li>
+      </ul>
+    </div>
+  </div>
+
   <div class="row g-4">
 
     {# 左欄：提交分析 + 歷史列表 #}
@@ -545,6 +561,7 @@
               <input type="password" name="llm_api_key" class="form-control form-control-sm"
                      placeholder="{% if project.llm_config.api_key %}（已設定，留空則不變）{% else %}請填入 API Key{% endif %}">
               <div class="form-text">{% if project.llm_config.api_key %}✅ 已設定{% else %}⚠️ 尚未設定{% endif %}</div>
+              <div class="form-text" id="apiKeyHint"></div>
             </div>
 
             <div class="mb-2">
