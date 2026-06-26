@@ -1,4 +1,5 @@
 import os
+import time
 import firebase_admin
 from firebase_admin import firestore
 from google.cloud import secretmanager
@@ -55,6 +56,33 @@ def get_secret(secret_id, project_id=None):
     except Exception as e:
         print(f"[SecretManager] Failed to access {secret_id}: {e}")
         return None
+
+
+# ── 即時匯率（USD→TWD）：供費用估算把美金換算成新台幣顯示 ──
+_FX_CACHE = {"rate": None, "ts": 0.0}
+_FX_FALLBACK_TWD = 32.0   # 抓取失敗時的保守回退值
+
+
+def get_usd_twd_rate() -> float:
+    """USD→TWD 即時匯率（12h 行程快取；抓取失敗/異常值回退 32.0）。
+    用免金鑰公開 API（open.er-api.com），server 端抓取，避免前端 CSP connect-src 限制。
+    """
+    now = time.time()
+    c = _FX_CACHE
+    if c["rate"] and now - c["ts"] < 43200:   # 12h
+        return c["rate"]
+    rate = _FX_FALLBACK_TWD
+    try:
+        import requests
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=3)
+        tw = (r.json().get("rates") or {}).get("TWD")
+        if tw and 20 < float(tw) < 50:        # 合理區間防呆（匯率異常時不採用）
+            rate = round(float(tw), 2)
+    except Exception as e:
+        print(f"[FX] USD→TWD 抓取失敗，回退 {_FX_FALLBACK_TWD}：{e}", flush=True)
+    c["rate"], c["ts"] = rate, now
+    return rate
+
 
 def set_secret(secret_id, payload, project_id=None):
     """更新 Secret 的輔助函式"""
