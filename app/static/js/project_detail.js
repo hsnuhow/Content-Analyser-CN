@@ -24,19 +24,30 @@ document.addEventListener('DOMContentLoaded', function () {
     const modelHidden = document.getElementById('modelHidden');
     const modelMsg = document.getElementById('modelMsg');
 
-    // API Key 取得網址（依供應商動態提示；網址經瀏覽器實測確認導向，2026-06）。
+    // API Key 取得網址 + 各模型 token 單價（依供應商動態提示）。
+    // 網址經瀏覽器實測確認導向（2026-06）；單價 USD／百萬 tokens（輸入/輸出），對齊 app/pricing.py。
     const KEY_INFO = {
-      gemini: { name: 'Gemini', url: 'https://aistudio.google.com/apikey', label: 'Google AI Studio' },
-      claude: { name: 'Claude', url: 'https://platform.claude.com/settings/keys', label: 'Anthropic Console' },
-      openai: { name: 'ChatGPT（OpenAI）', url: 'https://platform.openai.com/api-keys', label: 'OpenAI Platform' }
+      gemini: { name: 'Gemini', url: 'https://aistudio.google.com/apikey', label: 'Google AI Studio',
+        prices: '2.5 Flash $0.30/$2.50（推薦）、2.5 Pro $1.25/$10、Flash-Lite $0.10/$0.40' },
+      claude: { name: 'Claude', url: 'https://platform.claude.com/settings/keys', label: 'Anthropic Console',
+        prices: 'Haiku $1/$5、Sonnet $3/$15、Opus $5/$25' },
+      openai: { name: 'ChatGPT（OpenAI）', url: 'https://platform.openai.com/api-keys', label: 'OpenAI Platform',
+        prices: 'GPT-4o-mini $0.15/$0.60、GPT-4o $2.50/$10' }
     };
     const apiKeyHint = document.getElementById('apiKeyHint');
+    const tokenPriceHint = document.getElementById('tokenPriceHint');
     function updateHint() {
-      if (!apiKeyHint) return;
       const info = KEY_INFO[providerSel.value];
-      apiKeyHint.innerHTML = info
-        ? '🔑 到 <a href="' + info.url + '" target="_blank" rel="noopener noreferrer">' + info.label + '</a> 取得 ' + info.name + ' API 金鑰（需自行登入並綁定信用卡付費）。'
-        : '';
+      if (apiKeyHint) {
+        apiKeyHint.innerHTML = info
+          ? '🔑 到 <a href="' + info.url + '" target="_blank" rel="noopener noreferrer">' + info.label + '</a> 取得 ' + info.name + ' API 金鑰（需自行登入並綁定信用卡付費）。'
+          : '';
+      }
+      if (tokenPriceHint) {
+        tokenPriceHint.innerHTML = info
+          ? '💲 <strong>token 單價</strong>（US$／百萬，輸入/輸出）：' + info.prices + '。'
+          : '';
+      }
     }
 
     function toggleCustom(show) { modelCustom.classList.toggle('d-none', !show); }

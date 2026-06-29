@@ -7,7 +7,7 @@ from firebase_admin import firestore
 
 from . import (bp, project_access_required, current_user_email, is_admin,
                log_usage)
-from ..services import db, list_all_users
+from ..services import db, list_all_users, get_usd_twd_rate
 from ..auth_guards import login_required
 from ..dataset_sync import _sync_crawling_dataset
 from ..llm_models import _fetch_provider_models
@@ -156,6 +156,7 @@ def project_detail(pid, project, role):
                            analyses=analyses, datasets=datasets, role=role,
                            discoveries=discoveries, draft_datasets=draft_datasets,
                            brand_scans=brand_scans, member_suggest=member_suggest,
+                           usd_twd=get_usd_twd_rate(),
                            is_admin=is_admin())
 
 

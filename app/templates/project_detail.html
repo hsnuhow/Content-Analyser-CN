@@ -32,11 +32,18 @@
     <div class="collapse mt-2" id="apiKeyGuide">
       分析需自備 LLM API 金鑰。請到以下任一處登入申請，<strong>皆需自行綁定信用卡／付費方案</strong>；
       金鑰由你填入本系統右側「LLM 設定」，我們不代管：
-      <ul class="mb-0 mt-1">
+      <ul class="mb-2 mt-1">
         <li><strong>Gemini</strong>（Google AI Studio）：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a></li>
         <li><strong>Claude</strong>（Anthropic）：<a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">platform.claude.com/settings/keys</a></li>
         <li><strong>ChatGPT</strong>（OpenAI）：<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com/api-keys</a></li>
       </ul>
+
+      <div class="mt-1">
+        💰 <strong>費用很低</strong>：每 10 篇文章用 Gemini Flash 約
+        <strong>NT${{ (0.03*usd_twd)|round|int }}–{{ (0.08*usd_twd)|round|int }}</strong>
+        （US$0.03–0.08；即時匯率 1 US$ ≈ NT${{ '%.1f'|format(usd_twd) }}）。
+        各模型 token 單價見右側「LLM 設定」；系統每次分析都有實際 token 計帳可查。
+      </div>
     </div>
   </div>
 
@@ -562,6 +569,7 @@
                      placeholder="{% if project.llm_config.api_key %}（已設定，留空則不變）{% else %}請填入 API Key{% endif %}">
               <div class="form-text">{% if project.llm_config.api_key %}✅ 已設定{% else %}⚠️ 尚未設定{% endif %}</div>
               <div class="form-text" id="apiKeyHint"></div>
+              <div class="form-text border-top mt-2 pt-2" id="tokenPriceHint"></div>
             </div>
 
             <div class="mb-2">

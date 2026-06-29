@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-06-26 修正：導覽列「登入」直連 OAuth
+未登入時 / 經 login_required 導到 /auth（login.html），導覽列「登入」也指向 /auth，
+等於停在同一頁、點了無反應。layout.html 改為 main_bp.login → 直達 Google 帳號驗證。
+
+## 2026-06-26 新增：LLM 費用估算（進入說明簡版 + LLM 設定 token 單價 + 即時匯率）
+- 專案頁頂端 API 金鑰指引卡：費用簡化為一行「每 10 篇用 Gemini Flash 約 NT$X」（即時匯率換算）。
+- LLM 設定卡 API Key 欄下：依所選供應商動態顯示各模型 token 單價（US$/百萬 輸入/輸出，對齊 app/pricing.py）。
+- 即時匯率 services.get_usd_twd_rate()（open.er-api.com 免金鑰、server 端避 CSP、12h 快取、
+  失敗回退 32、20–50 防呆）；project_detail 路由帶 usd_twd 給模板。
+- 部署：content-analyser（接續 00108/00109 後最新 revision）。
+
 ## 2026-06-24 新增：專案頁 LLM API 金鑰取得指引
 協助用戶自行申請 LLM API 金鑰。純前端、無後端/新路由。
 - 專案頁頂端可收合說明卡：列 Gemini/Claude/ChatGPT 三家取得網址 + 需自綁信用卡、金鑰自備不代管。
